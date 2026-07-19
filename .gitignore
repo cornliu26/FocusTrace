@@ -1,0 +1,7 @@
+.build/
+.focustrace/reports/
+dist/
+.DS_Store
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
