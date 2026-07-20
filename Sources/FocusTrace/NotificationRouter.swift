@@ -8,6 +8,9 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
     static let necessaryAction = "MARK_NECESSARY"
     static let switchTaskAction = "SWITCH_TASK"
     static let endSessionAction = "END_SESSION"
+    static let taskParkingCategory = "FOCUS_TRACE_TASK_PARKING"
+    static let resumeParkingAction = "RESUME_PARKED_TASK"
+    static let dismissParkingAction = "DISMISS_PARKED_TASK"
 
     weak var state: ApplicationState?
 
@@ -24,8 +27,23 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
             intentIdentifiers: [],
             options: [.customDismissAction]
         )
+        let taskParkingCategory = UNNotificationCategory(
+            identifier: Self.taskParkingCategory,
+            actions: [
+                UNNotificationAction(
+                    identifier: Self.resumeParkingAction,
+                    title: "返回任务",
+                    options: [.foreground]
+                ),
+                UNNotificationAction(
+                    identifier: Self.dismissParkingAction,
+                    title: "不再返回"
+                )
+            ],
+            intentIdentifiers: []
+        )
         let center = UNUserNotificationCenter.current()
-        center.setNotificationCategories([category])
+        center.setNotificationCategories([category, taskParkingCategory])
         center.delegate = self
         Task {
             _ = try? await center.requestAuthorization(options: [.alert, .sound])
@@ -60,6 +78,21 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         Task { try? await UNUserNotificationCenter.current().add(request) }
     }
 
+    func sendTaskParkingReminder(id: UUID, taskName: String, resumeCue: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "该回到「\(taskName)」了"
+        content.body = "下一步：\(resumeCue)"
+        content.categoryIdentifier = Self.taskParkingCategory
+        content.userInfo = ["taskParkingID": id.uuidString]
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "task-parking-\(id.uuidString)",
+            content: content,
+            trigger: nil
+        )
+        Task { try? await UNUserNotificationCenter.current().add(request) }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -71,10 +104,24 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
-        guard let rawID = response.notification.request.content.userInfo["interruptionID"] as? String,
-              let id = UUID(uuidString: rawID) else {
+        if let rawID = response.notification.request.content.userInfo["taskParkingID"] as? String,
+           let id = UUID(uuidString: rawID) {
+            let action = response.actionIdentifier
+            await MainActor.run { [weak self] in
+                guard let state = self?.state else { return }
+                switch action {
+                case Self.resumeParkingAction, UNNotificationDefaultActionIdentifier:
+                    state.resumeTaskParking(id)
+                case Self.dismissParkingAction:
+                    state.dismissTaskParking(id)
+                default:
+                    break
+                }
+            }
             return
         }
+        guard let rawID = response.notification.request.content.userInfo["interruptionID"] as? String,
+              let id = UUID(uuidString: rawID) else { return }
         let action = response.actionIdentifier
         await MainActor.run { [weak self] in
             guard let state = self?.state else { return }

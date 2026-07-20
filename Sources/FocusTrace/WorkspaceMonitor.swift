@@ -117,6 +117,7 @@ final class WorkspaceMonitor: NSObject {
     static func runningApps() -> [AppIdentity] {
         var seen = Set<String>()
         return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular }
             .compactMap(identity(for:))
             .filter { seen.insert($0.bundleID).inserted }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }

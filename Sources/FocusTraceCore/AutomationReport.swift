@@ -9,19 +9,22 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
     public let focusSessions: [FocusSessionRecord]
     public let interruptions: [InterruptionRecord]
     public let trainingPlans: [TrainingPlanRecord]
+    public let taskParkings: [TaskParkingRecord]
 
     public init(
         taskIntervals: [TaskIntervalRecord] = [],
         activities: [ActivityRecord] = [],
         focusSessions: [FocusSessionRecord] = [],
         interruptions: [InterruptionRecord] = [],
-        trainingPlans: [TrainingPlanRecord] = []
+        trainingPlans: [TrainingPlanRecord] = [],
+        taskParkings: [TaskParkingRecord] = []
     ) {
         self.taskIntervals = taskIntervals
         self.activities = activities
         self.focusSessions = focusSessions
         self.interruptions = interruptions
         self.trainingPlans = trainingPlans
+        self.taskParkings = taskParkings
     }
 
     public init(from decoder: Decoder) throws {
@@ -35,6 +38,8 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
         interruptions = try container.decodeIfPresent([PersistedInterruption].self, forKey: .interruptions)?
             .map(\.record) ?? []
         trainingPlans = try container.decodeIfPresent([PersistedTrainingPlan].self, forKey: .trainingPlans)?
+            .map(\.record) ?? []
+        taskParkings = try container.decodeIfPresent([PersistedTaskParking].self, forKey: .taskParkings)?
             .map(\.record) ?? []
     }
 
@@ -55,6 +60,7 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
         case focusSessions
         case interruptions
         case trainingPlans
+        case taskParkings
     }
 }
 
@@ -124,7 +130,8 @@ public enum AutomationReportEngine {
                 id: interval.id,
                 taskID: interval.taskID,
                 startedAt: max(interval.startedAt, start),
-                endedAt: min(intervalEnd, end)
+                endedAt: min(intervalEnd, end),
+                workflowSource: interval.workflowSource
             )
         }
         let interruptions = snapshot.interruptions.filter {
@@ -132,6 +139,9 @@ public enum AutomationReportEngine {
         }
         let sessions = snapshot.focusSessions.filter {
             $0.startedAt >= start && $0.startedAt < end && $0.endedAt != nil
+        }
+        let taskParkings = snapshot.taskParkings.filter {
+            $0.parkedAt >= start && $0.parkedAt < end
         }
         let completedSessions = snapshot.focusSessions.filter { $0.endedAt != nil }
         let plan = snapshot.currentPlan
@@ -150,6 +160,7 @@ public enum AutomationReportEngine {
                 activities: activities,
                 taskIntervals: taskIntervals,
                 interruptions: interruptions,
+                taskParkings: taskParkings,
                 now: effectiveNow
             ),
             trainingCount: sessions.count,
@@ -186,11 +197,14 @@ public enum AutomationReportEngine {
             "## 今日聚合",
             "",
             "- 应用切换：\(report.summary.appSwitchCount) 次",
-            "- 任务切换：\(report.summary.taskSwitchCount) 次",
+            "- 桌面工作流切换：\(report.summary.workflowSwitchCount) 次",
+            "- 手动任务切换：\(report.summary.taskSwitchCount) 次",
             "- 疑似 / 确认分心：\(report.summary.suspectedDistractionCount) / \(report.summary.confirmedDistractionCount) 次",
             "- 平均返回耗时：\(returnLatency)",
             "- 中位连续专注：\(medianFocus)",
             "- 训练：\(report.trainingCount) 次，成功 \(report.successfulTrainingCount) 次",
+            "- 任务停车 / 已返回：\(report.summary.taskParkingCount) / \(report.summary.resumedTaskCount) 次",
+            "- 停车任务平均恢复耗时：\(formatDuration(report.summary.averageTaskResumeLatency))",
             "- 当前计划：v\(report.currentPlan.version)，\(report.currentPlan.focusMinutes) 分钟 × 每日 \(report.currentPlan.sessionsPerDay) 次",
             "",
             "## 阶段 2",
@@ -230,6 +244,14 @@ public enum AutomationReportEngine {
         value.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
     }
+
+    private static func formatDuration(_ seconds: TimeInterval?) -> String {
+        guard let seconds else { return "暂无" }
+        let total = max(0, Int(seconds.rounded()))
+        if total >= 3600 { return "\(total / 3600) 小时 \(total / 60 % 60) 分钟" }
+        if total >= 60 { return "\(total / 60) 分钟" }
+        return "\(total) 秒"
+    }
 }
 
 private struct PersistedTaskInterval: Decodable {
@@ -237,9 +259,16 @@ private struct PersistedTaskInterval: Decodable {
     let taskID: UUID
     let startedAt: Date
     let endedAt: Date?
+    let workflowSourceRaw: String?
 
     var record: TaskIntervalRecord {
-        TaskIntervalRecord(id: id, taskID: taskID, startedAt: startedAt, endedAt: endedAt)
+        TaskIntervalRecord(
+            id: id,
+            taskID: taskID,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            workflowSource: workflowSourceRaw.flatMap(WorkflowIntervalSource.init(rawValue:)) ?? .manual
+        )
     }
 }
 
@@ -277,6 +306,8 @@ private struct PersistedFocusSession: Decodable {
     let outcomeRaw: String
     let difficulty: Int?
     let confirmedDistractionCount: Int
+    let pausedAt: Date?
+    let accumulatedPausedSeconds: TimeInterval?
 
     var record: FocusSessionRecord {
         FocusSessionRecord(
@@ -287,7 +318,10 @@ private struct PersistedFocusSession: Decodable {
             targetSeconds: targetSeconds,
             outcome: FocusOutcome(rawValue: outcomeRaw) ?? .pending,
             difficulty: difficulty,
-            confirmedDistractionCount: confirmedDistractionCount
+            confirmedDistractionCount: confirmedDistractionCount,
+            pausedSeconds: max(0, accumulatedPausedSeconds ?? 0) + (pausedAt.map {
+                max(0, (endedAt ?? $0).timeIntervalSince($0))
+            } ?? 0)
         )
     }
 }
@@ -339,6 +373,32 @@ private struct PersistedTrainingPlan: Decodable {
             reminderThresholdSeconds: reminderThresholdSeconds,
             reason: reason,
             previousPlanID: previousPlanID
+        )
+    }
+}
+
+private struct PersistedTaskParking: Decodable {
+    let id: UUID
+    let taskID: UUID
+    let parkedAt: Date
+    let resumeCue: String
+    let remindAt: Date?
+    let switchedToTaskID: UUID?
+    let resumedAt: Date?
+    let dismissedAt: Date?
+    let reminderSentAt: Date?
+
+    var record: TaskParkingRecord {
+        TaskParkingRecord(
+            id: id,
+            taskID: taskID,
+            parkedAt: parkedAt,
+            resumeCue: resumeCue,
+            remindAt: remindAt,
+            switchedToTaskID: switchedToTaskID,
+            resumedAt: resumedAt,
+            dismissedAt: dismissedAt,
+            reminderSentAt: reminderSentAt
         )
     }
 }

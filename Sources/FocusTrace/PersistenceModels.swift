@@ -8,6 +8,8 @@ final class FocusTaskModel: Codable, Identifiable {
     var allowedBundleIDs: [String]
     var createdAt: Date
     var isArchived: Bool
+    var workflowLifecycleRaw: String?
+    var completedAt: Date?
 
     init(
         id: UUID = UUID(),
@@ -15,7 +17,9 @@ final class FocusTaskModel: Codable, Identifiable {
         expectedOutcome: String = "",
         allowedBundleIDs: [String] = [],
         createdAt: Date = Date(),
-        isArchived: Bool = false
+        isArchived: Bool = false,
+        workflowLifecycle: WorkflowLifecycle = .open,
+        completedAt: Date? = nil
     ) {
         self.id = id
         self.title = title
@@ -23,6 +27,16 @@ final class FocusTaskModel: Codable, Identifiable {
         self.allowedBundleIDs = allowedBundleIDs
         self.createdAt = createdAt
         self.isArchived = isArchived
+        self.workflowLifecycleRaw = workflowLifecycle.rawValue
+        self.completedAt = completedAt
+    }
+
+    var workflowLifecycle: WorkflowLifecycle {
+        WorkflowLifecycleMigration.lifecycle(
+            rawValue: workflowLifecycleRaw,
+            isArchived: isArchived,
+            completedAt: completedAt
+        )
     }
 }
 
@@ -31,12 +45,25 @@ final class TaskIntervalModel: Codable, Identifiable {
     var taskID: UUID
     var startedAt: Date
     var endedAt: Date?
+    var workflowSourceRaw: String?
 
-    init(id: UUID = UUID(), taskID: UUID, startedAt: Date = Date(), endedAt: Date? = nil) {
+    init(
+        id: UUID = UUID(),
+        taskID: UUID,
+        startedAt: Date = Date(),
+        endedAt: Date? = nil,
+        workflowSource: WorkflowIntervalSource = .manual
+    ) {
         self.id = id
         self.taskID = taskID
         self.startedAt = startedAt
         self.endedAt = endedAt
+        self.workflowSourceRaw = workflowSource.rawValue
+    }
+
+    var workflowSource: WorkflowIntervalSource {
+        get { workflowSourceRaw.flatMap(WorkflowIntervalSource.init(rawValue:)) ?? .manual }
+        set { workflowSourceRaw = newValue.rawValue }
     }
 }
 
@@ -100,6 +127,8 @@ final class FocusSessionModel: Codable, Identifiable {
     var difficulty: Int?
     var confirmedDistractionCount: Int
     var targetNotificationSent: Bool
+    var pausedAt: Date?
+    var accumulatedPausedSeconds: TimeInterval?
 
     init(
         id: UUID = UUID(),
@@ -110,7 +139,9 @@ final class FocusSessionModel: Codable, Identifiable {
         outcome: FocusOutcome = .pending,
         difficulty: Int? = nil,
         confirmedDistractionCount: Int = 0,
-        targetNotificationSent: Bool = false
+        targetNotificationSent: Bool = false,
+        pausedAt: Date? = nil,
+        accumulatedPausedSeconds: TimeInterval? = 0
     ) {
         self.id = id
         self.taskID = taskID
@@ -121,6 +152,8 @@ final class FocusSessionModel: Codable, Identifiable {
         self.difficulty = difficulty
         self.confirmedDistractionCount = confirmedDistractionCount
         self.targetNotificationSent = targetNotificationSent
+        self.pausedAt = pausedAt
+        self.accumulatedPausedSeconds = accumulatedPausedSeconds
     }
 
     var outcome: FocusOutcome {
@@ -221,6 +254,77 @@ final class TimelineMarkerModel: Codable, Identifiable {
     }
 }
 
+final class TaskParkingModel: Codable, Identifiable {
+    var id: UUID
+    var taskID: UUID
+    var parkedAt: Date
+    var resumeCue: String
+    var remindAt: Date?
+    var switchedToTaskID: UUID?
+    var resumedAt: Date?
+    var dismissedAt: Date?
+    var reminderSentAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        taskID: UUID,
+        parkedAt: Date = Date(),
+        resumeCue: String,
+        remindAt: Date? = nil,
+        switchedToTaskID: UUID? = nil,
+        resumedAt: Date? = nil,
+        dismissedAt: Date? = nil,
+        reminderSentAt: Date? = nil
+    ) {
+        self.id = id
+        self.taskID = taskID
+        self.parkedAt = parkedAt
+        self.resumeCue = resumeCue
+        self.remindAt = remindAt
+        self.switchedToTaskID = switchedToTaskID
+        self.resumedAt = resumedAt
+        self.dismissedAt = dismissedAt
+        self.reminderSentAt = reminderSentAt
+    }
+
+    var isActive: Bool {
+        resumedAt == nil && dismissedAt == nil
+    }
+}
+
+final class WorkflowSpaceBindingModel: Codable, Identifiable {
+    var id: UUID
+    var workflowID: UUID
+    var anchorRestorationID: String
+    var displayHint: String?
+    var stateRaw: String
+    var boundAt: Date
+    var lastVerifiedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        workflowID: UUID,
+        anchorRestorationID: String,
+        displayHint: String? = nil,
+        state: WorkflowSpaceBindingState = .verified,
+        boundAt: Date = Date(),
+        lastVerifiedAt: Date? = nil
+    ) {
+        self.id = id
+        self.workflowID = workflowID
+        self.anchorRestorationID = anchorRestorationID
+        self.displayHint = displayHint
+        self.stateRaw = state.rawValue
+        self.boundAt = boundAt
+        self.lastVerifiedAt = lastVerifiedAt
+    }
+
+    var state: WorkflowSpaceBindingState {
+        get { WorkflowSpaceBindingState(rawValue: stateRaw) ?? .needsRebind }
+        set { stateRaw = newValue.rawValue }
+    }
+}
+
 @MainActor
 final class FocusTraceStore {
     private struct Snapshot: Codable {
@@ -231,6 +335,46 @@ final class FocusTraceStore {
         var interruptions: [InterruptionModel]
         var trainingPlans: [TrainingPlanModel]
         var markers: [TimelineMarkerModel]
+        var taskParkings: [TaskParkingModel]
+        var workflowSpaceBindings: [WorkflowSpaceBindingModel]
+
+        init(
+            tasks: [FocusTaskModel],
+            taskIntervals: [TaskIntervalModel],
+            activities: [ActivitySegmentModel],
+            focusSessions: [FocusSessionModel],
+            interruptions: [InterruptionModel],
+            trainingPlans: [TrainingPlanModel],
+            markers: [TimelineMarkerModel],
+            taskParkings: [TaskParkingModel],
+            workflowSpaceBindings: [WorkflowSpaceBindingModel]
+        ) {
+            self.tasks = tasks
+            self.taskIntervals = taskIntervals
+            self.activities = activities
+            self.focusSessions = focusSessions
+            self.interruptions = interruptions
+            self.trainingPlans = trainingPlans
+            self.markers = markers
+            self.taskParkings = taskParkings
+            self.workflowSpaceBindings = workflowSpaceBindings
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            tasks = try container.decodeIfPresent([FocusTaskModel].self, forKey: .tasks) ?? []
+            taskIntervals = try container.decodeIfPresent([TaskIntervalModel].self, forKey: .taskIntervals) ?? []
+            activities = try container.decodeIfPresent([ActivitySegmentModel].self, forKey: .activities) ?? []
+            focusSessions = try container.decodeIfPresent([FocusSessionModel].self, forKey: .focusSessions) ?? []
+            interruptions = try container.decodeIfPresent([InterruptionModel].self, forKey: .interruptions) ?? []
+            trainingPlans = try container.decodeIfPresent([TrainingPlanModel].self, forKey: .trainingPlans) ?? []
+            markers = try container.decodeIfPresent([TimelineMarkerModel].self, forKey: .markers) ?? []
+            taskParkings = try container.decodeIfPresent([TaskParkingModel].self, forKey: .taskParkings) ?? []
+            workflowSpaceBindings = try container.decodeIfPresent(
+                [WorkflowSpaceBindingModel].self,
+                forKey: .workflowSpaceBindings
+            ) ?? []
+        }
     }
 
     private(set) var tasks: [FocusTaskModel] = []
@@ -240,6 +384,8 @@ final class FocusTraceStore {
     private(set) var interruptions: [InterruptionModel] = []
     private(set) var trainingPlans: [TrainingPlanModel] = []
     private(set) var markers: [TimelineMarkerModel] = []
+    private(set) var taskParkings: [TaskParkingModel] = []
+    private(set) var workflowSpaceBindings: [WorkflowSpaceBindingModel] = []
     private(set) var loadWarning: String?
 
     private let fileURL: URL?
@@ -267,6 +413,8 @@ final class FocusTraceStore {
             interruptions = snapshot.interruptions
             trainingPlans = snapshot.trainingPlans
             markers = snapshot.markers
+            taskParkings = snapshot.taskParkings
+            workflowSpaceBindings = snapshot.workflowSpaceBindings
         } catch {
             let backup = directory.appendingPathComponent("store-corrupt-\(Int(Date().timeIntervalSince1970)).json")
             try? FileManager.default.copyItem(at: url, to: backup)
@@ -299,6 +447,8 @@ final class FocusTraceStore {
     func insert(_ value: InterruptionModel) { interruptions.append(value) }
     func insert(_ value: TrainingPlanModel) { trainingPlans.append(value) }
     func insert(_ value: TimelineMarkerModel) { markers.append(value) }
+    func insert(_ value: TaskParkingModel) { taskParkings.append(value) }
+    func insert(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.append(value) }
 
     func delete(_ value: FocusTaskModel) { tasks.removeAll { $0.id == value.id } }
     func delete(_ value: TaskIntervalModel) { taskIntervals.removeAll { $0.id == value.id } }
@@ -307,6 +457,8 @@ final class FocusTraceStore {
     func delete(_ value: InterruptionModel) { interruptions.removeAll { $0.id == value.id } }
     func delete(_ value: TrainingPlanModel) { trainingPlans.removeAll { $0.id == value.id } }
     func delete(_ value: TimelineMarkerModel) { markers.removeAll { $0.id == value.id } }
+    func delete(_ value: TaskParkingModel) { taskParkings.removeAll { $0.id == value.id } }
+    func delete(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.removeAll { $0.id == value.id } }
 
     private func encodedSnapshot() throws -> Data {
         let snapshot = Snapshot(
@@ -316,7 +468,9 @@ final class FocusTraceStore {
             focusSessions: focusSessions,
             interruptions: interruptions,
             trainingPlans: trainingPlans,
-            markers: markers
+            markers: markers,
+            taskParkings: taskParkings,
+            workflowSpaceBindings: workflowSpaceBindings
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -338,7 +492,13 @@ extension FocusTaskModel {
 
 extension TaskIntervalModel {
     var record: TaskIntervalRecord {
-        TaskIntervalRecord(id: id, taskID: taskID, startedAt: startedAt, endedAt: endedAt)
+        TaskIntervalRecord(
+            id: id,
+            taskID: taskID,
+            startedAt: startedAt,
+            endedAt: endedAt,
+            workflowSource: workflowSource
+        )
     }
 }
 
@@ -367,7 +527,8 @@ extension FocusSessionModel {
             targetSeconds: targetSeconds,
             outcome: outcome,
             difficulty: difficulty,
-            confirmedDistractionCount: confirmedDistractionCount
+            confirmedDistractionCount: confirmedDistractionCount,
+            pausedSeconds: accumulatedPausedSeconds
         )
     }
 }
@@ -406,5 +567,35 @@ extension TrainingPlanModel {
 extension TimelineMarkerModel {
     var record: TimelineMarkerRecord {
         TimelineMarkerRecord(id: id, date: date, kind: kind, taskID: taskID)
+    }
+}
+
+extension TaskParkingModel {
+    var record: TaskParkingRecord {
+        TaskParkingRecord(
+            id: id,
+            taskID: taskID,
+            parkedAt: parkedAt,
+            resumeCue: resumeCue,
+            remindAt: remindAt,
+            switchedToTaskID: switchedToTaskID,
+            resumedAt: resumedAt,
+            dismissedAt: dismissedAt,
+            reminderSentAt: reminderSentAt
+        )
+    }
+}
+
+extension WorkflowSpaceBindingModel {
+    var record: WorkflowSpaceBindingRecord {
+        WorkflowSpaceBindingRecord(
+            id: id,
+            workflowID: workflowID,
+            anchorRestorationID: anchorRestorationID,
+            displayHint: displayHint,
+            state: state,
+            boundAt: boundAt,
+            lastVerifiedAt: lastVerifiedAt
+        )
     }
 }

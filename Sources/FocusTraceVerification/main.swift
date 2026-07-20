@@ -131,15 +131,32 @@ private func phaseTwoFixture() -> (
         focusMinutes: 15,
         reason: "测试计划"
     )
+    let lastDay = calendar.date(byAdding: .day, value: 9, to: start)!
+    let taskParkings = [
+        TaskParkingRecord(
+            taskID: taskID,
+            parkedAt: lastDay.addingTimeInterval(60),
+            resumeCue: "PRIVATE_RESUME_CUE",
+            remindAt: lastDay.addingTimeInterval(10 * 60),
+            switchedToTaskID: UUID(),
+            resumedAt: lastDay.addingTimeInterval(21 * 60)
+        ),
+        TaskParkingRecord(
+            taskID: taskID,
+            parkedAt: lastDay.addingTimeInterval(30 * 60),
+            resumeCue: "ANOTHER_PRIVATE_CUE"
+        )
+    ]
     return (
         FocusTraceLocalSnapshot(
             activities: activities,
             focusSessions: sessions,
             interruptions: interruptions,
-            trainingPlans: [plan]
+            trainingPlans: [plan],
+            taskParkings: taskParkings
         ),
         calendar,
-        calendar.date(byAdding: .day, value: 9, to: start)!
+        lastDay
     )
 }
 
@@ -170,6 +187,44 @@ suite.run("睡眠关闭片段且唤醒后重开") {
     try expect(asleep.closed?.app == app, "睡眠时应闭合当前应用")
     try expect(ignored.ignoredDuplicate, "系统非活跃期间不应采集")
     try expect(awake.opened?.startedAt == start.addingTimeInterval(40), "唤醒应从新时间开始")
+}
+
+suite.run("锁屏 loginwindow 被视为系统非活动") {
+    let loginWindow = AppIdentity(bundleID: "com.apple.loginwindow", name: "loginwindow")
+    let normalApp = AppIdentity(bundleID: "com.apple.Terminal", name: "Terminal")
+    try expect(SystemActivityGate.isSystemInactiveApp(loginWindow), "loginwindow 应结束活动计时")
+    try expect(!SystemActivityGate.isSystemInactiveApp(normalApp), "普通应用不应被当作锁屏")
+
+    let start = Date(timeIntervalSince1970: 1_000)
+    var machine = ActivityCaptureStateMachine()
+    _ = machine.activate(normalApp, at: start)
+    let locked = machine.becomeInactive(at: start.addingTimeInterval(10))
+    let unlocked = machine.becomeActive(normalApp, at: start.addingTimeInterval(40))
+    try expect(locked.closedAt == start.addingTimeInterval(10), "锁屏时应立即闭合前台片段")
+    try expect(unlocked.opened?.startedAt == start.addingTimeInterval(40), "解锁后应从实际返回时间重开")
+}
+
+suite.run("跨天自动跟随今天但保留历史查看") {
+    let calendar = utcCalendar()
+    let yesterday = calendar.date(from: DateComponents(year: 2026, month: 7, day: 19, hour: 23, minute: 59))!
+    let today = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 0, minute: 1))!
+    let selectedYesterday = calendar.startOfDay(for: yesterday)
+    let rolled = TimelineDateEngine.selectedDateAfterTick(
+        selectedDate: selectedYesterday,
+        previousNow: yesterday,
+        currentNow: today,
+        calendar: calendar
+    )
+    try expect(calendar.isDate(rolled, inSameDayAs: today), "跟随今天时应自动跨天")
+
+    let historical = calendar.date(byAdding: .day, value: -2, to: selectedYesterday)!
+    let preserved = TimelineDateEngine.selectedDateAfterTick(
+        selectedDate: historical,
+        previousNow: yesterday,
+        currentNow: today,
+        calendar: calendar
+    )
+    try expect(preserved == historical, "用户主动查看的历史日期不应被改写")
 }
 
 suite.run("分心提醒严格遵守 20 秒和基线门槛") {
@@ -246,7 +301,7 @@ suite.run("连续专注在分心和任务变化处断开") {
     try expect(TrainingEngine.baselineStreaks(from: records) == [120, 30], "连续专注区间计算错误")
 }
 
-suite.run("每日指标分开统计切换和确认分心") {
+suite.run("每日指标分开统计应用、桌面工作流、手动切换和确认分心") {
     let task = UUID()
     let focus = UUID()
     let start = Date(timeIntervalSince1970: 10_000)
@@ -268,14 +323,294 @@ suite.run("每日指标分开统计切换和确认分心") {
     )
     let summary = MetricsEngine.dailySummary(
         activities: activities,
-        taskIntervals: [TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(150))],
+        taskIntervals: [
+            TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(50)),
+            TaskIntervalRecord(
+                taskID: task,
+                startedAt: start.addingTimeInterval(50),
+                endedAt: start.addingTimeInterval(100),
+                workflowSource: .space
+            ),
+            TaskIntervalRecord(
+                taskID: task,
+                startedAt: start.addingTimeInterval(100),
+                endedAt: start.addingTimeInterval(150),
+                workflowSource: .manual
+            )
+        ],
         interruptions: [interruption],
         now: start.addingTimeInterval(150)
     )
     try expect(summary.appSwitchCount == 2, "应用切换次数错误")
-    try expect(summary.taskSwitchCount == 0, "任务切换次数错误")
+    try expect(summary.workflowSwitchCount == 1, "桌面工作流切换次数错误")
+    try expect(summary.taskSwitchCount == 1, "手动任务切换次数错误")
     try expect(summary.confirmedDistractionCount == 1, "确认分心次数错误")
     try expect(summary.averageReturnLatency == 10, "返回耗时错误")
+}
+
+suite.run("五分钟时间轴聚合主应用和切换密度") {
+    let start = Date(timeIntervalSince1970: 40_000)
+    let range = DateInterval(start: start, duration: 10 * 60)
+    let appA = AppIdentity(bundleID: "a", name: "A")
+    let appB = AppIdentity(bundleID: "b", name: "B")
+    let system = AppIdentity(bundleID: "system", name: "System")
+    let activities = [
+        ActivityRecord(app: appA, startedAt: start, endedAt: start.addingTimeInterval(180), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: appB, startedAt: start.addingTimeInterval(180), endedAt: start.addingTimeInterval(240), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: appA, startedAt: start.addingTimeInterval(240), endedAt: start.addingTimeInterval(420), taskID: nil, focusSessionID: nil, classification: .necessary),
+        ActivityRecord(app: system, startedAt: start.addingTimeInterval(420), endedAt: start.addingTimeInterval(450), taskID: nil, focusSessionID: nil, classification: .systemInactive),
+        ActivityRecord(app: appB, startedAt: start.addingTimeInterval(450), endedAt: start.addingTimeInterval(600), taskID: nil, focusSessionID: nil, classification: .allowed)
+    ]
+    let markers = [
+        TimelineMarkerRecord(date: start.addingTimeInterval(100), kind: .activeSpaceChanged),
+        TimelineMarkerRecord(date: start.addingTimeInterval(320), kind: .activeSpaceChanged)
+    ]
+    let buckets = TimelineAggregationEngine.buckets(
+        activities: activities,
+        markers: markers,
+        range: range,
+        now: range.end
+    )
+    try expect(buckets.count == 2, "10 分钟应聚合成两个桶")
+    try expect(buckets[0].dominantApp == appA, "第一桶主应用应按停留时长计算")
+    try expect(buckets[0].switchCount == 2, "第一桶切换数错误")
+    try expect(buckets[0].spaceSwitchCount == 1, "第一桶 Space 计数错误")
+    try expect(buckets[1].dominantApp == appB, "系统非活动不应成为主应用")
+    try expect(buckets[1].switchCount == 1, "第二桶切换数错误")
+    try expect(buckets[1].uniqueAppCount == 2, "系统非活动不应计入应用数")
+}
+
+suite.run("碎片化等级边界稳定") {
+    try expect(FragmentationLevel.classify(switchCount: 2) == .quiet, "2 次应为稳定")
+    try expect(FragmentationLevel.classify(switchCount: 3) == .steady, "3 次应为中等")
+    try expect(FragmentationLevel.classify(switchCount: 6) == .fragmented, "6 次应为碎片化")
+    try expect(FragmentationLevel.classify(switchCount: 11) == .intense, "11 次应为高碎片化")
+}
+
+suite.run("相邻系统事件按十五分钟合并且忽略 Space") {
+    let start = Date(timeIntervalSince1970: 50_000)
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let buckets = TimelineEventAggregationEngine.buckets(
+        markers: [
+            TimelineMarkerRecord(date: start.addingTimeInterval(60), kind: .screenSlept),
+            TimelineMarkerRecord(date: start.addingTimeInterval(5 * 60), kind: .screenWoke),
+            TimelineMarkerRecord(date: start.addingTimeInterval(8 * 60), kind: .activeSpaceChanged),
+            TimelineMarkerRecord(date: start.addingTimeInterval(20 * 60), kind: .taskChanged)
+        ],
+        range: range
+    )
+    try expect(buckets.count == 2, "三个可见事件应形成两个事件簇")
+    try expect(buckets[0].eventCount == 2, "相邻睡眠和唤醒应合并")
+    try expect(buckets[0].countsByKind[.screenSlept] == 1, "事件类型计数错误")
+    try expect(buckets[1].kinds == [.taskChanged], "任务事件应落入下一事件簇")
+}
+
+suite.run("工作流完成释放桌面且保留可撤销状态") {
+    let workflowID = UUID()
+    let completedAt = Date(timeIntervalSince1970: 60_000)
+    var state = WorkflowLifecycleState(
+        workflowID: workflowID,
+        bindingCount: 2,
+        hasCheckpoint: true
+    )
+    let completed = try WorkflowLifecycleEngine.transition(state, event: .complete, at: completedAt)
+    try expect(completed.state.lifecycle == .completed, "完成后生命周期错误")
+    try expect(completed.state.bindingCount == 0, "完成后应释放所有桌面绑定")
+    try expect(completed.state.completedAt == completedAt, "完成时间错误")
+    try expect(completed.effects.contains(.releaseAllBindings(workflowID: workflowID)), "缺少释放绑定副作用")
+    try expect(completed.effects.contains(.checkpointResolved(workflowID: workflowID)), "完成时应解决检查点")
+
+    state = completed.state
+    let undone = try WorkflowLifecycleEngine.transition(state, event: .undoCompletion, at: completedAt.addingTimeInterval(10))
+    try expect(undone.state.lifecycle == .open, "撤销后应重新打开")
+    try expect(undone.state.bindingCount == 0, "撤销不能猜测恢复旧桌面")
+    try expect(undone.effects == [.requiresRebind(workflowID: workflowID)], "撤销后应要求重新绑定")
+}
+
+suite.run("桌面解析对未知和冲突绝不猜测") {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(activeAnchorWorkflowIDs: [workflowA], registryReady: false) == .unknown,
+        "锚点未就绪时必须未知"
+    )
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(activeAnchorWorkflowIDs: [], registryReady: true) == .unbound,
+        "无锚点命中应为未绑定"
+    )
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(activeAnchorWorkflowIDs: [workflowA, workflowA], registryReady: true) == .bound(workflowID: workflowA),
+        "同一工作流多个锚点不应冲突"
+    )
+    if case let .conflict(ids) = WorkflowSpaceResolutionEngine.resolve(
+        activeAnchorWorkflowIDs: [workflowA, workflowB],
+        registryReady: true
+    ) {
+        try expect(Set(ids) == Set([workflowA, workflowB]), "冲突应保留工作流集合")
+    } else {
+        throw VerificationFailure(message: "多个工作流锚点必须进入冲突")
+    }
+}
+
+suite.run("工作流上下文切换闭合旧区间并打开未知区间") {
+    let workflowID = UUID()
+    let start = Date(timeIntervalSince1970: 70_000)
+    let entered = WorkflowContextEngine.transition(
+        WorkflowContextState(),
+        to: .bound(workflowID: workflowID),
+        at: start
+    )
+    try expect(entered.state.context.workflowID == workflowID, "应进入绑定工作流")
+    try expect(entered.effects.contains(.workflowBecameForeground(workflowID: workflowID)), "缺少前台副作用")
+
+    let unknownAt = start.addingTimeInterval(30)
+    let unknown = WorkflowContextEngine.transition(entered.state, to: .unknown, at: unknownAt)
+    try expect(unknown.state.context.kind == .unknown, "识别失败应进入 unknown")
+    try expect(unknown.state.context.workflowID == nil, "unknown 不应沿用旧工作流")
+    try expect(unknown.effects.contains(.workflowBecameBackground(workflowID: workflowID)), "旧工作流应转后台")
+    try expect(unknown.effects.contains(.closeInterval(
+        context: entered.state.context,
+        startedAt: start,
+        endedAt: unknownAt
+    )), "旧区间未正确闭合")
+}
+
+suite.run("跨桌面专注宽限、暂停、恢复和有效时长") {
+    let focusWorkflow = UUID()
+    let otherWorkflow = UUID()
+    let start = Date(timeIntervalSince1970: 80_000)
+    let initial = FocusWorkflowDepartureState(focusWorkflowID: focusWorkflow)
+
+    let briefDeparture = FocusWorkflowDepartureEngine.contextChanged(
+        initial,
+        to: otherWorkflow,
+        at: start
+    )
+    try expect(briefDeparture.state.pendingDepartureAt == start, "离开后应进入宽限")
+    try expect(
+        briefDeparture.effects == [.scheduleGrace(deadline: start.addingTimeInterval(10))],
+        "宽限截止时间错误"
+    )
+    let briefReturn = FocusWorkflowDepartureEngine.contextChanged(
+        briefDeparture.state,
+        to: focusWorkflow,
+        at: start.addingTimeInterval(8)
+    )
+    try expect(briefReturn.effects == [.cancelGrace], "10 秒内返回只应取消宽限")
+    try expect(briefReturn.state.pausedAt == nil, "短暂误触不应暂停")
+
+    let departedAgain = FocusWorkflowDepartureEngine.contextChanged(
+        briefReturn.state,
+        to: otherWorkflow,
+        at: start.addingTimeInterval(20)
+    )
+    let paused = FocusWorkflowDepartureEngine.graceElapsed(departedAgain.state)
+    try expect(paused.state.pausedAt == start.addingTimeInterval(20), "暂停应从离开时刻开始")
+    let resumed = FocusWorkflowDepartureEngine.contextChanged(
+        paused.state,
+        to: focusWorkflow,
+        at: start.addingTimeInterval(45)
+    )
+    try expect(resumed.state.accumulatedPausedSeconds == 25, "暂停累计时长错误")
+    try expect(resumed.effects == [.resumed(pausedSeconds: 25)], "恢复副作用错误")
+    try expect(
+        FocusWorkflowDepartureEngine.activeElapsedSeconds(
+            startedAt: start,
+            endedAt: start.addingTimeInterval(100),
+            state: resumed.state
+        ) == 75,
+        "有效专注时长应扣除跨桌面暂停"
+    )
+
+    let session = FocusSessionRecord(
+        taskID: focusWorkflow,
+        startedAt: start,
+        endedAt: start.addingTimeInterval(100),
+        targetSeconds: 80,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0,
+        pausedSeconds: 25
+    )
+    try expect(!session.reachedTarget, "训练成功判定必须扣除暂停时间")
+}
+
+suite.run("旧任务生命周期兼容迁移") {
+    try expect(
+        WorkflowLifecycleMigration.lifecycle(rawValue: nil, isArchived: false, completedAt: nil) == .open,
+        "普通旧任务应迁移为 open"
+    )
+    try expect(
+        WorkflowLifecycleMigration.lifecycle(rawValue: nil, isArchived: true, completedAt: nil) == .archived,
+        "已归档旧任务应保留归档状态"
+    )
+    try expect(
+        WorkflowLifecycleMigration.lifecycle(rawValue: nil, isArchived: false, completedAt: Date()) == .completed,
+        "已有完成时间应迁移为 completed"
+    )
+}
+
+suite.run("任务停车只提醒到期且未解决的线索") {
+    let now = Date(timeIntervalSince1970: 20_000)
+    let task = UUID()
+    let due = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "run tests",
+        remindAt: now.addingTimeInterval(-1)
+    )
+    let future = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now,
+        resumeCue: "review output",
+        remindAt: now.addingTimeInterval(300)
+    )
+    let sent = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "sent",
+        remindAt: now.addingTimeInterval(-1),
+        reminderSentAt: now.addingTimeInterval(-30)
+    )
+    let resumed = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "done",
+        remindAt: now.addingTimeInterval(-1),
+        resumedAt: now
+    )
+    let result = TaskParkingEngine.dueForReminder([due, future, sent, resumed], at: now)
+    try expect(result.map(\.id) == [due.id], "到期提醒筛选错误")
+}
+
+suite.run("任务停车指标统计恢复率和耗时") {
+    let start = Date(timeIntervalSince1970: 30_000)
+    let task = UUID()
+    let parkings = [
+        TaskParkingRecord(
+            taskID: task,
+            parkedAt: start,
+            resumeCue: "first",
+            resumedAt: start.addingTimeInterval(600)
+        ),
+        TaskParkingRecord(
+            taskID: task,
+            parkedAt: start,
+            resumeCue: "second",
+            resumedAt: start.addingTimeInterval(1_200)
+        ),
+        TaskParkingRecord(taskID: task, parkedAt: start, resumeCue: "active")
+    ]
+    let summary = MetricsEngine.dailySummary(
+        activities: [],
+        taskIntervals: [],
+        interruptions: [],
+        taskParkings: parkings,
+        now: start
+    )
+    try expect(summary.taskParkingCount == 3, "挂起次数错误")
+    try expect(summary.resumedTaskCount == 2, "恢复次数错误")
+    try expect(summary.averageTaskResumeLatency == 900, "平均恢复耗时错误")
 }
 
 suite.run("阶段 2 在门槛前保持锁定") {
@@ -315,6 +650,8 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(markdown.contains("状态：已解锁"), "日报应显示阶段 2 状态")
     try expect(markdown.contains("Codex → 微信"), "日报应包含聚合模式")
     try expect(markdown.contains("本周单项建议"), "日报应限制为单项建议")
+    try expect(markdown.contains("任务停车 / 已返回：2 / 1 次"), "日报应包含停车聚合指标")
+    try expect(!markdown.contains("PRIVATE_RESUME_CUE"), "日报不应暴露恢复线索")
     try expect(!markdown.contains("com.openai.codex"), "日报不应泄露 Bundle ID")
     try expect(!markdown.contains(fixture.snapshot.activities[0].id.uuidString), "日报不应泄露原始事件 ID")
 }
@@ -362,6 +699,7 @@ suite.run("本地 store.json 兼容解码") {
     try expect(snapshot.activities.count == 1, "活动片段未解码")
     try expect(snapshot.activities[0].app.name == "Terminal", "应用名未解码")
     try expect(snapshot.currentPlan.focusMinutes == 15, "训练计划未解码")
+    try expect(snapshot.taskParkings.isEmpty, "旧 store.json 缺少新字段时应默认为空")
 }
 
 suite.run("CSV 转义且不添加敏感字段") {
@@ -395,6 +733,7 @@ suite.run("JSON 导出可往返") {
     decoder.dateDecodingStrategy = .iso8601
     let decoded = try decoder.decode(ExportBundle.self, from: data)
     try expect(decoded.tasks.first?.title == "Task", "JSON 往返失败")
+    try expect(decoded.taskParkings.isEmpty, "空停车数组往返失败")
 }
 
 print("")

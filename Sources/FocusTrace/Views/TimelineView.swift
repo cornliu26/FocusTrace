@@ -3,10 +3,14 @@ import FocusTraceCore
 
 struct TimelineView: View {
     @ObservedObject var state: ApplicationState
+    @State private var showRawActivities = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if state.currentTaskID == nil {
+                    taskContextBanner
+                }
                 HStack {
                     DatePicker(
                         "日期",
@@ -15,6 +19,13 @@ struct TimelineView: View {
                         displayedComponents: .date
                     )
                     .datePickerStyle(.field)
+                    Button {
+                        state.showQuickStart = true
+                    } label: {
+                        Label("使用方法", systemImage: "questionmark.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("查看 FocusTrace 的三步使用方法")
                     Spacer()
                     Label(state.baselineProgressText, systemImage: state.baselineComplete ? "checkmark.circle" : "hourglass")
                         .foregroundStyle(.secondary)
@@ -28,20 +39,58 @@ struct TimelineView: View {
                     range: state.preferences.workRange(for: state.selectedDate),
                     now: state.now
                 )
-                .frame(height: 230)
+                .frame(height: 310)
 
                 summaryGrid
-                activityList
+                rawActivityList
             }
             .padding(24)
         }
+    }
+
+    private var taskContextBanner: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "tag.slash")
+                .font(.title2)
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.activeTasks.isEmpty ? "当前只能记录应用切换" : "当前没有主任务")
+                    .font(.headline)
+                Text(state.activeTasks.isEmpty
+                     ? "创建至少一个任务，否则无法累积基线、识别分心或训练恢复能力。"
+                     : "请选择你正在做的任务；未标注时的切换只能用于描述性统计。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            HStack(spacing: 8) {
+                Button("使用方法") {
+                    state.showQuickStart = true
+                }
+                .buttonStyle(.bordered)
+                Button(state.activeTasks.isEmpty ? "创建第一个任务" : "选择当前任务") {
+                    if state.activeTasks.isEmpty {
+                        state.showTaskCreator = true
+                    } else {
+                        state.showTaskSwitcher = true
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(14)
+        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var summaryGrid: some View {
         let summary = state.selectedSummary
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
             MetricCard(title: "应用切换", value: "\(summary.appSwitchCount)", detail: "前台应用变化")
-            MetricCard(title: "任务切换", value: "\(summary.taskSwitchCount)", detail: "主动标记")
+            MetricCard(
+                title: "工作流 / 手动切换",
+                value: "\(summary.workflowSwitchCount) / \(summary.taskSwitchCount)",
+                detail: "桌面识别 / 主动标记"
+            )
             MetricCard(title: "疑似 / 确认分心", value: "\(summary.suspectedDistractionCount) / \(summary.confirmedDistractionCount)", detail: "可在回顾中修正")
             MetricCard(
                 title: "中位连续专注",
@@ -51,32 +100,44 @@ struct TimelineView: View {
         }
     }
 
-    private var activityList: some View {
-        GroupBox("应用片段") {
-            if state.selectedActivities.isEmpty {
-                ContentUnavailableView(
-                    "当天没有记录",
-                    systemImage: "timeline.selection",
-                    description: Text("记录只在配置的工作时段内进行。")
-                )
-                .frame(height: 160)
-            } else {
-                Table(state.selectedActivities) {
-                    TableColumn("开始") { item in
-                        Text(item.startedAt, style: .time).monospacedDigit()
+    private var rawActivityList: some View {
+        GroupBox {
+            DisclosureGroup(isExpanded: $showRawActivities) {
+                if state.selectedActivities.isEmpty {
+                    ContentUnavailableView(
+                        "当天没有记录",
+                        systemImage: "timeline.selection",
+                        description: Text("记录只在配置的工作时段内进行。")
+                    )
+                    .frame(height: 150)
+                } else {
+                    Table(state.selectedActivities) {
+                        TableColumn("开始") { item in
+                            Text(item.startedAt, style: .time).monospacedDigit()
+                        }
+                        .width(70)
+                        TableColumn("时长") { item in
+                            Text(durationText((item.endedAt ?? state.now).timeIntervalSince(item.startedAt)))
+                                .monospacedDigit()
+                        }
+                        .width(70)
+                        TableColumn("应用") { item in Text(item.appName) }
+                        TableColumn("任务") { item in Text(state.taskName(for: item.taskID)) }
+                        TableColumn("分类") { item in ClassificationBadge(classification: item.classification) }
                     }
-                    .width(70)
-                    TableColumn("时长") { item in
-                        Text(durationText((item.endedAt ?? state.now).timeIntervalSince(item.startedAt)))
-                            .monospacedDigit()
-                    }
-                    .width(70)
-                    TableColumn("应用") { item in Text(item.appName) }
-                    TableColumn("任务") { item in Text(state.taskName(for: item.taskID)) }
-                    TableColumn("分类") { item in ClassificationBadge(classification: item.classification) }
+                    .frame(minHeight: 250)
                 }
-                .frame(minHeight: 250)
+            } label: {
+                HStack {
+                    Label("原始应用片段（\(state.selectedActivities.count)）", systemImage: "list.bullet.rectangle")
+                        .font(.headline)
+                    Spacer()
+                    Text(showRawActivities ? "收起明细" : "需要核对时再展开")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(4)
         }
     }
 
@@ -94,52 +155,153 @@ struct TimelineChart: View {
     let tasks: [FocusTaskModel]
     let range: DateInterval
     let now: Date
+    private let bucketMinutes = 5
+    @State private var showSwitchingScale = false
+
+    private var buckets: [TimelineBucket] {
+        TimelineAggregationEngine.buckets(
+            activities: segments.map(\.record),
+            markers: markers.map(\.record),
+            range: range,
+            bucketMinutes: bucketMinutes,
+            now: now
+        )
+    }
+
+    private var occupiedBuckets: [TimelineBucket] {
+        buckets.filter { $0.activeSeconds > 0 }
+    }
+
+    private var averageSwitches: Double {
+        guard !occupiedBuckets.isEmpty else { return 0 }
+        return Double(occupiedBuckets.reduce(0) { $0 + $1.switchCount }) / Double(occupiedBuckets.count)
+    }
+
+    private var overallLevel: FragmentationLevel {
+        FragmentationLevel.classify(switchCount: Int(averageSwitches.rounded()), bucketMinutes: bucketMinutes)
+    }
+
+    private var eventBuckets: [TimelineEventBucket] {
+        TimelineEventAggregationEngine.buckets(
+            markers: markers.map(\.record),
+            range: range,
+            bucketMinutes: 15
+        )
+    }
+
+    private var spaceSwitchCount: Int {
+        buckets.reduce(0) { $0 + $1.spaceSwitchCount }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 10) {
+                Button {
+                    showSwitchingScale.toggle()
+                } label: {
+                    HStack(spacing: 5) {
+                        Text(occupiedBuckets.isEmpty ? "暂无活动" : switchingIntensityText(overallLevel))
+                            .font(.headline)
+                        Image(systemName: "questionmark.circle")
+                            .font(.caption)
+                    }
+                    .foregroundStyle(occupiedBuckets.isEmpty ? Color.secondary : fragmentationColor(overallLevel))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        (occupiedBuckets.isEmpty ? Color.secondary : fragmentationColor(overallLevel)).opacity(0.12),
+                        in: Capsule()
+                    )
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showSwitchingScale) {
+                    SwitchingScalePopover(averageSwitches: averageSwitches)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("按 5 分钟聚合：颜色显示主应用，柱高显示切换密度")
+                        .font(.callout.weight(.medium))
+                    Text(occupiedBuckets.isEmpty
+                         ? "工作时段开始后会在这里形成概览"
+                         : "有记录的区间平均 \(averageSwitches, specifier: "%.1f") 次应用切换 · Space 切换 \(spaceSwitchCount) 次")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("描述行为，不自动等于分心")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
             HStack {
                 Text("任务").frame(width: 50, alignment: .leading)
-                track(height: 42) { width in
+                track(height: 36) { width in
                     ForEach(taskIntervals) { interval in
                         let frame = frameFor(start: interval.startedAt, end: interval.endedAt ?? now, width: width)
                         if frame.width > 0 {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(taskColor(interval.taskID).opacity(0.75))
-                                .frame(width: frame.width, height: 32)
+                                .frame(width: frame.width, height: 25)
                                 .offset(x: frame.offset, y: 5)
                                 .help("\(taskName(interval.taskID)) · \(duration(interval.startedAt, interval.endedAt ?? now))")
-                                .overlay(alignment: .leading) {
-                                    if frame.width > 80 {
-                                        Text(taskName(interval.taskID))
-                                            .font(.caption)
-                                            .lineLimit(1)
-                                            .padding(.leading, 6)
-                                    }
-                                }
                         }
                     }
                 }
             }
             HStack {
-                Text("应用").frame(width: 50, alignment: .leading)
-                track(height: 62) { width in
-                    ForEach(segments) { segment in
-                        let frame = frameFor(start: segment.startedAt, end: segment.endedAt ?? now, width: width)
-                        if frame.width > 0 {
-                            RoundedRectangle(cornerRadius: 3)
-                                .fill(segmentColor(segment))
-                                .frame(width: frame.width, height: 42)
-                                .offset(x: frame.offset, y: 7)
-                                .help("\(segment.appName) · \(duration(segment.startedAt, segment.endedAt ?? now)) · \(classificationText(segment.classification))")
+                Text("主应用").frame(width: 50, alignment: .leading)
+                track(height: 36) { width in
+                    ForEach(buckets) { bucket in
+                        let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
+                        if let app = bucket.dominantApp, frame.width > 0 {
+                            RoundedRectangle(cornerRadius: 2.5)
+                                .fill(stableColor(app.bundleID).opacity(0.88))
+                                .frame(width: max(1, frame.width - 1), height: 25)
+                                .offset(x: frame.offset + 0.5, y: 5)
+                                .help("\(timeRange(bucket.start, bucket.end)) · \(app.name) · 活跃 \(duration(bucket.activeSeconds)) · \(bucket.uniqueAppCount) 个应用")
                         }
                     }
-                    ForEach(markers) { marker in
-                        let x = frameFor(start: marker.date, end: marker.date.addingTimeInterval(1), width: width).offset
-                        Rectangle()
-                            .fill(markerColor(marker.kind))
-                            .frame(width: 2, height: 54)
-                            .offset(x: x, y: 4)
-                            .help(markerText(marker.kind))
+                }
+            }
+            HStack(alignment: .bottom) {
+                Text("切换密度").frame(width: 50, alignment: .leading)
+                track(height: 45) { width in
+                    let maximum = max(1, buckets.map(\.switchCount).max() ?? 1)
+                    ForEach(buckets) { bucket in
+                        let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
+                        if bucket.activeSeconds > 0, frame.width > 0 {
+                            let barHeight = max(4, 34 * CGFloat(bucket.switchCount) / CGFloat(maximum))
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(fragmentationColor(bucket.fragmentationLevel).opacity(0.85))
+                                .frame(width: max(1, frame.width - 1), height: barHeight)
+                                .offset(x: frame.offset + 0.5, y: 39 - barHeight)
+                                .help("\(timeRange(bucket.start, bucket.end)) · 应用切换 \(bucket.switchCount) 次 · Space \(bucket.spaceSwitchCount) 次")
+                        }
+                    }
+                }
+            }
+            if !eventBuckets.isEmpty {
+                HStack {
+                    Text("关键事件").frame(width: 50, alignment: .leading)
+                    track(height: 24) { width in
+                        ForEach(eventBuckets) { bucket in
+                            let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
+                            let kind = representativeKind(bucket.kinds)
+                            ZStack {
+                                Capsule()
+                                    .fill(markerColor(kind).opacity(0.13))
+                                if bucket.eventCount == 1 {
+                                    Image(systemName: markerSymbol(kind))
+                                        .font(.caption2)
+                                } else {
+                                    Text("\(bucket.eventCount)")
+                                        .font(.caption2.bold())
+                                }
+                            }
+                            .foregroundStyle(markerColor(kind))
+                            .frame(width: max(12, frame.width - 2), height: 18)
+                            .offset(x: frame.offset + 1, y: 3)
+                            .help("\(timeRange(bucket.start, bucket.end)) · \(eventSummary(bucket))")
+                        }
                     }
                 }
             }
@@ -148,11 +310,11 @@ struct TimelineChart: View {
                 hourLabels
             }
             HStack(spacing: 12) {
-                legend("允许", .blue)
-                legend("必要", .green)
-                legend("疑似", .orange)
-                legend("确认分心", .red)
-                legend("系统/本工具", .gray)
+                legend("较少 0–2", .green)
+                legend("适中 3–5", .blue)
+                legend("密集 6–10", .orange)
+                legend("很密集 11+", .red)
+                Text("关键事件按 15 分钟合并")
                 Spacer()
             }
             .font(.caption)
@@ -168,7 +330,7 @@ struct TimelineChart: View {
                 RoundedRectangle(cornerRadius: 5).fill(.background)
                 ForEach(0...8, id: \.self) { index in
                     Rectangle()
-                        .fill(.separator.opacity(index == 0 || index == 8 ? 0 : 0.35))
+                        .fill(.separator.opacity(index == 0 || index == 8 ? 0 : 0.18))
                         .frame(width: 1)
                         .offset(x: geometry.size.width * CGFloat(index) / 8)
                 }
@@ -209,24 +371,13 @@ struct TimelineChart: View {
 
     private func taskColor(_ id: UUID) -> Color { stableColor(id.uuidString) }
 
-    private func segmentColor(_ item: ActivitySegmentModel) -> Color {
-        switch item.classification {
-        case .necessary: return .green
-        case .suspectedDistraction: return .orange
-        case .confirmedDistraction: return .red
-        case .systemInactive, .trackerControl: return .gray
-        case .taskSwitch: return .purple
-        case .allowed: return stableColor(item.bundleID)
-        }
-    }
-
     private func stableColor(_ value: String) -> Color {
         var hash: UInt64 = 14_695_981_039_346_656_037
         for byte in value.utf8 {
             hash ^= UInt64(byte)
             hash &*= 1_099_511_628_211
         }
-        return Color(hue: Double(hash % 360) / 360, saturation: 0.58, brightness: 0.82)
+        return Color(hue: Double(hash % 360) / 360, saturation: 0.48, brightness: 0.86)
     }
 
     private func duration(_ start: Date, _ end: Date) -> String {
@@ -234,20 +385,43 @@ struct TimelineChart: View {
         return seconds >= 60 ? "\(seconds / 60) 分 \(seconds % 60) 秒" : "\(seconds) 秒"
     }
 
-    private func classificationText(_ value: ActivityClassification) -> String {
-        switch value {
-        case .allowed: return "允许"
-        case .necessary: return "必要"
-        case .suspectedDistraction: return "疑似分心"
-        case .confirmedDistraction: return "确认分心"
-        case .taskSwitch: return "任务切换"
-        case .systemInactive: return "系统非活动"
-        case .trackerControl: return "FocusTrace 操作"
+    private func duration(_ seconds: TimeInterval) -> String {
+        duration(Date(timeIntervalSince1970: 0), Date(timeIntervalSince1970: max(0, seconds)))
+    }
+
+    private func timeRange(_ start: Date, _ end: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
+    }
+
+    private func switchingIntensityText(_ level: FragmentationLevel) -> String {
+        switch level {
+        case .quiet: return "应用切换较少"
+        case .steady: return "应用切换适中"
+        case .fragmented: return "应用切换密集"
+        case .intense: return "应用切换非常密集"
+        }
+    }
+
+    private func fragmentationColor(_ level: FragmentationLevel) -> Color {
+        switch level {
+        case .quiet: return .green
+        case .steady: return .blue
+        case .fragmented: return .orange
+        case .intense: return .red
         }
     }
 
     private func markerColor(_ kind: TimelineMarkerKind) -> Color {
-        kind == .reminderSent ? .orange : .secondary
+        switch kind {
+        case .reminderSent: return .orange
+        case .taskParked: return .purple
+        case .taskResumed: return .green
+        case .focusPaused: return .orange
+        case .focusResumed: return .green
+        default: return .secondary
+        }
     }
 
     private func markerText(_ kind: TimelineMarkerKind) -> String {
@@ -258,7 +432,45 @@ struct TimelineChart: View {
         case .sessionBecameInactive: return "会话锁定"
         case .sessionBecameActive: return "会话恢复"
         case .taskChanged: return "任务切换"
+        case .workflowChanged: return "桌面工作流切换"
         case .reminderSent: return "发送温和提醒"
+        case .taskParked: return "挂起任务"
+        case .taskResumed: return "恢复任务"
+        case .focusPaused: return "跨桌面暂停专注"
+        case .focusResumed: return "返回后恢复专注"
+        }
+    }
+
+    private func representativeKind(_ kinds: [TimelineMarkerKind]) -> TimelineMarkerKind {
+        let priority: [TimelineMarkerKind] = [
+            .reminderSent, .focusPaused, .focusResumed, .taskParked, .taskResumed,
+            .workflowChanged, .taskChanged,
+            .sessionBecameInactive, .screenSlept, .sessionBecameActive, .screenWoke
+        ]
+        return priority.first(where: kinds.contains) ?? kinds.first ?? .taskChanged
+    }
+
+    private func eventSummary(_ bucket: TimelineEventBucket) -> String {
+        TimelineMarkerKind.allCases.compactMap { kind in
+            guard kind != .activeSpaceChanged, let count = bucket.countsByKind[kind] else { return nil }
+            return count > 1 ? "\(markerText(kind)) × \(count)" : markerText(kind)
+        }.joined(separator: "、")
+    }
+
+    private func markerSymbol(_ kind: TimelineMarkerKind) -> String {
+        switch kind {
+        case .activeSpaceChanged: return "rectangle.2.swap"
+        case .screenSlept: return "moon.zzz.fill"
+        case .screenWoke: return "sun.max.fill"
+        case .sessionBecameInactive: return "lock.fill"
+        case .sessionBecameActive: return "lock.open.fill"
+        case .taskChanged: return "arrow.triangle.branch"
+        case .workflowChanged: return "rectangle.2.swap"
+        case .reminderSent: return "bell.fill"
+        case .taskParked: return "pause.circle.fill"
+        case .taskResumed: return "play.circle.fill"
+        case .focusPaused: return "pause.circle.fill"
+        case .focusResumed: return "play.circle.fill"
         }
     }
 
@@ -266,6 +478,40 @@ struct TimelineChart: View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(text)
+        }
+    }
+}
+
+struct SwitchingScalePopover: View {
+    let averageSwitches: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("应用层切换强度")
+                .font(.headline)
+            Text("这不是 ADHD 或分心判断，也没有行业统一阈值。FocusTrace 当前使用一组可解释的试运行刻度：")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            VStack(alignment: .leading, spacing: 7) {
+                scaleRow(color: .green, text: "0–2 次 / 5 分钟：较少")
+                scaleRow(color: .blue, text: "3–5 次 / 5 分钟：适中")
+                scaleRow(color: .orange, text: "6–10 次 / 5 分钟：密集")
+                scaleRow(color: .red, text: "11 次以上 / 5 分钟：非常密集")
+            }
+
+            Text("顶部标签取当天所有有活动的 5 分钟区间的平均值；当前为 \(averageSwitches, specifier: "%.1f") 次。它只描述 Bundle ID 之间的变化，不代表任务切换，也看不到 Chrome 内部标签页。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(width: 390)
+    }
+
+    private func scaleRow(color: Color, text: String) -> some View {
+        HStack(spacing: 8) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(text).font(.callout)
         }
     }
 }

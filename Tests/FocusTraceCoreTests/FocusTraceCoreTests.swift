@@ -45,6 +45,40 @@ func sleepClosesAndWakeReopens() {
 }
 
 @Test
+func loginWindowIsTreatedAsSystemInactive() {
+    let loginWindow = AppIdentity(bundleID: "com.apple.loginwindow", name: "loginwindow")
+    let normalApp = AppIdentity(bundleID: "com.apple.Terminal", name: "Terminal")
+    #expect(SystemActivityGate.isSystemInactiveApp(loginWindow))
+    #expect(!SystemActivityGate.isSystemInactiveApp(normalApp))
+}
+
+@Test
+func selectedDateFollowsMidnightOnlyWhenViewingToday() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let yesterday = calendar.date(from: DateComponents(year: 2026, month: 7, day: 19, hour: 23, minute: 59))!
+    let today = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 0, minute: 1))!
+    let selectedYesterday = calendar.startOfDay(for: yesterday)
+
+    let rolled = TimelineDateEngine.selectedDateAfterTick(
+        selectedDate: selectedYesterday,
+        previousNow: yesterday,
+        currentNow: today,
+        calendar: calendar
+    )
+    #expect(calendar.isDate(rolled, inSameDayAs: today))
+
+    let historical = calendar.date(byAdding: .day, value: -2, to: selectedYesterday)!
+    let preserved = TimelineDateEngine.selectedDateAfterTick(
+        selectedDate: historical,
+        previousNow: yesterday,
+        currentNow: today,
+        calendar: calendar
+    )
+    #expect(preserved == historical)
+}
+
+@Test
 func distractionGateRequiresAllConditions() {
     #expect(!DistractionGate.shouldTrigger(
         duration: 19.9,
@@ -152,14 +186,275 @@ func dailySummaryKeepsSwitchAndDistractionCountsSeparate() {
     )
     let summary = MetricsEngine.dailySummary(
         activities: activities,
-        taskIntervals: [TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(150))],
+        taskIntervals: [
+            TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(50)),
+            TaskIntervalRecord(
+                taskID: task,
+                startedAt: start.addingTimeInterval(50),
+                endedAt: start.addingTimeInterval(100),
+                workflowSource: .space
+            ),
+            TaskIntervalRecord(
+                taskID: task,
+                startedAt: start.addingTimeInterval(100),
+                endedAt: start.addingTimeInterval(150),
+                workflowSource: .manual
+            )
+        ],
         interruptions: [interruption],
         now: start.addingTimeInterval(150)
     )
     #expect(summary.appSwitchCount == 2)
-    #expect(summary.taskSwitchCount == 0)
+    #expect(summary.workflowSwitchCount == 1)
+    #expect(summary.taskSwitchCount == 1)
     #expect(summary.confirmedDistractionCount == 1)
     #expect(summary.averageReturnLatency == 10)
+}
+
+@Test
+func timelineAggregationUsesDominantAppAndHidesSystemActivity() {
+    let start = Date(timeIntervalSince1970: 40_000)
+    let range = DateInterval(start: start, duration: 10 * 60)
+    let appA = AppIdentity(bundleID: "a", name: "A")
+    let appB = AppIdentity(bundleID: "b", name: "B")
+    let system = AppIdentity(bundleID: "system", name: "System")
+    let activities = [
+        ActivityRecord(app: appA, startedAt: start, endedAt: start.addingTimeInterval(180), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: appB, startedAt: start.addingTimeInterval(180), endedAt: start.addingTimeInterval(240), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: appA, startedAt: start.addingTimeInterval(240), endedAt: start.addingTimeInterval(420), taskID: nil, focusSessionID: nil, classification: .necessary),
+        ActivityRecord(app: system, startedAt: start.addingTimeInterval(420), endedAt: start.addingTimeInterval(450), taskID: nil, focusSessionID: nil, classification: .systemInactive),
+        ActivityRecord(app: appB, startedAt: start.addingTimeInterval(450), endedAt: start.addingTimeInterval(600), taskID: nil, focusSessionID: nil, classification: .allowed)
+    ]
+    let markers = [
+        TimelineMarkerRecord(date: start.addingTimeInterval(100), kind: .activeSpaceChanged),
+        TimelineMarkerRecord(date: start.addingTimeInterval(320), kind: .activeSpaceChanged)
+    ]
+
+    let buckets = TimelineAggregationEngine.buckets(
+        activities: activities,
+        markers: markers,
+        range: range,
+        now: range.end
+    )
+    #expect(buckets.count == 2)
+    #expect(buckets[0].dominantApp == appA)
+    #expect(buckets[0].switchCount == 2)
+    #expect(buckets[0].spaceSwitchCount == 1)
+    #expect(buckets[1].dominantApp == appB)
+    #expect(buckets[1].switchCount == 1)
+    #expect(buckets[1].uniqueAppCount == 2)
+}
+
+@Test
+func fragmentationLevelHasStableFiveMinuteBoundaries() {
+    #expect(FragmentationLevel.classify(switchCount: 2) == .quiet)
+    #expect(FragmentationLevel.classify(switchCount: 3) == .steady)
+    #expect(FragmentationLevel.classify(switchCount: 6) == .fragmented)
+    #expect(FragmentationLevel.classify(switchCount: 11) == .intense)
+}
+
+@Test
+func nearbyEventsAreClusteredWithoutSpaceMarkers() {
+    let start = Date(timeIntervalSince1970: 50_000)
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let buckets = TimelineEventAggregationEngine.buckets(
+        markers: [
+            TimelineMarkerRecord(date: start.addingTimeInterval(60), kind: .screenSlept),
+            TimelineMarkerRecord(date: start.addingTimeInterval(5 * 60), kind: .screenWoke),
+            TimelineMarkerRecord(date: start.addingTimeInterval(8 * 60), kind: .activeSpaceChanged),
+            TimelineMarkerRecord(date: start.addingTimeInterval(20 * 60), kind: .taskChanged)
+        ],
+        range: range
+    )
+    #expect(buckets.count == 2)
+    #expect(buckets[0].eventCount == 2)
+    #expect(buckets[0].countsByKind[.screenWoke] == 1)
+    #expect(buckets[1].kinds == [.taskChanged])
+}
+
+@Test
+func workflowCompletionReleasesBindingsAndUndoRequiresRebind() throws {
+    let workflowID = UUID()
+    let completedAt = Date(timeIntervalSince1970: 60_000)
+    let initial = WorkflowLifecycleState(
+        workflowID: workflowID,
+        bindingCount: 2,
+        hasCheckpoint: true
+    )
+    let completed = try WorkflowLifecycleEngine.transition(initial, event: .complete, at: completedAt)
+    #expect(completed.state.lifecycle == .completed)
+    #expect(completed.state.bindingCount == 0)
+    #expect(completed.state.completedAt == completedAt)
+    #expect(completed.effects.contains(.releaseAllBindings(workflowID: workflowID)))
+    #expect(completed.effects.contains(.checkpointResolved(workflowID: workflowID)))
+
+    let undone = try WorkflowLifecycleEngine.transition(completed.state, event: .undoCompletion)
+    #expect(undone.state.lifecycle == .open)
+    #expect(undone.state.bindingCount == 0)
+    #expect(undone.effects == [.requiresRebind(workflowID: workflowID)])
+}
+
+@Test
+func spaceResolutionNeverGuessesWhenUnknownOrConflicted() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        activeAnchorWorkflowIDs: [workflowA],
+        registryReady: false
+    ) == .unknown)
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        activeAnchorWorkflowIDs: [],
+        registryReady: true
+    ) == .unbound)
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        activeAnchorWorkflowIDs: [workflowA, workflowA],
+        registryReady: true
+    ) == .bound(workflowID: workflowA))
+    let conflict = WorkflowSpaceResolutionEngine.resolve(
+        activeAnchorWorkflowIDs: [workflowA, workflowB],
+        registryReady: true
+    )
+    if case let .conflict(ids) = conflict {
+        #expect(Set(ids) == Set([workflowA, workflowB]))
+    } else {
+        Issue.record("multiple workflow anchors should conflict")
+    }
+}
+
+@Test
+func unknownSpaceClosesWorkflowWithoutCarryingAttribution() {
+    let workflowID = UUID()
+    let start = Date(timeIntervalSince1970: 70_000)
+    let entered = WorkflowContextEngine.transition(
+        WorkflowContextState(),
+        to: .bound(workflowID: workflowID),
+        at: start
+    )
+    #expect(entered.state.context.workflowID == workflowID)
+
+    let unknownAt = start.addingTimeInterval(30)
+    let unknown = WorkflowContextEngine.transition(entered.state, to: .unknown, at: unknownAt)
+    #expect(unknown.state.context.kind == .unknown)
+    #expect(unknown.state.context.workflowID == nil)
+    #expect(unknown.effects.contains(.workflowBecameBackground(workflowID: workflowID)))
+    #expect(unknown.effects.contains(.closeInterval(
+        context: entered.state.context,
+        startedAt: start,
+        endedAt: unknownAt
+    )))
+}
+
+@Test
+func focusWorkflowDepartureHasGraceAndSubtractsPausedTime() {
+    let focusWorkflow = UUID()
+    let otherWorkflow = UUID()
+    let start = Date(timeIntervalSince1970: 80_000)
+    let initial = FocusWorkflowDepartureState(focusWorkflowID: focusWorkflow)
+    let departed = FocusWorkflowDepartureEngine.contextChanged(
+        initial,
+        to: otherWorkflow,
+        at: start
+    )
+    #expect(departed.effects == [.scheduleGrace(deadline: start.addingTimeInterval(10))])
+
+    let briefReturn = FocusWorkflowDepartureEngine.contextChanged(
+        departed.state,
+        to: focusWorkflow,
+        at: start.addingTimeInterval(8)
+    )
+    #expect(briefReturn.effects == [.cancelGrace])
+    #expect(briefReturn.state.pausedAt == nil)
+
+    let departedAgain = FocusWorkflowDepartureEngine.contextChanged(
+        briefReturn.state,
+        to: otherWorkflow,
+        at: start.addingTimeInterval(20)
+    )
+    let paused = FocusWorkflowDepartureEngine.graceElapsed(departedAgain.state)
+    let resumed = FocusWorkflowDepartureEngine.contextChanged(
+        paused.state,
+        to: focusWorkflow,
+        at: start.addingTimeInterval(45)
+    )
+    #expect(resumed.state.accumulatedPausedSeconds == 25)
+    #expect(FocusWorkflowDepartureEngine.activeElapsedSeconds(
+        startedAt: start,
+        endedAt: start.addingTimeInterval(100),
+        state: resumed.state
+    ) == 75)
+}
+
+@Test
+func legacyTaskLifecycleMigrationIsLossless() {
+    #expect(WorkflowLifecycleMigration.lifecycle(
+        rawValue: nil,
+        isArchived: false,
+        completedAt: nil
+    ) == .open)
+    #expect(WorkflowLifecycleMigration.lifecycle(
+        rawValue: nil,
+        isArchived: true,
+        completedAt: nil
+    ) == .archived)
+    #expect(WorkflowLifecycleMigration.lifecycle(
+        rawValue: nil,
+        isArchived: false,
+        completedAt: Date()
+    ) == .completed)
+}
+
+@Test
+func parkingReminderRequiresActiveDueAndUnsentRecord() {
+    let now = Date(timeIntervalSince1970: 20_000)
+    let task = UUID()
+    let due = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "run tests",
+        remindAt: now.addingTimeInterval(-1)
+    )
+    let future = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now,
+        resumeCue: "review output",
+        remindAt: now.addingTimeInterval(300)
+    )
+    let sent = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "sent",
+        remindAt: now.addingTimeInterval(-1),
+        reminderSentAt: now
+    )
+    let resumed = TaskParkingRecord(
+        taskID: task,
+        parkedAt: now.addingTimeInterval(-600),
+        resumeCue: "done",
+        remindAt: now.addingTimeInterval(-1),
+        resumedAt: now
+    )
+    #expect(TaskParkingEngine.dueForReminder([due, future, sent, resumed], at: now).map(\.id) == [due.id])
+}
+
+@Test
+func parkingMetricsTrackResumptionWithoutReadingCue() {
+    let start = Date(timeIntervalSince1970: 30_000)
+    let task = UUID()
+    let parkings = [
+        TaskParkingRecord(taskID: task, parkedAt: start, resumeCue: "one", resumedAt: start.addingTimeInterval(600)),
+        TaskParkingRecord(taskID: task, parkedAt: start, resumeCue: "two", resumedAt: start.addingTimeInterval(1_200)),
+        TaskParkingRecord(taskID: task, parkedAt: start, resumeCue: "active")
+    ]
+    let summary = MetricsEngine.dailySummary(
+        activities: [],
+        taskIntervals: [],
+        interruptions: [],
+        taskParkings: parkings,
+        now: start
+    )
+    #expect(summary.taskParkingCount == 3)
+    #expect(summary.resumedTaskCount == 2)
+    #expect(summary.averageTaskResumeLatency == 900)
 }
 
 @Test
@@ -242,4 +537,5 @@ func jsonRoundTrip() throws {
     decoder.dateDecodingStrategy = .iso8601
     let decoded = try decoder.decode(ExportBundle.self, from: data)
     #expect(decoded.tasks.first?.title == "Task")
+    #expect(decoded.taskParkings.isEmpty)
 }

@@ -28,9 +28,22 @@ struct ReviewView: View {
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
                     MetricCard(title: "应用切换", value: "\(summary.appSwitchCount)", detail: "原始切换")
-                    MetricCard(title: "任务切换", value: "\(summary.taskSwitchCount)", detail: "主动切换")
+                    MetricCard(
+                        title: "工作流 / 手动切换",
+                        value: "\(summary.workflowSwitchCount) / \(summary.taskSwitchCount)",
+                        detail: "桌面识别 / 主动切换"
+                    )
                     MetricCard(title: "疑似分心", value: "\(summary.suspectedDistractionCount)", detail: "等待确认")
                     MetricCard(title: "确认分心", value: "\(summary.confirmedDistractionCount)", detail: "用户确认")
+                }
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
+                    MetricCard(title: "任务停车", value: "\(summary.taskParkingCount)", detail: "有意挂起")
+                    MetricCard(title: "已返回", value: "\(summary.resumedTaskCount)", detail: "根据恢复线索继续")
+                    MetricCard(
+                        title: "平均恢复耗时",
+                        value: summary.averageTaskResumeLatency.map(duration) ?? "—",
+                        detail: "从挂起到继续"
+                    )
                 }
 
                 if !summary.appDurations.isEmpty {

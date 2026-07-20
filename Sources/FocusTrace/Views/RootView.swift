@@ -65,6 +65,15 @@ struct RootView: View {
         .sheet(isPresented: $state.showTaskSwitcher) {
             TaskSwitcherSheet(state: state)
         }
+        .sheet(isPresented: $state.showTaskCreator) {
+            TaskEditorSheet(state: state)
+        }
+        .sheet(isPresented: $state.showTaskParking) {
+            TaskParkingSheet(state: state)
+        }
+        .sheet(isPresented: $state.showQuickStart) {
+            QuickStartSheet(state: state)
+        }
         .alert(
             "FocusTrace",
             isPresented: Binding(

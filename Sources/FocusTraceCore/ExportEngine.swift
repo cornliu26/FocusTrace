@@ -9,6 +9,7 @@ public struct ExportBundle: Codable, Sendable {
     public let interruptions: [InterruptionRecord]
     public let trainingPlans: [TrainingPlanRecord]
     public let markers: [TimelineMarkerRecord]
+    public let taskParkings: [TaskParkingRecord]
 
     public init(
         exportedAt: Date = Date(),
@@ -18,7 +19,8 @@ public struct ExportBundle: Codable, Sendable {
         focusSessions: [FocusSessionRecord],
         interruptions: [InterruptionRecord],
         trainingPlans: [TrainingPlanRecord],
-        markers: [TimelineMarkerRecord]
+        markers: [TimelineMarkerRecord],
+        taskParkings: [TaskParkingRecord] = []
     ) {
         self.exportedAt = exportedAt
         self.tasks = tasks
@@ -28,6 +30,20 @@ public struct ExportBundle: Codable, Sendable {
         self.interruptions = interruptions
         self.trainingPlans = trainingPlans
         self.markers = markers
+        self.taskParkings = taskParkings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        exportedAt = try container.decode(Date.self, forKey: .exportedAt)
+        tasks = try container.decodeIfPresent([TaskRecord].self, forKey: .tasks) ?? []
+        taskIntervals = try container.decodeIfPresent([TaskIntervalRecord].self, forKey: .taskIntervals) ?? []
+        activities = try container.decodeIfPresent([ActivityRecord].self, forKey: .activities) ?? []
+        focusSessions = try container.decodeIfPresent([FocusSessionRecord].self, forKey: .focusSessions) ?? []
+        interruptions = try container.decodeIfPresent([InterruptionRecord].self, forKey: .interruptions) ?? []
+        trainingPlans = try container.decodeIfPresent([TrainingPlanRecord].self, forKey: .trainingPlans) ?? []
+        markers = try container.decodeIfPresent([TimelineMarkerRecord].self, forKey: .markers) ?? []
+        taskParkings = try container.decodeIfPresent([TaskParkingRecord].self, forKey: .taskParkings) ?? []
     }
 }
 

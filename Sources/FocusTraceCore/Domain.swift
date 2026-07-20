@@ -35,14 +35,19 @@ public enum FocusOutcome: String, Codable, CaseIterable, Sendable {
     case notCompleted
 }
 
-public enum TimelineMarkerKind: String, Codable, CaseIterable, Sendable {
+public enum TimelineMarkerKind: String, Codable, CaseIterable, Hashable, Sendable {
     case activeSpaceChanged
     case screenSlept
     case screenWoke
     case sessionBecameInactive
     case sessionBecameActive
     case taskChanged
+    case workflowChanged
     case reminderSent
+    case taskParked
+    case taskResumed
+    case focusPaused
+    case focusResumed
 }
 
 public struct AppIdentity: Codable, Equatable, Hashable, Sendable {
@@ -79,12 +84,24 @@ public struct TaskIntervalRecord: Codable, Equatable, Identifiable, Sendable {
     public let taskID: UUID
     public let startedAt: Date
     public let endedAt: Date?
+    public let workflowSource: WorkflowIntervalSource?
 
-    public init(id: UUID = UUID(), taskID: UUID, startedAt: Date, endedAt: Date?) {
+    public init(
+        id: UUID = UUID(),
+        taskID: UUID,
+        startedAt: Date,
+        endedAt: Date?,
+        workflowSource: WorkflowIntervalSource? = .manual
+    ) {
         self.id = id
         self.taskID = taskID
         self.startedAt = startedAt
         self.endedAt = endedAt
+        self.workflowSource = workflowSource
+    }
+
+    public var effectiveWorkflowSource: WorkflowIntervalSource {
+        workflowSource ?? .manual
     }
 }
 
@@ -132,6 +149,7 @@ public struct FocusSessionRecord: Codable, Equatable, Identifiable, Sendable {
     public let outcome: FocusOutcome
     public let difficulty: Int?
     public let confirmedDistractionCount: Int
+    public let pausedSeconds: TimeInterval?
 
     public init(
         id: UUID = UUID(),
@@ -141,7 +159,8 @@ public struct FocusSessionRecord: Codable, Equatable, Identifiable, Sendable {
         targetSeconds: Int,
         outcome: FocusOutcome,
         difficulty: Int?,
-        confirmedDistractionCount: Int
+        confirmedDistractionCount: Int,
+        pausedSeconds: TimeInterval? = nil
     ) {
         self.id = id
         self.taskID = taskID
@@ -151,11 +170,16 @@ public struct FocusSessionRecord: Codable, Equatable, Identifiable, Sendable {
         self.outcome = outcome
         self.difficulty = difficulty
         self.confirmedDistractionCount = confirmedDistractionCount
+        self.pausedSeconds = pausedSeconds
+    }
+
+    public var activeDuration: TimeInterval {
+        guard let endedAt else { return 0 }
+        return max(0, endedAt.timeIntervalSince(startedAt) - max(0, pausedSeconds ?? 0))
     }
 
     public var reachedTarget: Bool {
-        guard let endedAt else { return false }
-        return endedAt.timeIntervalSince(startedAt) >= Double(targetSeconds)
+        endedAt != nil && activeDuration >= Double(targetSeconds)
     }
 
     public var isSuccessful: Bool {
@@ -225,6 +249,64 @@ public struct TrainingPlanRecord: Codable, Equatable, Identifiable, Sendable {
         self.reminderThresholdSeconds = reminderThresholdSeconds
         self.reason = reason
         self.previousPlanID = previousPlanID
+    }
+}
+
+/// A deliberate pause point created before leaving an unfinished task.
+/// `resumeCue` is entered explicitly by the user; FocusTrace never derives it
+/// from window titles, documents, URLs, or keyboard activity.
+public struct TaskParkingRecord: Codable, Equatable, Identifiable, Sendable {
+    public let id: UUID
+    public let taskID: UUID
+    public let parkedAt: Date
+    public let resumeCue: String
+    public let remindAt: Date?
+    public let switchedToTaskID: UUID?
+    public let resumedAt: Date?
+    public let dismissedAt: Date?
+    public let reminderSentAt: Date?
+
+    public init(
+        id: UUID = UUID(),
+        taskID: UUID,
+        parkedAt: Date,
+        resumeCue: String,
+        remindAt: Date? = nil,
+        switchedToTaskID: UUID? = nil,
+        resumedAt: Date? = nil,
+        dismissedAt: Date? = nil,
+        reminderSentAt: Date? = nil
+    ) {
+        self.id = id
+        self.taskID = taskID
+        self.parkedAt = parkedAt
+        self.resumeCue = resumeCue
+        self.remindAt = remindAt
+        self.switchedToTaskID = switchedToTaskID
+        self.resumedAt = resumedAt
+        self.dismissedAt = dismissedAt
+        self.reminderSentAt = reminderSentAt
+    }
+
+    public var isActive: Bool {
+        resumedAt == nil && dismissedAt == nil
+    }
+
+    public var resumeLatency: TimeInterval? {
+        resumedAt.map { max(0, $0.timeIntervalSince(parkedAt)) }
+    }
+}
+
+public enum TaskParkingEngine {
+    public static func dueForReminder(
+        _ records: [TaskParkingRecord],
+        at date: Date
+    ) -> [TaskParkingRecord] {
+        records.filter { record in
+            record.isActive
+                && record.reminderSentAt == nil
+                && record.remindAt.map { $0 <= date } == true
+        }
     }
 }
 

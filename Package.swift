@@ -9,15 +9,21 @@ let package = Package(
     ],
     products: [
         .library(name: "FocusTraceCore", targets: ["FocusTraceCore"]),
+        .library(name: "FocusTraceMacSupport", targets: ["FocusTraceMacSupport"]),
         .executable(name: "FocusTrace", targets: ["FocusTrace"]),
         .executable(name: "FocusTraceReport", targets: ["FocusTraceReport"]),
-        .executable(name: "FocusTraceVerification", targets: ["FocusTraceVerification"])
+        .executable(name: "FocusTraceVerification", targets: ["FocusTraceVerification"]),
+        .executable(name: "FocusTraceSpaceAcceptance", targets: ["FocusTraceSpaceAcceptance"])
     ],
     targets: [
         .target(name: "FocusTraceCore"),
+        .target(
+            name: "FocusTraceMacSupport",
+            dependencies: ["FocusTraceCore"]
+        ),
         .executableTarget(
             name: "FocusTrace",
-            dependencies: ["FocusTraceCore"]
+            dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
         ),
         .executableTarget(
             name: "FocusTraceReport",
@@ -26,6 +32,10 @@ let package = Package(
         .executableTarget(
             name: "FocusTraceVerification",
             dependencies: ["FocusTraceCore"]
+        ),
+        .executableTarget(
+            name: "FocusTraceSpaceAcceptance",
+            dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
         ),
         .testTarget(
             name: "FocusTraceCoreTests",

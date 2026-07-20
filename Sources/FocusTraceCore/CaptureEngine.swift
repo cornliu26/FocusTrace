@@ -92,3 +92,30 @@ public enum DistractionGate {
             && duration >= Double(thresholdSeconds)
     }
 }
+
+public enum SystemActivityGate {
+    public static let loginWindowBundleID = "com.apple.loginwindow"
+
+    public static func isSystemInactiveApp(_ app: AppIdentity) -> Bool {
+        app.bundleID == loginWindowBundleID
+    }
+}
+
+public enum TimelineDateEngine {
+    /// Follow midnight only when the user was viewing the previous "today".
+    /// A deliberately selected historical date is left untouched.
+    public static func selectedDateAfterTick(
+        selectedDate: Date,
+        previousNow: Date,
+        currentNow: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        let previousDay = calendar.startOfDay(for: previousNow)
+        let currentDay = calendar.startOfDay(for: currentNow)
+        guard previousDay != currentDay,
+              calendar.isDate(selectedDate, inSameDayAs: previousDay) else {
+            return selectedDate
+        }
+        return currentDay
+    }
+}
