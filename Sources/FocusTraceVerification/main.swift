@@ -287,6 +287,84 @@ suite.run("五次训练升降级规则") {
     try expect(TrainingEngine.progression(currentMinutes: 15, lastFive: three) == .maintain(minutes: 15), "3/5 成功应保持")
 }
 
+suite.run("专注护栏只统计稳定且未经挂起的任务切换") {
+    let start = Date(timeIntervalSince1970: 80_000)
+    let taskA = UUID()
+    let taskB = UUID()
+    let taskC = UUID()
+    let taskD = UUID()
+    let intervals = [
+        TaskIntervalRecord(taskID: taskA, startedAt: start, endedAt: start.addingTimeInterval(40)),
+        TaskIntervalRecord(taskID: taskB, startedAt: start.addingTimeInterval(40), endedAt: start.addingTimeInterval(80)),
+        TaskIntervalRecord(taskID: taskC, startedAt: start.addingTimeInterval(80), endedAt: start.addingTimeInterval(120)),
+        TaskIntervalRecord(taskID: taskD, startedAt: start.addingTimeInterval(120), endedAt: nil),
+    ]
+    let now = start.addingTimeInterval(160)
+    try expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [],
+        at: now
+    ) == 3, "三个稳定任务转换应被统计")
+
+    let parking = TaskParkingRecord(
+        taskID: taskA,
+        parkedAt: start.addingTimeInterval(40),
+        resumeCue: "等待 Agent 完成",
+        switchedToTaskID: taskB
+    )
+    try expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [parking],
+        at: now
+    ) == 2, "主动挂起后的转换不应触发护栏")
+}
+
+suite.run("专注护栏忽略不足三十秒的短暂任务") {
+    let start = Date(timeIntervalSince1970: 81_000)
+    let intervals = [
+        TaskIntervalRecord(taskID: UUID(), startedAt: start, endedAt: start.addingTimeInterval(60)),
+        TaskIntervalRecord(taskID: UUID(), startedAt: start.addingTimeInterval(60), endedAt: nil),
+    ]
+    try expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [],
+        at: start.addingTimeInterval(89)
+    ) == 0, "不足三十秒的目标任务不应被计为稳定切换")
+}
+
+suite.run("专注护栏在三次和五次切换时分级提示") {
+    let start = Date(timeIntervalSince1970: 82_000)
+    let tasks = (0..<6).map { _ in UUID() }
+    let intervals = tasks.enumerated().map { index, taskID in
+        TaskIntervalRecord(
+            taskID: taskID,
+            startedAt: start.addingTimeInterval(Double(index * 30)),
+            endedAt: index == tasks.count - 1
+                ? nil
+                : start.addingTimeInterval(Double((index + 1) * 30))
+        )
+    }
+    let gentle = AttentionCueEngine.switchDecision(
+        intervals: Array(intervals.prefix(4)),
+        parkings: [],
+        at: start.addingTimeInterval(120)
+    )
+    try expect(gentle.level == .gentle && gentle.switchCount == 3, "三次切换应温和提示")
+
+    let strong = AttentionCueEngine.switchDecision(
+        intervals: intervals,
+        parkings: [],
+        at: start.addingTimeInterval(180)
+    )
+    try expect(strong.level == .strong && strong.switchCount == 5, "五次切换应加强提示")
+}
+
+suite.run("专注护栏按五分钟里程碑给予奖励") {
+    try expect(AttentionCueEngine.continuityMilestoneMinutes(elapsedSeconds: 299) == 0, "不足五分钟不奖励")
+    try expect(AttentionCueEngine.continuityMilestoneMinutes(elapsedSeconds: 300) == 5, "五分钟应立即奖励")
+    try expect(AttentionCueEngine.continuityMilestoneMinutes(elapsedSeconds: 601) == 10, "十分钟应进入下一里程碑")
+}
+
 suite.run("连续专注在分心和任务变化处断开") {
     let taskA = UUID()
     let taskB = UUID()
@@ -450,6 +528,194 @@ suite.run("桌面解析对未知和冲突绝不猜测") {
     } else {
         throw VerificationFailure(message: "多个工作流锚点必须进入冲突")
     }
+}
+
+suite.run("稳定 Space 身份不随新增、重排或删除其他桌面移位") {
+    let workflowID = UUID()
+    let original = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 304,
+        spaceUUID: "space-original"
+    )
+    let inserted = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 495,
+        spaceUUID: "space-inserted"
+    )
+    let binding = WorkflowSpaceBindingRecord(
+        workflowID: workflowID,
+        anchorRestorationID: "legacy-only",
+        displayHint: "display-a",
+        spaceIdentity: original
+    )
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(
+            currentSpaceIdentity: original,
+            bindings: [binding],
+            registryReady: true
+        ) == .bound(workflowID: workflowID),
+        "原 Space 应继续命中原工作流"
+    )
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(
+            currentSpaceIdentity: inserted,
+            bindings: [binding],
+            registryReady: true
+        ) == .unbound,
+        "新增 Space 不得继承已有绑定"
+    )
+    let sameIDOnAnotherDisplay = WorkflowSpaceIdentity(
+        displayIdentifier: "display-b",
+        managedSpaceID: 304,
+        spaceUUID: "space-original"
+    )
+    try expect(
+        !original.identifiesSameSpace(as: sameIDOnAnotherDisplay),
+        "Space 身份必须按显示器隔离"
+    )
+    try expect(
+        WorkflowSpaceResolutionEngine.resolve(
+            currentSpaceIdentity: original,
+            bindings: [binding],
+            registryReady: true
+        ) == .bound(workflowID: workflowID),
+        "删除其他 Space 后原 Space 应继续命中原工作流"
+    )
+}
+
+suite.run("全局 active Space ID 可以唯一反查稳定身份") {
+    let pointerDisplaySpace = WorkflowSpaceIdentity(
+        displayIdentifier: "display-under-pointer",
+        managedSpaceID: 304,
+        spaceUUID: "pointer-space"
+    )
+    let actuallyActivatedSpace = WorkflowSpaceIdentity(
+        displayIdentifier: "display-that-changed",
+        managedSpaceID: 495,
+        spaceUUID: "active-space"
+    )
+    try expect(
+        WorkflowSpaceIdentitySelector.activeIdentity(
+            managedSpaceID: 495,
+            allSpaces: [pointerDisplaySpace, actuallyActivatedSpace]
+        ) == actuallyActivatedSpace,
+        "必须选择窗口服务器报告的 active Space"
+    )
+    let duplicate = WorkflowSpaceIdentity(
+        displayIdentifier: "ambiguous-display",
+        managedSpaceID: 495,
+        spaceUUID: "ambiguous-space"
+    )
+    try expect(
+        WorkflowSpaceIdentitySelector.activeIdentity(
+            managedSpaceID: 495,
+            allSpaces: [actuallyActivatedSpace, duplicate]
+        ) == nil,
+        "active Space ID 不唯一时必须进入未知"
+    )
+}
+
+suite.run("多显示器切换使用 Current Space 差量而不是陈旧全局 active") {
+    let displayAOld = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 1,
+        spaceUUID: "desktop-a-old"
+    )
+    let displayANew = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 621,
+        spaceUUID: "desktop-a-new"
+    )
+    let staleGlobalActive = WorkflowSpaceIdentity(
+        displayIdentifier: "display-b",
+        managedSpaceID: 346,
+        spaceUUID: "desktop-b"
+    )
+    let displayC = WorkflowSpaceIdentity(
+        displayIdentifier: "display-c",
+        managedSpaceID: 521,
+        spaceUUID: "desktop-c"
+    )
+    try expect(
+        WorkflowSpaceTransitionSelector.changedIdentity(
+            previousCurrentSpaces: [displayAOld, staleGlobalActive, displayC],
+            currentSpaces: [displayANew, staleGlobalActive, displayC],
+            activeIdentity: staleGlobalActive
+        ) == displayANew,
+        "单个显示器发生 Space 变化时不得被其他显示器的全局 active 覆盖"
+    )
+    try expect(
+        WorkflowSpaceTransitionSelector.changedIdentity(
+            previousCurrentSpaces: [displayAOld, staleGlobalActive],
+            currentSpaces: [displayANew, displayC],
+            activeIdentity: displayC
+        ) == displayC,
+        "多个显示器同时变化时才允许用 active Space 消歧"
+    )
+    try expect(
+        WorkflowSpaceTransitionSelector.changedIdentity(
+            previousCurrentSpaces: [displayANew, staleGlobalActive, displayC],
+            currentSpaces: [displayANew, staleGlobalActive, displayC],
+            activeIdentity: staleGlobalActive
+        ) == nil,
+        "没有显示器变化时不得回退到其他显示器的全局 active Space"
+    )
+}
+
+suite.run("旧单显示器与全局 active 绑定升级后必须一次性重绑") {
+    let identity = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 304,
+        spaceUUID: "space-a"
+    )
+    try expect(
+        !WorkflowSpaceBindingCompatibility.canRestore(
+            identity: identity,
+            identityVersion: nil
+        ),
+        "旧绑定没有版本时不得继续恢复"
+    )
+    try expect(
+        !WorkflowSpaceBindingCompatibility.canRestore(
+            identity: identity,
+            identityVersion: 1
+        ),
+        "鼠标显示器算法生成的绑定不得继续恢复"
+    )
+    try expect(
+        !WorkflowSpaceBindingCompatibility.canRestore(
+            identity: identity,
+            identityVersion: 2
+        ),
+        "多显示器下全局 active 算法生成的绑定不得继续恢复"
+    )
+    try expect(
+        WorkflowSpaceBindingCompatibility.canRestore(
+            identity: identity,
+            identityVersion: WorkflowSpaceBindingCompatibility.currentIdentityVersion
+        ),
+        "按显示器差量算法生成的绑定应可恢复"
+    )
+}
+
+suite.run("旧桌面绑定兼容解码但要求一次性重绑") {
+    let workflowID = UUID()
+    let bindingID = UUID()
+    let json = """
+    {
+      "id": "\(bindingID.uuidString)",
+      "workflowID": "\(workflowID.uuidString)",
+      "anchorRestorationID": "old-window-anchor",
+      "state": "verified",
+      "boundAt": 1000
+    }
+    """
+    let binding = try JSONDecoder().decode(
+        WorkflowSpaceBindingRecord.self,
+        from: Data(json.utf8)
+    )
+    try expect(binding.id == bindingID, "旧绑定 ID 未保留")
+    try expect(binding.spaceIdentity == nil, "旧窗口锚点不得伪造稳定 Space 身份")
 }
 
 suite.run("工作流上下文切换闭合旧区间并打开未知区间") {

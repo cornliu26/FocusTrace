@@ -32,11 +32,107 @@ public enum WorkflowContextConfidence: String, Codable, CaseIterable, Sendable {
     case unknown
 }
 
+/// A durable macOS Space identity. The display identifier scopes the Space
+/// because macOS can keep an independently active Space on every display.
+/// The UUID is preferred when present; managedSpaceID is retained as a
+/// compatibility fallback for OS versions that omit the UUID.
+public struct WorkflowSpaceIdentity: Codable, Equatable, Hashable, Sendable {
+    public let displayIdentifier: String
+    public let managedSpaceID: UInt64
+    public let spaceUUID: String?
+
+    public init(
+        displayIdentifier: String,
+        managedSpaceID: UInt64,
+        spaceUUID: String? = nil
+    ) {
+        self.displayIdentifier = displayIdentifier
+        self.managedSpaceID = managedSpaceID
+        self.spaceUUID = spaceUUID
+    }
+
+    public func identifiesSameSpace(as other: WorkflowSpaceIdentity) -> Bool {
+        guard displayIdentifier == other.displayIdentifier else { return false }
+        if let spaceUUID, let otherUUID = other.spaceUUID {
+            return spaceUUID == otherUUID
+        }
+        return managedSpaceID == other.managedSpaceID
+    }
+}
+
+public enum WorkflowSpaceIdentitySelector {
+    /// Resolves the window server's globally active managed Space ID to one
+    /// durable identity. Ambiguous IDs deliberately fail closed.
+    public static func activeIdentity(
+        managedSpaceID: UInt64,
+        allSpaces: [WorkflowSpaceIdentity]
+    ) -> WorkflowSpaceIdentity? {
+        guard managedSpaceID > 0 else { return nil }
+        let matches = Array(Set(allSpaces.filter {
+            $0.managedSpaceID == managedSpaceID
+        }))
+        guard matches.count == 1 else { return nil }
+        return matches[0]
+    }
+}
+
+public enum WorkflowSpaceTransitionSelector {
+    /// Selects the Space that actually changed on a multi-display desktop.
+    /// `activeIdentity` is only a tiebreaker when macOS changes more than one
+    /// display at once; it must never override one unambiguous display delta.
+    public static func changedIdentity(
+        previousCurrentSpaces: [WorkflowSpaceIdentity],
+        currentSpaces: [WorkflowSpaceIdentity],
+        activeIdentity: WorkflowSpaceIdentity?
+    ) -> WorkflowSpaceIdentity? {
+        guard !currentSpaces.isEmpty else { return nil }
+        var previousByDisplay: [String: WorkflowSpaceIdentity] = [:]
+        for identity in previousCurrentSpaces {
+            previousByDisplay[identity.displayIdentifier] = identity
+        }
+        let changed = currentSpaces.filter { current in
+            guard let previous = previousByDisplay[current.displayIdentifier] else {
+                return true
+            }
+            return !previous.identifiesSameSpace(as: current)
+        }
+
+        if changed.count == 1 { return changed[0] }
+        if changed.count > 1, let activeIdentity,
+           let activeChanged = changed.first(where: {
+               $0.identifiesSameSpace(as: activeIdentity)
+           }) {
+            return activeChanged
+        }
+        // No delta means there is nothing to reconcile. Falling back to the
+        // global active Space here would periodically select an unrelated
+        // display when macOS "Displays have separate Spaces" is enabled.
+        return nil
+    }
+}
+
+public enum WorkflowSpaceBindingCompatibility {
+    /// Version 1 used the mouse display for both binding and resolution.
+    /// Version 2 used one global active Space, which is ambiguous when several
+    /// displays have independent Spaces. Version 3 binds on the interaction
+    /// display and resolves Space-change events from per-display deltas.
+    public static let currentIdentityVersion = 3
+
+    public static func canRestore(
+        identity: WorkflowSpaceIdentity?,
+        identityVersion: Int?
+    ) -> Bool {
+        identity != nil && identityVersion == currentIdentityVersion
+    }
+}
+
 public struct WorkflowSpaceBindingRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public let workflowID: UUID
     public let anchorRestorationID: String
     public var displayHint: String?
+    public var spaceIdentity: WorkflowSpaceIdentity?
+    public var spaceIdentityVersion: Int?
     public var state: WorkflowSpaceBindingState
     public let boundAt: Date
     public var lastVerifiedAt: Date?
@@ -46,6 +142,8 @@ public struct WorkflowSpaceBindingRecord: Codable, Equatable, Identifiable, Send
         workflowID: UUID,
         anchorRestorationID: String,
         displayHint: String? = nil,
+        spaceIdentity: WorkflowSpaceIdentity? = nil,
+        spaceIdentityVersion: Int? = nil,
         state: WorkflowSpaceBindingState = .verified,
         boundAt: Date = Date(),
         lastVerifiedAt: Date? = nil
@@ -54,6 +152,8 @@ public struct WorkflowSpaceBindingRecord: Codable, Equatable, Identifiable, Send
         self.workflowID = workflowID
         self.anchorRestorationID = anchorRestorationID
         self.displayHint = displayHint
+        self.spaceIdentity = spaceIdentity
+        self.spaceIdentityVersion = spaceIdentityVersion
         self.state = state
         self.boundAt = boundAt
         self.lastVerifiedAt = lastVerifiedAt
@@ -256,6 +356,23 @@ public enum WorkflowSpaceResolutionEngine {
         case 1: return .bound(workflowID: unique[0])
         default: return .conflict(workflowIDs: unique)
         }
+    }
+
+    public static func resolve(
+        currentSpaceIdentity: WorkflowSpaceIdentity?,
+        bindings: [WorkflowSpaceBindingRecord],
+        registryReady: Bool
+    ) -> WorkflowSpaceResolution {
+        guard registryReady, let currentSpaceIdentity else { return .unknown }
+        let workflowIDs = bindings.compactMap { binding -> UUID? in
+            guard binding.state == .verified,
+                  let identity = binding.spaceIdentity,
+                  identity.identifiesSameSpace(as: currentSpaceIdentity) else {
+                return nil
+            }
+            return binding.workflowID
+        }
+        return resolve(activeAnchorWorkflowIDs: workflowIDs, registryReady: true)
     }
 }
 

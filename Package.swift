@@ -13,7 +13,8 @@ let package = Package(
         .executable(name: "FocusTrace", targets: ["FocusTrace"]),
         .executable(name: "FocusTraceReport", targets: ["FocusTraceReport"]),
         .executable(name: "FocusTraceVerification", targets: ["FocusTraceVerification"]),
-        .executable(name: "FocusTraceSpaceAcceptance", targets: ["FocusTraceSpaceAcceptance"])
+        .executable(name: "FocusTraceSpaceAcceptance", targets: ["FocusTraceSpaceAcceptance"]),
+        .executable(name: "FocusTraceSpaceProbe", targets: ["FocusTraceSpaceProbe"])
     ],
     targets: [
         .target(name: "FocusTraceCore"),
@@ -35,6 +36,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "FocusTraceSpaceAcceptance",
+            dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
+        ),
+        .executableTarget(
+            name: "FocusTraceSpaceProbe",
             dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
         ),
         .testTarget(

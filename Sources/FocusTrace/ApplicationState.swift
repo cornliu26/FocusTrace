@@ -63,6 +63,8 @@ final class ApplicationState: ObservableObject {
     private var focusDepartureTask: Task<Void, Never>?
     private var scheduleTask: Task<Void, Never>?
     private var spaceResolutionTask: Task<Void, Never>?
+    private var spaceReconciliationTask: Task<Void, Never>?
+    private var attentionCueTask: Task<Void, Never>?
     private var workflowUndoTask: Task<Void, Never>?
     private var lastAllowedBundleID: String?
     private var hasStarted = false
@@ -70,6 +72,12 @@ final class ApplicationState: ObservableObject {
     private let workspaceMonitor = WorkspaceMonitor()
     private let notificationRouter = NotificationRouter()
     private let spaceAnchorRegistry = SpaceAnchorRegistry()
+    private let attentionCueController = AttentionCueOverlayController()
+    private var attentionCueTaskID: UUID?
+    private var attentionCueContinuityStartedAt: Date?
+    private var lastRewardedMilestoneMinutes = 0
+    private var lastSwitchCueAt: Date?
+    private var lastSwitchCueLevel: AttentionCueLevel = .none
 
     init(store: FocusTraceStore, preferences: AppPreferences = AppPreferences()) {
         self.store = store
@@ -82,6 +90,8 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         scheduleTask?.cancel()
         spaceResolutionTask?.cancel()
+        spaceReconciliationTask?.cancel()
+        attentionCueTask?.cancel()
         workflowUndoTask?.cancel()
     }
 
@@ -299,8 +309,34 @@ final class ApplicationState: ObservableObject {
         notificationRouter.configure()
         sendDueTaskParkingReminders(at: Date())
         workspaceMonitor.start()
+        if spaceAnchorRegistry.isEnabled {
+            applySpaceResolution(
+                spaceAnchorRegistry.resolutionForInteraction(),
+                at: Date(),
+                source: .recovery
+            )
+        }
         refreshCaptureForCurrentState()
         startScheduleObserver()
+        startSpaceReconciliationObserver()
+        startAttentionCueObserver()
+    }
+
+    /// The menu-bar click is an explicit interaction on one concrete display.
+    /// Resolve that display immediately so the first presentation never has
+    /// to wait for the passive Space notification debounce or polling loop.
+    func refreshSpaceContextForMenuPresentation() {
+        guard spaceAnchorRegistry.isEnabled else { return }
+
+        // An explicit interaction is newer and more precise than a pending
+        // passive Space-change result. A stale delayed result must not replace
+        // the context selected by the menu-bar click.
+        spaceResolutionTask?.cancel()
+        spaceResolutionTask = nil
+
+        let resolution = spaceAnchorRegistry.resolutionForInteraction()
+        spaceAnchorRegistry.seedCurrentSpaceSnapshot()
+        applySpaceResolution(resolution, at: Date(), source: .space)
     }
 
     func completeOnboarding() {
@@ -425,9 +461,12 @@ final class ApplicationState: ObservableObject {
             bindingID: bindingID,
             restorationID: restorationID
         ) {
-        case .created:
+        case let .created(_, identity):
             let date = Date()
             if let reusable {
+                reusable.displayHint = identity.displayIdentifier
+                reusable.spaceIdentity = identity
+                reusable.spaceIdentityVersion = WorkflowSpaceBindingCompatibility.currentIdentityVersion
                 reusable.state = .verified
                 reusable.lastVerifiedAt = date
             } else {
@@ -435,6 +474,9 @@ final class ApplicationState: ObservableObject {
                     id: bindingID,
                     workflowID: workflowID,
                     anchorRestorationID: restorationID,
+                    displayHint: identity.displayIdentifier,
+                    spaceIdentity: identity,
+                    spaceIdentityVersion: WorkflowSpaceBindingCompatibility.currentIdentityVersion,
                     state: .verified,
                     boundAt: date,
                     lastVerifiedAt: date
@@ -442,17 +484,27 @@ final class ApplicationState: ObservableObject {
                 store.insert(binding)
                 workflowSpaceBindings.append(binding)
             }
-            applySpaceResolution(spaceAnchorRegistry.resolution(), at: date, source: .space)
+            applySpaceResolution(
+                spaceAnchorRegistry.resolutionForInteraction(),
+                at: date,
+                source: .space
+            )
             saveOrReport()
 
         case .alreadyBound:
-            applySpaceResolution(spaceAnchorRegistry.resolution(), at: Date(), source: .space)
+            applySpaceResolution(
+                spaceAnchorRegistry.resolutionForInteraction(),
+                at: Date(),
+                source: .space
+            )
 
         case let .occupied(existingWorkflowID):
             errorMessage = "当前桌面已绑定到“\(taskName(for: existingWorkflowID))”。请先解除当前桌面绑定。"
 
         case .failed:
-            errorMessage = "无法确认当前桌面绑定。FocusTrace 没有保存这次绑定，请重试。"
+            errorMessage = spaceAnchorRegistry.isIdentityProviderAvailable
+                ? "无法读取当前桌面的稳定身份。FocusTrace 没有保存这次绑定，请重试。"
+                : "当前 macOS 版本不支持可靠的桌面身份读取。FocusTrace 已停止绑定，不会用位置猜测。"
         }
     }
 
@@ -464,7 +516,11 @@ final class ApplicationState: ObservableObject {
         }
         let stillEnabled = spaceAnchorRegistry.isEnabled
         if stillEnabled {
-            applySpaceResolution(spaceAnchorRegistry.resolution(), at: Date(), source: .space)
+            applySpaceResolution(
+                spaceAnchorRegistry.resolutionForInteraction(),
+                at: Date(),
+                source: .space
+            )
         } else {
             spaceResolution = .unknown
             switchTask(to: nil, source: .space)
@@ -790,6 +846,9 @@ final class ApplicationState: ObservableObject {
     func shutdown() {
         let date = Date()
         spaceResolutionTask?.cancel()
+        attentionCueTask?.cancel()
+        attentionCueTask = nil
+        attentionCueController.hide()
         workflowUndoTask?.cancel()
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
@@ -1136,8 +1195,7 @@ final class ApplicationState: ObservableObject {
               focus.endedAt == nil,
               focus.pausedAt == nil,
               pendingFocusDepartureAt != nil else { return }
-        if case let .bound(activeWorkflowID) = spaceAnchorRegistry.resolution(),
-           activeWorkflowID == focus.taskID {
+        if currentSpaceWorkflowID == focus.taskID {
             // The user returned just before the grace deadline while the
             // debounced context update is still pending. Trust the verified
             // anchor and avoid a one-frame false pause.
@@ -1266,6 +1324,113 @@ final class ApplicationState: ObservableObject {
                 self.sendDueTaskParkingReminders(at: date)
             }
         }
+    }
+
+    /// NSWorkspace normally reports Space changes, but on a multi-display Mac
+    /// it can omit a transition on a display that is not the global active
+    /// display. Poll only while Space bindings exist, and only react to an
+    /// actual per-display Current Space delta. The one-second fallback keeps
+    /// the menu real-time without sampling application activity.
+    private func startSpaceReconciliationObserver() {
+        spaceReconciliationTask?.cancel()
+        spaceReconciliationTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self,
+                      self.spaceAnchorRegistry.isEnabled,
+                      let resolution = self.spaceAnchorRegistry.resolutionForChangedDisplay()
+                else { continue }
+                if resolution != self.spaceResolution {
+                    self.applySpaceResolution(resolution, at: Date(), source: .space)
+                }
+            }
+        }
+    }
+
+    private func startAttentionCueObserver() {
+        attentionCueTask?.cancel()
+        attentionCueTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                self.refreshAttentionCue(at: Date())
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func refreshAttentionCue(at date: Date) {
+        guard preferences.attentionCueEnabled,
+              preferences.hasCompletedOnboarding,
+              !preferences.capturePaused,
+              isSystemActive,
+              shouldRecord(at: date),
+              let task = currentTask else {
+            attentionCueController.hide()
+            attentionCueTaskID = nil
+            attentionCueContinuityStartedAt = nil
+            lastRewardedMilestoneMinutes = 0
+            return
+        }
+
+        let taskIntervalRecords = taskIntervals.map(\.record)
+        if attentionCueTaskID != task.id {
+            attentionCueTaskID = task.id
+            attentionCueContinuityStartedAt = date
+            lastRewardedMilestoneMinutes = 0
+        }
+        let elapsed = max(0, date.timeIntervalSince(attentionCueContinuityStartedAt ?? date))
+        let displayIdentifier = spaceAnchorRegistry.lastResolvedIdentity?.displayIdentifier
+        attentionCueController.updateProgress(
+            taskName: task.title,
+            elapsedSeconds: elapsed,
+            displayIdentifier: displayIdentifier
+        )
+
+        let decision = AttentionCueEngine.switchDecision(
+            intervals: taskIntervalRecords,
+            parkings: taskParkings.map(\.record),
+            at: date
+        )
+        if shouldPresentSwitchCue(decision, at: date) {
+            lastSwitchCueAt = date
+            lastSwitchCueLevel = decision.level
+            attentionCueController.showSwitchWarning(
+                taskName: task.title,
+                switchCount: decision.switchCount,
+                strong: decision.level == .strong,
+                baselineComplete: baselineComplete,
+                displayIdentifier: displayIdentifier
+            )
+            return
+        }
+        if decision.level == .none {
+            lastSwitchCueLevel = .none
+        }
+
+        let milestone = AttentionCueEngine.continuityMilestoneMinutes(
+            elapsedSeconds: elapsed
+        )
+        guard milestone >= 5, milestone > lastRewardedMilestoneMinutes else { return }
+        lastRewardedMilestoneMinutes = milestone
+        attentionCueController.showReward(
+            taskName: task.title,
+            milestoneMinutes: milestone,
+            displayIdentifier: displayIdentifier
+        )
+    }
+
+    private func shouldPresentSwitchCue(
+        _ decision: AttentionCueDecision,
+        at date: Date
+    ) -> Bool {
+        guard decision.level != .none else { return false }
+        guard let lastSwitchCueAt else { return true }
+        if date.timeIntervalSince(lastSwitchCueAt) >= 10 * 60 {
+            return true
+        }
+        return decision.level == .strong
+            && lastSwitchCueLevel == .gentle
+            && date.timeIntervalSince(lastSwitchCueAt) >= 60
     }
 
     private func refreshCaptureForCurrentState() {
@@ -1451,17 +1616,48 @@ final class ApplicationState: ObservableObject {
 
     private func prepareStoredSpaceBindingsForLaunch() {
         var changed = false
-        for binding in workflowSpaceBindings
-            where binding.state == .verified || binding.state == .conflict {
-            binding.state = .needsRebind
-            changed = true
+        spaceAnchorRegistry.releaseAll()
+        for binding in workflowSpaceBindings where binding.state != .released {
+            guard WorkflowSpaceBindingCompatibility.canRestore(
+                identity: binding.spaceIdentity,
+                identityVersion: binding.spaceIdentityVersion
+            ), let identity = binding.spaceIdentity else {
+                if binding.state != .needsRebind {
+                    binding.state = .needsRebind
+                    changed = true
+                }
+                continue
+            }
+            switch spaceAnchorRegistry.restore(
+                bindingID: binding.id,
+                workflowID: binding.workflowID,
+                restorationID: binding.anchorRestorationID,
+                identity: identity
+            ) {
+            case .restored:
+                if binding.state != .verified {
+                    binding.state = .verified
+                    changed = true
+                }
+                binding.lastVerifiedAt = Date()
+                changed = true
+            case .missing:
+                binding.state = .needsRebind
+                changed = true
+            case .providerUnavailable:
+                // Preserve the durable binding and fail closed as unknown.
+                // A temporary OS/API failure must not erase user intent.
+                break
+            }
         }
+        spaceAnchorRegistry.seedCurrentSpaceSnapshot()
         spaceResolution = .unknown
         if changed { saveOrReport() }
     }
 
     private func scheduleSpaceResolution(after eventDate: Date) {
         guard spaceAnchorRegistry.isEnabled else { return }
+        let resolutionBeforeChange = spaceResolution
         spaceResolution = .unknown
         // Close the old workflow at the event boundary before debouncing the
         // new Space. This prevents even a short transition from inheriting
@@ -1471,11 +1667,22 @@ final class ApplicationState: ObservableObject {
         spaceResolutionTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(600))
             guard !Task.isCancelled, let self else { return }
-            self.applySpaceResolution(
-                self.spaceAnchorRegistry.resolution(),
-                at: max(eventDate, Date()),
-                source: .space
-            )
+            if let resolution = self.spaceAnchorRegistry.resolutionForChangedDisplay() {
+                self.applySpaceResolution(
+                    resolution,
+                    at: max(eventDate, Date()),
+                    source: .space
+                )
+            } else if self.spaceResolution == .unknown {
+                // The Space may have switched away and back during Mission
+                // Control animation. With no net delta, restore the context
+                // that was valid at the event boundary.
+                self.applySpaceResolution(
+                    resolutionBeforeChange,
+                    at: max(eventDate, Date()),
+                    source: .space
+                )
+            }
         }
     }
 
@@ -1524,7 +1731,7 @@ final class ApplicationState: ObservableObject {
         }
         if currentSpaceWorkflowID == workflowID {
             spaceResolution = spaceAnchorRegistry.isEnabled
-                ? spaceAnchorRegistry.resolution()
+                ? spaceAnchorRegistry.resolutionForInteraction()
                 : .unknown
         }
     }

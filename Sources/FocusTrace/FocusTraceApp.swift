@@ -62,12 +62,17 @@ private struct SpaceAnchorProbeView: View {
                     bindingID: bindingID,
                     restorationID: "probe-\(bindingID.uuidString)"
                 )
-                let resolution = registry.resolution()
+                let resolution = registry.resolutionForInteraction()
                 let conflict = registry.bindCurrentSpace(workflowID: secondWorkflow)
                 let released = registry.releaseCurrentSpace()
-                let finalResolution = registry.resolution()
-                let passed = first == .created(bindingID: bindingID)
-                    && resolution == .bound(workflowID: firstWorkflow)
+                let finalResolution = registry.resolutionForInteraction()
+                let didCreate: Bool
+                if case let .created(createdID, _) = first {
+                    didCreate = createdID == bindingID
+                } else {
+                    didCreate = false
+                }
+                let passed = didCreate && resolution == .bound(workflowID: firstWorkflow)
                     && conflict == .occupied(workflowID: firstWorkflow)
                     && released == [bindingID]
                     && finalResolution == .unbound

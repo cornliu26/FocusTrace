@@ -12,6 +12,7 @@ final class AppPreferences: ObservableObject {
         static let retentionDays = "retentionDays"
         static let capturePaused = "capturePaused"
         static let launchAtLogin = "launchAtLogin"
+        static let attentionCueEnabled = "attentionCueEnabled"
     }
 
     private let defaults: UserDefaults
@@ -24,6 +25,7 @@ final class AppPreferences: ObservableObject {
     @Published var retentionDays: Int { didSet { save() } }
     @Published var capturePaused: Bool { didSet { save() } }
     @Published var launchAtLogin: Bool { didSet { save() } }
+    @Published var attentionCueEnabled: Bool { didSet { save() } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -44,6 +46,9 @@ final class AppPreferences: ObservableObject {
             : defaults.integer(forKey: Key.retentionDays)
         capturePaused = defaults.bool(forKey: Key.capturePaused)
         launchAtLogin = defaults.bool(forKey: Key.launchAtLogin)
+        attentionCueEnabled = defaults.object(forKey: Key.attentionCueEnabled) == nil
+            ? true
+            : defaults.bool(forKey: Key.attentionCueEnabled)
     }
 
     func completeOnboarding() {
@@ -81,5 +86,6 @@ final class AppPreferences: ObservableObject {
         defaults.set(retentionDays, forKey: Key.retentionDays)
         defaults.set(capturePaused, forKey: Key.capturePaused)
         defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
+        defaults.set(attentionCueEnabled, forKey: Key.attentionCueEnabled)
     }
 }

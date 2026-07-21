@@ -146,6 +146,10 @@ struct MenuBarView: View {
         .sheet(isPresented: $showingQuickWorkflowCreator) {
             QuickWorkflowCreatorSheet(state: state)
         }
+        .onAppear {
+            state.start()
+            state.refreshSpaceContextForMenuPresentation()
+        }
     }
 
     @ViewBuilder
@@ -161,7 +165,7 @@ struct MenuBarView: View {
             }
 
             if !state.needsRebindBindings.isEmpty && !state.isSpaceWorkflowModeEnabled {
-                Text("重启后需逐个访问原桌面并重新绑定（\(state.needsRebindBindings.count) 个待恢复）。")
+                Text("桌面识别算法已修正，旧绑定需在目标桌面重新绑定（\(state.needsRebindBindings.count) 个待恢复）。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

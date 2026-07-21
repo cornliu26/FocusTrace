@@ -149,6 +149,105 @@ func fiveSessionProgression() {
 }
 
 @Test
+func attentionCueCountsOnlyStableUnplannedTaskSwitches() {
+    let start = Date(timeIntervalSince1970: 80_000)
+    let taskA = UUID()
+    let taskB = UUID()
+    let taskC = UUID()
+    let taskD = UUID()
+    let intervals = [
+        TaskIntervalRecord(taskID: taskA, startedAt: start, endedAt: start.addingTimeInterval(40)),
+        TaskIntervalRecord(taskID: taskB, startedAt: start.addingTimeInterval(40), endedAt: start.addingTimeInterval(80)),
+        TaskIntervalRecord(taskID: taskC, startedAt: start.addingTimeInterval(80), endedAt: start.addingTimeInterval(120)),
+        TaskIntervalRecord(taskID: taskD, startedAt: start.addingTimeInterval(120), endedAt: nil),
+    ]
+    let now = start.addingTimeInterval(160)
+
+    #expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [],
+        at: now
+    ) == 3)
+
+    let parking = TaskParkingRecord(
+        taskID: taskA,
+        parkedAt: start.addingTimeInterval(40),
+        resumeCue: "等待 Agent 完成",
+        switchedToTaskID: taskB
+    )
+    #expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [parking],
+        at: now
+    ) == 2)
+}
+
+@Test
+func attentionCueIgnoresTaskThatDidNotStayThirtySeconds() {
+    let start = Date(timeIntervalSince1970: 81_000)
+    let taskA = UUID()
+    let taskB = UUID()
+    let intervals = [
+        TaskIntervalRecord(taskID: taskA, startedAt: start, endedAt: start.addingTimeInterval(60)),
+        TaskIntervalRecord(taskID: taskB, startedAt: start.addingTimeInterval(60), endedAt: nil),
+    ]
+    #expect(AttentionCueEngine.stableTaskSwitchCount(
+        intervals: intervals,
+        parkings: [],
+        at: start.addingTimeInterval(89)
+    ) == 0)
+}
+
+@Test
+func attentionCueUsesGentleAndStrongThresholds() {
+    let start = Date(timeIntervalSince1970: 82_000)
+    let tasks = (0..<6).map { _ in UUID() }
+    let intervals = tasks.enumerated().map { index, taskID in
+        TaskIntervalRecord(
+            taskID: taskID,
+            startedAt: start.addingTimeInterval(Double(index * 30)),
+            endedAt: index == tasks.count - 1
+                ? nil
+                : start.addingTimeInterval(Double((index + 1) * 30))
+        )
+    }
+
+    let gentle = AttentionCueEngine.switchDecision(
+        intervals: Array(intervals.prefix(4)),
+        parkings: [],
+        at: start.addingTimeInterval(120)
+    )
+    #expect(gentle.level == .gentle)
+    #expect(gentle.switchCount == 3)
+
+    let strong = AttentionCueEngine.switchDecision(
+        intervals: intervals,
+        parkings: [],
+        at: start.addingTimeInterval(180)
+    )
+    #expect(strong.level == .strong)
+    #expect(strong.switchCount == 5)
+}
+
+@Test
+func attentionCueContinuitySurvivesShortSameTaskRefreshGap() {
+    let start = Date(timeIntervalSince1970: 83_000)
+    let task = UUID()
+    let now = start.addingTimeInterval(601)
+    let intervals = [
+        TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(300)),
+        TaskIntervalRecord(taskID: task, startedAt: start.addingTimeInterval(301), endedAt: nil),
+    ]
+    let elapsed = AttentionCueEngine.continuousTaskSeconds(
+        intervals: intervals,
+        taskID: task,
+        at: now
+    )
+    #expect(elapsed == 601)
+    #expect(AttentionCueEngine.continuityMilestoneMinutes(elapsedSeconds: elapsed) == 10)
+}
+
+@Test
 func baselineStreakBreaksOnDistractionAndTaskChange() {
     let taskA = UUID()
     let taskB = UUID()
@@ -319,6 +418,198 @@ func spaceResolutionNeverGuessesWhenUnknownOrConflicted() {
     } else {
         Issue.record("multiple workflow anchors should conflict")
     }
+}
+
+@Test
+func stableSpaceIdentityDoesNotMoveWhenAnotherDesktopIsInsertedReorderedOrDeleted() {
+    let workflowID = UUID()
+    let original = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 41,
+        spaceUUID: "space-original"
+    )
+    let inserted = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 99,
+        spaceUUID: "space-new"
+    )
+    let binding = WorkflowSpaceBindingRecord(
+        workflowID: workflowID,
+        anchorRestorationID: "legacy-anchor",
+        displayHint: "display-a",
+        spaceIdentity: original
+    )
+
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        currentSpaceIdentity: original,
+        bindings: [binding],
+        registryReady: true
+    ) == .bound(workflowID: workflowID))
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        currentSpaceIdentity: inserted,
+        bindings: [binding],
+        registryReady: true
+    ) == .unbound)
+
+    // Reordering affects only presentation order, which is deliberately not
+    // part of either the binding or the resolver input.
+    let reorderedCurrent = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 41,
+        spaceUUID: "space-original"
+    )
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        currentSpaceIdentity: reorderedCurrent,
+        bindings: [binding],
+        registryReady: true
+    ) == .bound(workflowID: workflowID))
+
+    // Deleting the other desktop removes it from the window-server inventory;
+    // it cannot change the original binding because presentation indexes are
+    // never persisted.
+    #expect(WorkflowSpaceResolutionEngine.resolve(
+        currentSpaceIdentity: original,
+        bindings: [binding],
+        registryReady: true
+    ) == .bound(workflowID: workflowID))
+}
+
+@Test
+func globallyActiveSpaceWinsOverPointerDisplayCurrentSpace() {
+    let pointerDisplaySpace = WorkflowSpaceIdentity(
+        displayIdentifier: "display-under-pointer",
+        managedSpaceID: 304,
+        spaceUUID: "pointer-space"
+    )
+    let actuallyActivatedSpace = WorkflowSpaceIdentity(
+        displayIdentifier: "display-that-changed",
+        managedSpaceID: 495,
+        spaceUUID: "active-space"
+    )
+    #expect(WorkflowSpaceIdentitySelector.activeIdentity(
+        managedSpaceID: 495,
+        allSpaces: [pointerDisplaySpace, actuallyActivatedSpace]
+    ) == actuallyActivatedSpace)
+
+    let duplicatedID = WorkflowSpaceIdentity(
+        displayIdentifier: "another-display",
+        managedSpaceID: 495,
+        spaceUUID: "ambiguous-space"
+    )
+    #expect(WorkflowSpaceIdentitySelector.activeIdentity(
+        managedSpaceID: 495,
+        allSpaces: [actuallyActivatedSpace, duplicatedID]
+    ) == nil)
+}
+
+@Test
+func oneDisplayDeltaWinsOverStaleGlobalActiveSpace() {
+    let displayAOld = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 1,
+        spaceUUID: "desktop-a-old"
+    )
+    let displayANew = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 621,
+        spaceUUID: "desktop-a-new"
+    )
+    let staleGlobalActive = WorkflowSpaceIdentity(
+        displayIdentifier: "display-b",
+        managedSpaceID: 346,
+        spaceUUID: "desktop-b"
+    )
+    let displayC = WorkflowSpaceIdentity(
+        displayIdentifier: "display-c",
+        managedSpaceID: 521,
+        spaceUUID: "desktop-c"
+    )
+
+    #expect(WorkflowSpaceTransitionSelector.changedIdentity(
+        previousCurrentSpaces: [displayAOld, staleGlobalActive, displayC],
+        currentSpaces: [displayANew, staleGlobalActive, displayC],
+        activeIdentity: staleGlobalActive
+    ) == displayANew)
+
+    #expect(WorkflowSpaceTransitionSelector.changedIdentity(
+        previousCurrentSpaces: [displayAOld, staleGlobalActive],
+        currentSpaces: [displayANew, displayC],
+        activeIdentity: displayC
+    ) == displayC)
+
+    #expect(WorkflowSpaceTransitionSelector.changedIdentity(
+        previousCurrentSpaces: [displayANew, staleGlobalActive, displayC],
+        currentSpaces: [displayANew, staleGlobalActive, displayC],
+        activeIdentity: staleGlobalActive
+    ) == nil)
+}
+
+@Test
+func preDisplayDeltaBindingsRequireOneTimeRebindAfterIsolationFix() {
+    let identity = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 304,
+        spaceUUID: "space-a"
+    )
+    #expect(!WorkflowSpaceBindingCompatibility.canRestore(
+        identity: identity,
+        identityVersion: nil
+    ))
+    #expect(!WorkflowSpaceBindingCompatibility.canRestore(
+        identity: identity,
+        identityVersion: 1
+    ))
+    #expect(!WorkflowSpaceBindingCompatibility.canRestore(
+        identity: identity,
+        identityVersion: 2
+    ))
+    #expect(WorkflowSpaceBindingCompatibility.canRestore(
+        identity: identity,
+        identityVersion: WorkflowSpaceBindingCompatibility.currentIdentityVersion
+    ))
+}
+
+@Test
+func spaceIdentityIsScopedToItsDisplayAndPrefersUUID() {
+    let first = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 7,
+        spaceUUID: "uuid-a"
+    )
+    let otherDisplay = WorkflowSpaceIdentity(
+        displayIdentifier: "display-b",
+        managedSpaceID: 7,
+        spaceUUID: "uuid-a"
+    )
+    let reusedNumericID = WorkflowSpaceIdentity(
+        displayIdentifier: "display-a",
+        managedSpaceID: 7,
+        spaceUUID: "uuid-b"
+    )
+    #expect(!first.identifiesSameSpace(as: otherDisplay))
+    #expect(!first.identifiesSameSpace(as: reusedNumericID))
+}
+
+@Test
+func legacySpaceBindingDecodesWithoutStableIdentity() throws {
+    let workflowID = UUID()
+    let bindingID = UUID()
+    let legacyJSON = """
+    {
+      "id": "\(bindingID.uuidString)",
+      "workflowID": "\(workflowID.uuidString)",
+      "anchorRestorationID": "old-window-anchor",
+      "state": "verified",
+      "boundAt": 1000
+    }
+    """
+    let decoded = try JSONDecoder().decode(
+        WorkflowSpaceBindingRecord.self,
+        from: Data(legacyJSON.utf8)
+    )
+    #expect(decoded.id == bindingID)
+    #expect(decoded.workflowID == workflowID)
+    #expect(decoded.spaceIdentity == nil)
 }
 
 @Test

@@ -41,6 +41,10 @@ struct SettingsView: View {
                 }
 
                 Section("温和提醒") {
+                    Toggle(
+                        "屏幕边缘专注护栏",
+                        isOn: $preferences.attentionCueEnabled
+                    )
                     Stepper(
                         "非允许应用停留 \(preferences.reminderThresholdSeconds) 秒后提醒",
                         value: $preferences.reminderThresholdSeconds,
@@ -48,6 +52,9 @@ struct SettingsView: View {
                         step: 5
                     )
                     Text("基线前三个工作日不会发送提醒。未由你确认的事件始终只算疑似分心。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次任务才提示，主动挂起和原始 Space 事件不计入。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

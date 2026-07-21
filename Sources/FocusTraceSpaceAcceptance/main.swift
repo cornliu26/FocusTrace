@@ -8,6 +8,7 @@ private struct AcceptanceSlot: Identifiable, Equatable {
     let id: UUID
     let workflowID: UUID
     let bindingID: UUID
+    let identity: WorkflowSpaceIdentity
     let number: Int
 }
 
@@ -40,13 +41,28 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
     @Published private(set) var maximumLatencySeconds: TimeInterval = 0
     @Published private(set) var status = "请在第一个待验收桌面点击“绑定当前桌面”"
     @Published private(set) var outputPath: String?
+    @Published private(set) var currentSpaceSummary = "Space: 尚未读取"
+    @Published private(set) var existingSpaceIsolationStatus = "现有桌面隔离：尚未开始"
+    @Published private(set) var insertionRegressionStatus = "新增桌面回归：尚未开始"
+    @Published private(set) var removalRegressionStatus = "删除桌面回归：尚未开始"
 
     let requiredSwitches = 30
     private let registry = SpaceAnchorRegistry()
     private let workspace = NSWorkspace.shared
     private var startedAt = Date()
     private var resolutionTask: Task<Void, Never>?
+    private var snapshotTask: Task<Void, Never>?
     private var isStarted = false
+    private var initialSpaceIdentities: [WorkflowSpaceIdentity] = []
+    private var insertedIdentity: WorkflowSpaceIdentity?
+    private var originalReverifiedAfterInsertion = false
+
+    var screenSummary: String {
+        NSScreen.screens.enumerated().map { index, screen in
+            let frame = screen.frame
+            return "S\(index): x\(Int(frame.minX)) y\(Int(frame.minY)) \(Int(frame.width))×\(Int(frame.height))"
+        }.joined(separator: " · ")
+    }
 
     func start() {
         guard !isStarted else { return }
@@ -57,11 +73,22 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
             name: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil
         )
+        refreshSpaceSummary()
+        snapshotTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                guard !Task.isCancelled, let self else { return }
+                self.reconcileCurrentSpaces()
+                self.evaluateSpaceRegression()
+            }
+        }
     }
 
     func stop() {
         resolutionTask?.cancel()
         resolutionTask = nil
+        snapshotTask?.cancel()
+        snapshotTask = nil
         workspace.notificationCenter.removeObserver(self)
         registry.releaseAll()
         isStarted = false
@@ -69,10 +96,8 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
 
     func bindCurrentSpace(using viewWindow: NSWindow?) {
         guard phase == .binding, slots.count < 3 else { return }
-        // Accessibility-driven acceptance can invoke the button without first
-        // making this process frontmost. Space assignment is defined by the
-        // active Space, so explicitly activate the harness before creating the
-        // invisible anchor and give AppKit one turn to settle.
+        // Explicit binding uses the display where the user clicks. Passive
+        // Space changes are resolved separately from per-display deltas.
         guard let anchorWindow = viewWindow else {
             status = "没有找到当前桌面的验收窗口，请重新打开验收工具。"
             return
@@ -86,18 +111,25 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
         let bindingID = UUID()
         switch registry.bindCurrentSpace(
             workflowID: workflowID,
-            using: anchorWindow,
             bindingID: bindingID,
             restorationID: "acceptance-space-\(number)-\(bindingID.uuidString)"
         ) {
-        case .created:
+        case let .created(_, identity):
             slots.append(AcceptanceSlot(
                 id: bindingID,
                 workflowID: workflowID,
                 bindingID: bindingID,
+                identity: identity,
                 number: number
             ))
             activeWorkflowID = workflowID
+            refreshSpaceSummary()
+            if slots.count == 1 {
+                initialSpaceIdentities = registry.allSpaceIdentities() ?? [identity]
+                existingSpaceIsolationStatus = "现有桌面隔离：请切换到另一个已有桌面"
+                insertionRegressionStatus = "新增桌面回归：等待创建一个标准 macOS 桌面"
+                removalRegressionStatus = "删除桌面回归：等待新增桌面验收"
+            }
             if slots.count == 3 {
                 phase = .testing
                 startedAt = Date()
@@ -129,6 +161,12 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
         mismatchCount = 0
         maximumLatencySeconds = 0
         outputPath = nil
+        initialSpaceIdentities = []
+        insertedIdentity = nil
+        originalReverifiedAfterInsertion = false
+        existingSpaceIsolationStatus = "现有桌面隔离：尚未开始"
+        insertionRegressionStatus = "新增桌面回归：尚未开始"
+        removalRegressionStatus = "删除桌面回归：尚未开始"
         status = "请在第一个待验收桌面点击“绑定当前桌面”"
     }
 
@@ -153,7 +191,14 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
     @objc private func spaceChanged(_ notification: Notification) {
         let eventAt = Date()
         guard phase == .testing else {
-            activeWorkflowID = resolvedWorkflowID()
+            resolutionTask?.cancel()
+            resolutionTask = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled, let self else { return }
+                self.reconcileCurrentSpaces()
+                self.refreshSpaceSummary()
+                self.evaluateSpaceRegression()
+            }
             return
         }
         let previousWorkflowID = activeWorkflowID
@@ -163,16 +208,15 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
             var candidateWorkflowID: UUID?
             var consecutiveSamples = 0
 
-            // Full-screen and Mission Control animations briefly expose zero
-            // or multiple anchors. Those transitional frames are not a Space
-            // misidentification. Resolve only after the same bound anchor is
-            // visible for three consecutive samples, while preserving the
+            // Mission Control animations can briefly report the previous
+            // current Space. Resolve only after the same bound identity is
+            // returned for three consecutive samples, while preserving the
             // one-second acceptance budget from the system notification.
             while Date().timeIntervalSince(eventAt) <= 1 {
                 try? await Task.sleep(for: .milliseconds(80))
                 guard !Task.isCancelled else { return }
 
-                guard let workflowID = self.resolvedWorkflowID() else {
+                guard let workflowID = self.resolvedWorkflowID(afterSpaceChange: consecutiveSamples == 0) else {
                     candidateWorkflowID = nil
                     consecutiveSamples = 0
                     continue
@@ -206,9 +250,99 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
         }
     }
 
-    private func resolvedWorkflowID() -> UUID? {
-        guard case let .bound(workflowID) = registry.resolution() else { return nil }
+    private func resolvedWorkflowID(afterSpaceChange: Bool = false) -> UUID? {
+        let resolution = afterSpaceChange
+            ? registry.resolutionAfterSpaceChange()
+            : registry.resolutionForInteraction()
+        guard case let .bound(workflowID) = resolution else { return nil }
         return workflowID
+    }
+
+    private func reconcileCurrentSpaces() {
+        guard let resolution = registry.resolutionForChangedDisplay() else { return }
+        if case let .bound(workflowID) = resolution {
+            activeWorkflowID = workflowID
+        } else {
+            activeWorkflowID = nil
+        }
+        refreshSpaceSummary()
+    }
+
+    private func refreshSpaceSummary() {
+        guard let identity = registry.currentInteractionIdentity()
+                ?? registry.lastResolvedIdentity
+                ?? registry.currentIdentity() else {
+            currentSpaceSummary = "Space: 无法读取"
+            return
+        }
+        let uuid = identity.spaceUUID?.prefix(8) ?? "no-uuid"
+        let bound = slots.first.map { slot in
+            let boundUUID = slot.identity.spaceUUID?.prefix(8) ?? "no-uuid"
+            return "\(slot.identity.managedSpaceID)/\(boundUUID)"
+        } ?? "none"
+        currentSpaceSummary = "Space: \(identity.managedSpaceID)/\(uuid) · 首次绑定: \(bound)"
+    }
+
+    private func evaluateSpaceRegression() {
+        guard let first = slots.first,
+              let currentIdentity = registry.currentInteractionIdentity()
+                ?? registry.lastResolvedIdentity
+                ?? registry.currentIdentity() else { return }
+        let isOriginal = first.identity.identifiesSameSpace(as: currentIdentity)
+        if !isOriginal,
+           identity(currentIdentity, existsIn: initialSpaceIdentities),
+           activeWorkflowID == nil {
+            existingSpaceIsolationStatus = "现有桌面隔离：通过；桌面 \(currentIdentity.managedSpaceID) 未继承首次绑定"
+        }
+
+        if !isOriginal,
+           !identity(currentIdentity, existsIn: initialSpaceIdentities),
+           activeWorkflowID == nil {
+            insertedIdentity = currentIdentity
+            insertionRegressionStatus = "新增桌面回归：通过第 1/2 步，新桌面 \(currentIdentity.managedSpaceID) 未继承绑定；请返回原桌面"
+            return
+        }
+
+        guard isOriginal, activeWorkflowID == first.workflowID,
+              let insertedIdentity else { return }
+        if !originalReverifiedAfterInsertion {
+            originalReverifiedAfterInsertion = true
+            insertionRegressionStatus = "新增桌面回归：通过；新桌面 \(insertedIdentity.managedSpaceID) 未绑定，原桌面 \(currentIdentity.managedSpaceID) 仍命中原工作流"
+            removalRegressionStatus = "删除桌面回归：请删除刚才新增的测试桌面"
+        }
+
+        let currentInventory = registry.allSpaceIdentities() ?? []
+        guard !identity(insertedIdentity, existsIn: currentInventory) else { return }
+        removalRegressionStatus = "删除桌面回归：通过；测试桌面 \(insertedIdentity.managedSpaceID) 已删除，原桌面 \(currentIdentity.managedSpaceID) 仍命中原工作流"
+        writeSpaceRegressionReport()
+    }
+
+    private func identity(
+        _ identity: WorkflowSpaceIdentity,
+        existsIn identities: [WorkflowSpaceIdentity]
+    ) -> Bool {
+        identities.contains { $0.identifiesSameSpace(as: identity) }
+    }
+
+    private func writeSpaceRegressionReport() {
+        guard existingSpaceIsolationStatus.contains("通过"),
+              insertionRegressionStatus.contains("通过"),
+              removalRegressionStatus.contains("通过") else { return }
+        let report = [
+            existingSpaceIsolationStatus,
+            insertionRegressionStatus,
+            removalRegressionStatus,
+        ].joined(separator: "\n") + "\n"
+        let outputURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent(".build/space-regression.txt")
+        try? report.write(
+            to: outputURL,
+            atomically: true,
+            encoding: .utf8
+        )
     }
 
     private func record(workflowID: UUID?, latency: TimeInterval) {
@@ -334,6 +468,26 @@ private struct AcceptanceView: View {
 
             Text(model.status)
                 .font(.headline)
+
+            Text(model.screenSummary)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+
+            Text(model.currentSpaceSummary)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+
+            Text(model.existingSpaceIsolationStatus)
+                .font(.caption)
+                .foregroundStyle(model.existingSpaceIsolationStatus.contains("通过") ? .green : .secondary)
+
+            Text(model.insertionRegressionStatus)
+                .font(.caption)
+                .foregroundStyle(model.insertionRegressionStatus.contains("通过") ? .green : .secondary)
+
+            Text(model.removalRegressionStatus)
+                .font(.caption)
+                .foregroundStyle(model.removalRegressionStatus.contains("通过") ? .green : .secondary)
 
             HStack(spacing: 12) {
                 ForEach(1...3, id: \.self) { number in

@@ -1,187 +1,214 @@
-@preconcurrency import AppKit
 import Foundation
 import FocusTraceCore
 
+/// Maintains workflow bindings keyed by the durable identity of a macOS Space.
+/// The historical name is retained to keep the app-facing API source-stable;
+/// no NSWindow anchor is created anymore.
 @MainActor
 public final class SpaceAnchorRegistry {
     public enum BindResult: Equatable {
-        case created(bindingID: UUID)
+        case created(bindingID: UUID, identity: WorkflowSpaceIdentity)
         case alreadyBound(bindingID: UUID)
         case occupied(workflowID: UUID)
         case failed
     }
 
-    public struct ActiveAnchor: Equatable {
-        public let bindingID: UUID
-        public let workflowID: UUID
+    public enum RestoreResult: Equatable {
+        case restored
+        case missing
+        case providerUnavailable
     }
 
-    private final class AnchorPanel: NSPanel {
-        override var canBecomeKey: Bool { false }
-        override var canBecomeMain: Bool { false }
-    }
-
-    private struct Anchor {
+    private struct Binding {
         let bindingID: UUID
         let workflowID: UUID
         let restorationID: String
-        let window: NSWindow
-        let ownsWindow: Bool
+        let identity: WorkflowSpaceIdentity
     }
 
-    private var anchorsByBindingID: [UUID: Anchor] = [:]
+    private let identityProvider: ManagedSpaceIdentityProvider
+    private var bindingsByID: [UUID: Binding] = [:]
+    private var lastObservedCurrentSpaces: [WorkflowSpaceIdentity]?
+    public private(set) var lastResolvedIdentity: WorkflowSpaceIdentity?
 
-    public init() {}
+    public init(identityProvider: ManagedSpaceIdentityProvider = ManagedSpaceIdentityProvider()) {
+        self.identityProvider = identityProvider
+    }
 
-    public var isEnabled: Bool { !anchorsByBindingID.isEmpty }
+    public var isEnabled: Bool { !bindingsByID.isEmpty }
+    public var isIdentityProviderAvailable: Bool { identityProvider.isAvailable }
+
+    public func currentIdentity() -> WorkflowSpaceIdentity? {
+        identityProvider.activeIdentity()
+    }
+
+    public func currentInteractionIdentity() -> WorkflowSpaceIdentity? {
+        identityProvider.interactionIdentity()
+    }
+
+    public func allSpaceIdentities() -> [WorkflowSpaceIdentity]? {
+        identityProvider.snapshot()?.allSpaces
+    }
+
+    public func seedCurrentSpaceSnapshot() {
+        lastObservedCurrentSpaces = identityProvider.snapshot()?.currentSpaces
+    }
 
     public func bindCurrentSpace(
         workflowID: UUID,
         bindingID: UUID = UUID(),
         restorationID: String = UUID().uuidString
     ) -> BindResult {
-        let active = activeAnchors()
-        if let same = active.first(where: { $0.workflowID == workflowID }) {
+        guard let identity = identityProvider.interactionIdentity() else { return .failed }
+        lastResolvedIdentity = identity
+        seedCurrentSpaceSnapshot()
+        let existing = bindings(on: identity)
+        if let same = existing.first(where: { $0.workflowID == workflowID }) {
             return .alreadyBound(bindingID: same.bindingID)
         }
-        if let occupied = active.first {
+        if let occupied = existing.first {
             return .occupied(workflowID: occupied.workflowID)
         }
-
-        let panel = makeAnchorPanel(restorationID: restorationID)
-        panel.orderFrontRegardless()
-        let anchor = Anchor(
+        bindingsByID[bindingID] = Binding(
             bindingID: bindingID,
             workflowID: workflowID,
             restorationID: restorationID,
-            window: panel,
-            ownsWindow: true
+            identity: identity
         )
-        anchorsByBindingID[bindingID] = anchor
-
-        // AppKit assigns a newly ordered window to its Space on the next
-        // window-server turn. Reading isOnActiveSpace in the same call stack
-        // can report a false negative, especially for menu-bar applications.
-        let verificationDeadline = Date().addingTimeInterval(0.5)
-        repeat {
-            panel.displayIfNeeded()
-            NSApp.updateWindows()
-            if panel.isOnActiveSpace { break }
-            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        } while Date() < verificationDeadline
-
-        guard panel.isOnActiveSpace else {
-            anchorsByBindingID.removeValue(forKey: bindingID)
-            panel.close()
-            return .failed
-        }
-        // Pin the now-confirmed window to this Space. moveToActiveSpace and
-        // fullScreenAuxiliary are needed only while the invisible panel is
-        // being created. Keeping fullScreenAuxiliary here would make the
-        // anchor follow a same-app window into its full-screen Space and make
-        // two distinct Spaces resolve to the same workflow.
-        panel.collectionBehavior = [.managed, .ignoresCycle]
-        return .created(bindingID: bindingID)
+        return .created(bindingID: bindingID, identity: identity)
     }
 
-    /// Registers a visible app window as the Space anchor. This is primarily
-    /// useful for acceptance harnesses whose full-screen primary windows are
-    /// themselves the stable public marker for each Space.
-    public func bindCurrentSpace(
+    public func restore(
+        bindingID: UUID,
         workflowID: UUID,
-        using window: NSWindow,
-        bindingID: UUID = UUID(),
-        restorationID: String = UUID().uuidString
-    ) -> BindResult {
-        let active = activeAnchors()
-        if let same = active.first(where: { $0.workflowID == workflowID }) {
-            return .alreadyBound(bindingID: same.bindingID)
+        restorationID: String,
+        identity: WorkflowSpaceIdentity
+    ) -> RestoreResult {
+        guard let snapshot = identityProvider.snapshot() else {
+            // Keep the binding in memory so a transient provider failure does
+            // not silently disable Space mode; resolution remains unknown.
+            bindingsByID[bindingID] = Binding(
+                bindingID: bindingID,
+                workflowID: workflowID,
+                restorationID: restorationID,
+                identity: identity
+            )
+            return .providerUnavailable
         }
-        if let occupied = active.first {
-            return .occupied(workflowID: occupied.workflowID)
-        }
-        guard window.isVisible, window.isOnActiveSpace else { return .failed }
-
-        anchorsByBindingID[bindingID] = Anchor(
+        guard snapshot.contains(identity) else { return .missing }
+        bindingsByID[bindingID] = Binding(
             bindingID: bindingID,
             workflowID: workflowID,
             restorationID: restorationID,
-            window: window,
-            ownsWindow: false
+            identity: identity
         )
-        return .created(bindingID: bindingID)
+        return .restored
     }
 
-    public func activeAnchors() -> [ActiveAnchor] {
-        anchorsByBindingID.values
-            .filter { $0.window.isVisible && $0.window.isOnActiveSpace }
-            .map { ActiveAnchor(bindingID: $0.bindingID, workflowID: $0.workflowID) }
-            .sorted { $0.bindingID.uuidString < $1.bindingID.uuidString }
+    /// Resolves the Space of the frontmost application. This is appropriate
+    /// for an app-activation event, not for a passive Space-change event on a
+    /// multi-display Mac.
+    public func resolutionForActiveApplication(
+        registryReady: Bool = true
+    ) -> WorkflowSpaceResolution {
+        guard registryReady, let snapshot = identityProvider.snapshot(),
+              let currentIdentity = identityProvider.activeIdentity(in: snapshot) else {
+            return .unknown
+        }
+        return resolution(for: currentIdentity)
     }
 
     public func resolution(registryReady: Bool = true) -> WorkflowSpaceResolution {
-        WorkflowSpaceResolutionEngine.resolve(
-            activeAnchorWorkflowIDs: activeAnchors().map(\.workflowID),
-            registryReady: registryReady
+        resolutionForActiveApplication(registryReady: registryReady)
+    }
+
+    public func resolutionForInteraction(
+        registryReady: Bool = true
+    ) -> WorkflowSpaceResolution {
+        guard registryReady,
+              let currentIdentity = identityProvider.interactionIdentity() else {
+            return .unknown
+        }
+        return resolution(for: currentIdentity)
+    }
+
+    public func resolutionAfterSpaceChange(
+        registryReady: Bool = true
+    ) -> WorkflowSpaceResolution {
+        resolutionForChangedDisplay(registryReady: registryReady) ?? .unknown
+    }
+
+    /// Returns a resolution only when one display's current Space changed
+    /// since the previous snapshot. `nil` means there was no delta; `.unknown`
+    /// means the provider failed and callers should fail closed.
+    public func resolutionForChangedDisplay(
+        registryReady: Bool = true
+    ) -> WorkflowSpaceResolution? {
+        guard registryReady else { return .unknown }
+        guard let snapshot = identityProvider.snapshot() else {
+            return .unknown
+        }
+        let activeIdentity = identityProvider.activeIdentity(in: snapshot)
+        let currentIdentity = WorkflowSpaceTransitionSelector.changedIdentity(
+            previousCurrentSpaces: lastObservedCurrentSpaces ?? [],
+            currentSpaces: snapshot.currentSpaces,
+            activeIdentity: activeIdentity
+        )
+        lastObservedCurrentSpaces = snapshot.currentSpaces
+        guard let currentIdentity else { return nil }
+        return resolution(for: currentIdentity)
+    }
+
+    private func resolution(
+        for currentIdentity: WorkflowSpaceIdentity
+    ) -> WorkflowSpaceResolution {
+        lastResolvedIdentity = currentIdentity
+        let records = bindingsByID.values.map { binding in
+            WorkflowSpaceBindingRecord(
+                id: binding.bindingID,
+                workflowID: binding.workflowID,
+                anchorRestorationID: binding.restorationID,
+                displayHint: binding.identity.displayIdentifier,
+                spaceIdentity: binding.identity,
+                spaceIdentityVersion: WorkflowSpaceBindingCompatibility.currentIdentityVersion,
+                state: .verified
+            )
+        }
+        return WorkflowSpaceResolutionEngine.resolve(
+            currentSpaceIdentity: currentIdentity,
+            bindings: records,
+            registryReady: true
         )
     }
 
     @discardableResult
     public func releaseCurrentSpace() -> [UUID] {
-        let bindingIDs = activeAnchors().map(\.bindingID)
+        guard let identity = identityProvider.interactionIdentity() else { return [] }
+        lastResolvedIdentity = identity
+        seedCurrentSpaceSnapshot()
+        let bindingIDs = bindings(on: identity).map(\.bindingID)
         bindingIDs.forEach(release)
-        return bindingIDs
+        return bindingIDs.sorted { $0.uuidString < $1.uuidString }
     }
 
     public func release(bindingID: UUID) {
-        guard let anchor = anchorsByBindingID.removeValue(forKey: bindingID) else { return }
-        guard anchor.ownsWindow else { return }
-        anchor.window.orderOut(nil)
-        anchor.window.close()
+        bindingsByID.removeValue(forKey: bindingID)
     }
 
     public func releaseAll(workflowID: UUID? = nil) {
-        let bindingIDs = anchorsByBindingID.values
+        let bindingIDs = bindingsByID.values
             .filter { workflowID == nil || $0.workflowID == workflowID }
             .map(\.bindingID)
         bindingIDs.forEach(release)
     }
 
     public func contains(bindingID: UUID) -> Bool {
-        anchorsByBindingID[bindingID] != nil
+        bindingsByID[bindingID] != nil
     }
 
-    private func makeAnchorPanel(restorationID: String) -> NSPanel {
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 100, height: 100)
-        let frame = NSRect(
-            x: visibleFrame.maxX - 2,
-            y: visibleFrame.minY + 1,
-            width: 1,
-            height: 1
-        )
-        let panel = AnchorPanel(
-            contentRect: frame,
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false,
-            screen: screen
-        )
-        panel.identifier = NSUserInterfaceItemIdentifier(restorationID)
-        panel.title = ""
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.alphaValue = 0.01
-        panel.hasShadow = false
-        panel.ignoresMouseEvents = true
-        panel.hidesOnDeactivate = false
-        panel.canHide = false
-        panel.isMovable = false
-        panel.isMovableByWindowBackground = false
-        panel.animationBehavior = .none
-        panel.collectionBehavior = [.moveToActiveSpace, .ignoresCycle, .fullScreenAuxiliary]
-        panel.isExcludedFromWindowsMenu = true
-        panel.isReleasedWhenClosed = false
-        return panel
+    private func bindings(on identity: WorkflowSpaceIdentity) -> [Binding] {
+        bindingsByID.values
+            .filter { $0.identity.identifiesSameSpace(as: identity) }
+            .sorted { $0.bindingID.uuidString < $1.bindingID.uuidString }
     }
 }

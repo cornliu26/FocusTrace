@@ -297,6 +297,8 @@ final class WorkflowSpaceBindingModel: Codable, Identifiable {
     var workflowID: UUID
     var anchorRestorationID: String
     var displayHint: String?
+    var spaceIdentity: WorkflowSpaceIdentity?
+    var spaceIdentityVersion: Int?
     var stateRaw: String
     var boundAt: Date
     var lastVerifiedAt: Date?
@@ -306,6 +308,8 @@ final class WorkflowSpaceBindingModel: Codable, Identifiable {
         workflowID: UUID,
         anchorRestorationID: String,
         displayHint: String? = nil,
+        spaceIdentity: WorkflowSpaceIdentity? = nil,
+        spaceIdentityVersion: Int? = nil,
         state: WorkflowSpaceBindingState = .verified,
         boundAt: Date = Date(),
         lastVerifiedAt: Date? = nil
@@ -314,6 +318,8 @@ final class WorkflowSpaceBindingModel: Codable, Identifiable {
         self.workflowID = workflowID
         self.anchorRestorationID = anchorRestorationID
         self.displayHint = displayHint
+        self.spaceIdentity = spaceIdentity
+        self.spaceIdentityVersion = spaceIdentityVersion
         self.stateRaw = state.rawValue
         self.boundAt = boundAt
         self.lastVerifiedAt = lastVerifiedAt
@@ -593,6 +599,8 @@ extension WorkflowSpaceBindingModel {
             workflowID: workflowID,
             anchorRestorationID: anchorRestorationID,
             displayHint: displayHint,
+            spaceIdentity: spaceIdentity,
+            spaceIdentityVersion: spaceIdentityVersion,
             state: state,
             boundAt: boundAt,
             lastVerifiedAt: lastVerifiedAt

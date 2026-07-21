@@ -1,6 +1,6 @@
 # FocusTrace：以 macOS 桌面为工作流上下文
 
-> 实现状态（2026-07-20）：W1 生命周期、W2 单显示器锚点原型，以及 W3 的快速创建绑定与训练跨桌面暂停/恢复已接入应用；当前桌面绑定、冲突保护和解除已通过无持久化 AppKit 自检。三桌面 30 次真实往返切换已通过（30/30、0 次误识别、最大延迟 0.265 秒）；多显示器组合仍属于待验收阶段。
+> 实现状态（2026-07-21）：W1 生命周期与 W3 无感交互已接入。W2 已从窗口锚点迁移到稳定 `(display UUID, managed Space ID/UUID)`；新增桌面不会改变已有绑定。旧锚点数据升级后需一次性重新绑定。多显示器组合仍属于持续验收阶段。
 
 ## 结论
 
@@ -14,37 +14,45 @@
 4. 创建、完成、解除绑定都需要用户明确动作；普通桌面切换零确认、零弹窗。
 5. 识别失败时进入“上下文未知”，不沿用旧工作流，也不猜测。
 
-## macOS 公开 API 边界
+## macOS Space 身份边界
 
 `NSWorkspace.activeSpaceDidChangeNotification` 能可靠通知 Space 发生变化，但通知不包含 `userInfo`，因此没有公开的 Space ID。
 
-Apple 的公开 AppKit 接口也没有创建、删除或给系统 Space 命名的 API。FocusTrace 首版只绑定用户已经通过 Mission Control 创建的桌面，不用辅助功能脚本替用户操作 Mission Control。
+Apple 的公开 AppKit 接口也没有创建、删除、命名或持久标识系统 Space 的 API。
+旧版曾使用不可见 `NSPanel` 作为桌面锚点，但窗口归属会在新建或重排 Space
+时被系统改变，因此会让绑定移位，不能作为身份来源。
 
-公开 API 可行的首版方案是“桌面锚点”：
+当前本地版动态读取 SkyLight 返回的 managed display spaces：
 
-- 用户在当前桌面绑定工作流时，FocusTrace 创建一个属于该桌面的不可交互 `NSPanel`；
-- 锚点使用默认的单 Space collection behavior，不加入所有 Spaces；
-- 收到 Space 变化通知后，检查每个锚点的 `NSWindow.isOnActiveSpace`；
-- 恰好一个命中时识别对应工作流；零个命中时进入未绑定状态；多个命中时进入冲突状态。
+- 身份键是 `(display UUID, managedSpaceID, space UUID)`，不包含桌面序号；
+- Space UUID 可用时优先匹配 UUID，数值 ID 只作为兼容回退；
+- 新建、删除或重排其他桌面不会改变原 Space 的身份；
+- 多块显示器各自拥有当前 Space，绑定与解析都按显示器 UUID 隔离；
+- 菜单栏点击绑定或解除时，使用鼠标点击所在显示器的 `Current Space`；
+- 收到 Space 变化通知后等待 600ms，对比三块显示器切换前后的 `Current Space`，单个显示器差量优先于可能陈旧的全局 active Space；
+- 绑定存在时每秒做一次只读差量兜底，以覆盖 `NSWorkspace` 偶尔漏掉的非全局显示器切换；没有差量时不改变上下文；
+- 读取失败时进入 `unknown`，不回退到序号或窗口位置猜测。
 
 相关公开接口：
 
 - [activeSpaceDidChangeNotification](https://developer.apple.com/documentation/appkit/nsworkspace/activespacedidchangenotification)
-- [NSWindow.isOnActiveSpace](https://developer.apple.com/documentation/appkit/nswindow/isonactivespace)
-- [NSWindow.CollectionBehavior](https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct)
+- [NSWindow.isOnActiveSpace](https://developer.apple.com/documentation/appkit/nswindow/isonactivespace)（仅用于说明旧方案边界，不再用于绑定身份）
 
-不在默认版本中调用 SkyLight / CoreGraphics 私有 Space API。私有 API 虽可读取内部 Space ID，但存在系统升级失效、签名与分发风险。
+SkyLight 是未公开系统接口，存在系统升级失效和分发风险。实现通过 `dlopen` / `dlsym`
+按运行时探测，不静态链接私有框架；当前目标是本地自用的 ad-hoc 签名应用，
+不承诺 Mac App Store 兼容性。
 
-### 锚点恢复边界
+### 恢复边界
 
-锚点窗口属于进程。正常运行期间，绑定可以无感工作；应用异常退出或系统重启后，不能把旧桌面身份当作已确认。
+稳定 Space 身份会随绑定持久化。正常退出、异常退出或系统重启后，只要该身份仍存在，
+绑定可以直接恢复，不再依赖窗口 restoration。
 
 恢复顺序：
 
-1. 尝试通过 AppKit window restoration 恢复锚点；
-2. 逐个验证恢复后的锚点是否能唯一命中当前桌面；
-3. 无法验证的绑定标记为 `needsRebind`；
-4. 用户下次进入该桌面时，只显示菜单栏内联操作“重新绑定到 ××”，不弹阻塞窗口；
+1. 启动时读取当前全部 managed Space 身份；
+2. 持久身份仍存在则恢复为 `verified`；
+3. Space 已删除，或绑定来自旧版窗口锚点 / 全局 active 算法，则标记为 `needsRebind`；
+4. SkyLight 临时不可用时保留用户绑定，但解析为 `unknown`，不删除、不猜测；
 5. 未重新绑定期间记录原始应用行为，但不归因到任何工作流。
 
 ## 概念与数据模型
@@ -86,8 +94,9 @@ unknown       当前桌面无法可靠识别
 WorkflowSpaceBinding
   id
   workflowID
-  anchorRestorationID
+  anchorRestorationID       # 仅保留用于旧数据兼容
   displayHint?
+  spaceIdentity?            # display UUID + managedSpaceID + Space UUID
   state: verified | needsRebind | conflict | released
   boundAt
   lastVerifiedAt?
@@ -145,10 +154,11 @@ WorkflowCheckpoint
 ```text
 收到 Space changed
   -> 等待 600ms 动画稳定
-  -> 读取锚点命中
-     -> 1 个：切换到对应工作流
-     -> 0 个：进入 unknown / unbound
-     -> 多个：进入 conflict，不自动归因
+  -> 比较各显示器 Current Space 的前后差量
+     -> 1 个：解析该 Space；有绑定则切换，无绑定则 unbound
+     -> 0 个：视为无净变化，不选择其他显示器
+     -> 多个：仅用全局 active Space 消歧；仍不唯一则 unknown
+
 ```
 
 同一目标在 2 秒内反复通知只保留最终状态。切换时：
@@ -249,11 +259,12 @@ WorkflowCheckpoint
 - 完成旧 Task 数据兼容解码；
 - 单测覆盖创建、切换、unknown、挂起、完成、撤销和异常恢复。
 
-### 阶段 W2：桌面锚点原型
+### 阶段 W2：稳定 Space 身份
 
 - 在单显示器上绑定三个桌面到三个工作流；
 - 连续来回切换 30 次，识别正确率 100%，稳定切换延迟小于 1 秒；
-- 没有可见窗口、Dock 图标或 Mission Control 干扰；
+- 新增、删除、重排其他桌面后，已有绑定不移位；
+- 没有额外可见窗口、Dock 图标或 Mission Control 干扰；
 - 无匹配和冲突时绝不沿用旧工作流。
 
 ### 阶段 W3：无感交互
@@ -265,7 +276,7 @@ WorkflowCheckpoint
 
 ### 阶段 W4：恢复与多显示器
 
-- 验证正常退出、崩溃、重启后的锚点恢复；
+- 验证正常退出、崩溃、重启后的稳定身份恢复；
 - 无法可靠恢复时进入 needsRebind；
 - 多显示器“独立 Spaces”模式单独验证，未通过前不宣称支持。
 
