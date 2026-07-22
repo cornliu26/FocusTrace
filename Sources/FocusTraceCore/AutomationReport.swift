@@ -74,6 +74,7 @@ public struct AutomationDailyReport: Equatable, Sendable {
     public let totalCompletedSessions: Int
     public let currentPlan: TrainingPlanRecord
     public let analysis: AnalysisResult
+    public let coaching: DailyCoachingAnalysis
 
     public init(
         reportDate: Date,
@@ -84,7 +85,8 @@ public struct AutomationDailyReport: Equatable, Sendable {
         totalWorkdays: Int,
         totalCompletedSessions: Int,
         currentPlan: TrainingPlanRecord,
-        analysis: AnalysisResult
+        analysis: AnalysisResult,
+        coaching: DailyCoachingAnalysis
     ) {
         self.reportDate = reportDate
         self.generatedAt = generatedAt
@@ -95,6 +97,116 @@ public struct AutomationDailyReport: Equatable, Sendable {
         self.totalCompletedSessions = totalCompletedSessions
         self.currentPlan = currentPlan
         self.analysis = analysis
+        self.coaching = coaching
+    }
+}
+
+public struct AutomationDailyCounts: Codable, Equatable, Sendable {
+    public let appSwitches: Int
+    public let workflowSwitches: Int
+    public let manualWorkflowSwitches: Int
+    public let suspectedDistractions: Int
+    public let confirmedDistractions: Int
+    public let trainings: Int
+    public let successfulTrainings: Int
+    public let parkings: Int
+    public let resumedParkings: Int
+}
+
+public struct AutomationPhaseTwoArtifact: Codable, Equatable, Sendable {
+    public let status: String
+    public let workdays: Int
+    public let sessions: Int
+    public let remainingWorkdays: Int
+    public let remainingSessions: Int
+    public let insights: [AnalysisInsightArtifact]
+    public let suggestionTitle: String?
+    public let suggestionEvidence: String?
+}
+
+public struct AnalysisInsightArtifact: Codable, Equatable, Sendable {
+    public let title: String
+    public let value: String
+    public let detail: String
+}
+
+public struct AutomationPlanArtifact: Codable, Equatable, Sendable {
+    public let version: Int
+    public let focusMinutes: Int
+    public let sessionsPerDay: Int
+    public let breakMinutes: Int
+    public let reminderThresholdSeconds: Int
+    public let reason: String
+}
+
+public struct AutomationReportArtifact: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let reportID: String
+    public let reportDate: Date
+    public let generatedAt: Date
+    public let counts: AutomationDailyCounts
+    public let normalized: DailyNormalizedMetrics
+    public let dataQuality: DailyDataQuality
+    public let trend: DailyTrendComparison
+    public let previousRecommendationEvaluation: DailyCoachEvaluation?
+    public let recommendation: DailyCoachRecommendation
+    public let phaseTwo: AutomationPhaseTwoArtifact
+    public let currentPlan: AutomationPlanArtifact
+
+    public init(report: AutomationDailyReport) {
+        schemaVersion = 2
+        reportID = "focustrace-\(Int(report.reportDate.timeIntervalSince1970))-\(Int(report.generatedAt.timeIntervalSince1970))"
+        reportDate = report.reportDate
+        generatedAt = report.generatedAt
+        counts = AutomationDailyCounts(
+            appSwitches: report.summary.appSwitchCount,
+            workflowSwitches: report.summary.workflowSwitchCount,
+            manualWorkflowSwitches: report.summary.taskSwitchCount,
+            suspectedDistractions: report.summary.suspectedDistractionCount,
+            confirmedDistractions: report.summary.confirmedDistractionCount,
+            trainings: report.trainingCount,
+            successfulTrainings: report.successfulTrainingCount,
+            parkings: report.summary.taskParkingCount,
+            resumedParkings: report.summary.resumedTaskCount
+        )
+        normalized = report.coaching.metrics
+        dataQuality = report.coaching.quality
+        trend = report.coaching.trend
+        previousRecommendationEvaluation = report.coaching.previousRecommendationEvaluation
+        recommendation = report.coaching.recommendation
+        currentPlan = AutomationPlanArtifact(
+            version: report.currentPlan.version,
+            focusMinutes: report.currentPlan.focusMinutes,
+            sessionsPerDay: report.currentPlan.sessionsPerDay,
+            breakMinutes: report.currentPlan.breakMinutes,
+            reminderThresholdSeconds: report.currentPlan.reminderThresholdSeconds,
+            reason: report.currentPlan.reason
+        )
+        let workdays: Int
+        let sessions: Int
+        let status: String
+        switch report.analysis.readiness {
+        case let .locked(valueWorkdays, valueSessions):
+            status = "locked"
+            workdays = valueWorkdays
+            sessions = valueSessions
+        case .ready:
+            status = "ready"
+            workdays = report.totalWorkdays
+            sessions = report.totalCompletedSessions
+        }
+        phaseTwo = AutomationPhaseTwoArtifact(
+            status: status,
+            workdays: workdays,
+            sessions: sessions,
+            remainingWorkdays: max(0, 10 - workdays),
+            remainingSessions: max(0, 20 - sessions),
+            insights: report.analysis.insights.map {
+                AnalysisInsightArtifact(title: $0.title, value: $0.value, detail: $0.detail)
+            },
+            suggestionTitle: report.analysis.suggestion?.title,
+            suggestionEvidence: report.analysis.suggestion?.evidence
+        )
     }
 }
 
@@ -103,7 +215,8 @@ public enum AutomationReportEngine {
         snapshot: FocusTraceLocalSnapshot,
         reportDate: Date,
         generatedAt: Date = Date(),
-        calendar: Calendar = .current
+        calendar: Calendar = .current,
+        previousIssuedReport: AutomationReportArtifact? = nil
     ) -> AutomationDailyReport {
         let start = calendar.startOfDay(for: reportDate)
         let end = calendar.date(byAdding: .day, value: 1, to: start)!
@@ -152,6 +265,14 @@ public enum AutomationReportEngine {
             currentPlan: plan,
             calendar: calendar
         )
+        let coaching = DailyCoachEngine.analyze(
+            snapshot: snapshot,
+            reportDate: reportDate,
+            generatedAt: generatedAt,
+            calendar: calendar,
+            previousIssuedRecommendation: previousIssuedReport?.recommendation,
+            previousIssuedMetrics: previousIssuedReport?.normalized
+        )
 
         return AutomationDailyReport(
             reportDate: start,
@@ -168,7 +289,8 @@ public enum AutomationReportEngine {
             totalWorkdays: Set(snapshot.activities.map { calendar.startOfDay(for: $0.startedAt) }).count,
             totalCompletedSessions: completedSessions.count,
             currentPlan: plan,
-            analysis: analysis
+            analysis: analysis,
+            coaching: coaching
         )
     }
 
@@ -198,18 +320,72 @@ public enum AutomationReportEngine {
             "",
             "- 应用切换：\(report.summary.appSwitchCount) 次",
             "- 桌面工作流切换：\(report.summary.workflowSwitchCount) 次",
-            "- 手动任务切换：\(report.summary.taskSwitchCount) 次",
+            "- 手动工作流切换：\(report.summary.taskSwitchCount) 次",
             "- 疑似 / 确认分心：\(report.summary.suspectedDistractionCount) / \(report.summary.confirmedDistractionCount) 次",
             "- 平均返回耗时：\(returnLatency)",
             "- 中位连续专注：\(medianFocus)",
             "- 训练：\(report.trainingCount) 次，成功 \(report.successfulTrainingCount) 次",
-            "- 任务停车 / 已返回：\(report.summary.taskParkingCount) / \(report.summary.resumedTaskCount) 次",
-            "- 停车任务平均恢复耗时：\(formatDuration(report.summary.averageTaskResumeLatency))",
+            "- 挂起工作流 / 已返回：\(report.summary.taskParkingCount) / \(report.summary.resumedTaskCount) 次",
+            "- 挂起工作流平均恢复耗时：\(formatDuration(report.summary.averageTaskResumeLatency))",
             "- 当前计划：v\(report.currentPlan.version)，\(report.currentPlan.focusMinutes) 分钟 × 每日 \(report.currentPlan.sessionsPerDay) 次",
+            "",
+            "## 数据质量与归一化",
+            "",
+            "- 有效记录：\(formatMinutes(report.coaching.metrics.recordedMinutes))",
+            "- 工作流归因：\(formatPercent(report.coaching.metrics.attributedRatio))（\(formatMinutes(report.coaching.metrics.attributedMinutes))）",
+            "- 应用切换率：\(formatDecimal(report.coaching.metrics.appSwitchesPerHour)) 次/小时",
+            "- 工作流切换率：\(formatDecimal(report.coaching.metrics.workflowSwitchesPerHour)) 次/小时",
+            "- 行为结论可信：\(report.coaching.quality.isReliableForBehavior ? "是" : "否")",
+        ]
+        if report.coaching.quality.warnings.isEmpty {
+            lines.append("- 数据质量提醒：无")
+        } else {
+            for warning in report.coaching.quality.warnings {
+                lines.append("- 数据质量提醒：\(clean(warning))")
+            }
+        }
+        lines.append(contentsOf: [
+            "",
+            "## 近 7 个有效工作日趋势",
+            "",
+            "- 可比样本：\(report.coaching.trend.baselineDays) 天",
+            "- 应用切换率变化：\(formatDelta(report.coaching.trend.appSwitchRateDeltaPercent))",
+            "- 工作流切换率变化：\(formatDelta(report.coaching.trend.workflowSwitchRateDeltaPercent))",
+            "- 工作流归因率变化：\(formatPointDelta(report.coaching.trend.attributedRatioDeltaPoints))",
+            "- 中位连续专注变化：\(formatMinuteDelta(report.coaching.trend.medianFocusDeltaMinutes))",
+            ""
+        ])
+        if let evaluation = report.coaching.previousRecommendationEvaluation {
+            lines.append(contentsOf: [
+                "## 上一项训练验证",
+                "",
+                "- 状态：\(evaluationStatus(evaluation.status))",
+                "- \(clean(evaluation.title))",
+                "- 证据：\(clean(evaluation.evidence))",
+                ""
+            ])
+        }
+        let recommendation = report.coaching.recommendation
+        lines.append(contentsOf: [
+            "## 下一项训练",
+            "",
+            "- 建议：\(clean(recommendation.title))",
+            "- 原因：\(clean(recommendation.rationale))",
+            "- 可信度：\(confidenceText(recommendation.confidence))"
+        ])
+        for evidence in recommendation.evidence {
+            lines.append("- 证据：\(clean(evidence))")
+        }
+        lines.append("- 方法：\(clean(recommendation.method.title))")
+        for (index, step) in recommendation.method.steps.enumerated() {
+            lines.append("  \(index + 1). \(clean(step))")
+        }
+        lines.append("- 成功标准：\(clean(recommendation.method.successMeasure))")
+        lines.append(contentsOf: [
             "",
             "## 阶段 2",
             ""
-        ]
+        ])
 
         switch report.analysis.readiness {
         case let .locked(workdays, sessions):
@@ -240,6 +416,13 @@ public enum AutomationReportEngine {
         return lines.joined(separator: "\n")
     }
 
+    public static func jsonData(for report: AutomationDailyReport) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        return try encoder.encode(AutomationReportArtifact(report: report))
+    }
+
     private static func clean(_ value: String) -> String {
         value.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
@@ -251,6 +434,47 @@ public enum AutomationReportEngine {
         if total >= 3600 { return "\(total / 3600) 小时 \(total / 60 % 60) 分钟" }
         if total >= 60 { return "\(total / 60) 分钟" }
         return "\(total) 秒"
+    }
+
+    private static func formatMinutes(_ value: Double) -> String {
+        String(format: "%.1f 分钟", value)
+    }
+
+    private static func formatDecimal(_ value: Double) -> String {
+        String(format: "%.1f", value)
+    }
+
+    private static func formatPercent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private static func formatDelta(_ value: Double?) -> String {
+        value.map { String(format: "%+.0f%%", $0) } ?? "样本不足"
+    }
+
+    private static func formatPointDelta(_ value: Double?) -> String {
+        value.map { String(format: "%+.0f 个百分点", $0) } ?? "样本不足"
+    }
+
+    private static func formatMinuteDelta(_ value: Double?) -> String {
+        value.map { String(format: "%+.1f 分钟", $0) } ?? "样本不足"
+    }
+
+    private static func confidenceText(_ value: DailyCoachConfidence) -> String {
+        switch value {
+        case .low: return "低"
+        case .medium: return "中"
+        case .high: return "高"
+        }
+    }
+
+    private static func evaluationStatus(_ value: DailyCoachEvaluationStatus) -> String {
+        switch value {
+        case .improved: return "已改善"
+        case .needsAdjustment: return "需调整"
+        case .notRun: return "未执行"
+        case .insufficientData: return "数据不足"
+        }
     }
 }
 

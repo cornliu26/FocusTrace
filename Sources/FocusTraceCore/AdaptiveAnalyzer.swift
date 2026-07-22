@@ -140,7 +140,7 @@ public enum AdaptiveAnalyzer {
                 id: "return-latency",
                 title: "平均返回耗时",
                 value: String(format: "%.0f 秒", average),
-                detail: "从提醒到确认返回任务"
+                detail: "从提醒到确认返回工作流"
             ))
         }
         if let bestDuration {
@@ -156,7 +156,7 @@ public enum AdaptiveAnalyzer {
                 id: "necessary-app",
                 title: "经常属于必要切换",
                 value: topNecessary.key.name,
-                detail: "\(topNecessary.value) 次标记为本任务所需"
+                detail: "\(topNecessary.value) 次标记为本工作流所需"
             ))
         }
 

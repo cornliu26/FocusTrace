@@ -8,9 +8,7 @@ struct TimelineView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                if state.currentTaskID == nil {
-                    taskContextBanner
-                }
+                nextStepBanner
                 HStack {
                     DatePicker(
                         "日期",
@@ -48,38 +46,63 @@ struct TimelineView: View {
         }
     }
 
-    private var taskContextBanner: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "tag.slash")
+    private var nextStepBanner: some View {
+        let guidance = state.flowGuidance
+        return HStack(spacing: 14) {
+            Image(systemName: guidanceIcon)
                 .font(.title2)
-                .foregroundStyle(.orange)
+                .foregroundStyle(guidanceColor)
             VStack(alignment: .leading, spacing: 4) {
-                Text(state.activeTasks.isEmpty ? "当前只能记录应用切换" : "当前没有主任务")
+                Text(guidance.title)
                     .font(.headline)
-                Text(state.activeTasks.isEmpty
-                     ? "创建至少一个任务，否则无法累积基线、识别分心或训练恢复能力。"
-                     : "请选择你正在做的任务；未标注时的切换只能用于描述性统计。")
+                Text(guidance.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 8) {
-                Button("使用方法") {
-                    state.showQuickStart = true
-                }
-                .buttonStyle(.bordered)
-                Button(state.activeTasks.isEmpty ? "创建第一个任务" : "选择当前任务") {
-                    if state.activeTasks.isEmpty {
-                        state.showTaskCreator = true
-                    } else {
-                        state.showTaskSwitcher = true
-                    }
-                }
-                .buttonStyle(.borderedProminent)
+            Button(guidance.buttonTitle) {
+                perform(guidance.action)
             }
+            .buttonStyle(.borderedProminent)
         }
         .padding(14)
-        .background(.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .background(guidanceColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var guidanceIcon: String {
+        switch state.flowGuidance.action {
+        case .resumeCapture: return "pause.circle"
+        case .createWorkflow: return "plus.circle"
+        case .bindWorkflow: return "rectangle.badge.plus"
+        case .viewFocus: return "timer"
+        case .openSchedule: return "clock.badge.exclamationmark"
+        case .startFocus: return "scope"
+        }
+    }
+
+    private var guidanceColor: Color {
+        switch state.flowGuidance.action {
+        case .resumeCapture, .createWorkflow, .bindWorkflow, .openSchedule: return .orange
+        case .viewFocus, .startFocus: return .blue
+        }
+    }
+
+    private func perform(_ action: FlowNextAction) {
+        switch action {
+        case .resumeCapture:
+            state.setCapturePaused(false)
+        case .createWorkflow:
+            state.showTaskCreator = true
+        case .bindWorkflow:
+            state.showTaskSwitcher = true
+        case .viewFocus:
+            state.selectedAppSection = .focus
+        case .openSchedule:
+            state.selectedAppSection = .settings
+        case let .startFocus(minutes):
+            state.requestStartFocus(minutes: minutes)
+            state.selectedAppSection = .focus
+        }
     }
 
     private var summaryGrid: some View {
@@ -95,7 +118,7 @@ struct TimelineView: View {
             MetricCard(
                 title: "中位连续专注",
                 value: summary.medianFocusStreak.map(durationText) ?? "—",
-                detail: "同任务允许应用"
+                detail: "同工作流允许应用"
             )
         }
     }
@@ -122,7 +145,7 @@ struct TimelineView: View {
                         }
                         .width(70)
                         TableColumn("应用") { item in Text(item.appName) }
-                        TableColumn("任务") { item in Text(state.taskName(for: item.taskID)) }
+                        TableColumn("工作流") { item in Text(state.taskName(for: item.taskID)) }
                         TableColumn("分类") { item in ClassificationBadge(classification: item.classification) }
                     }
                     .frame(minHeight: 250)
@@ -233,7 +256,7 @@ struct TimelineChart: View {
             }
 
             HStack {
-                Text("任务").frame(width: 50, alignment: .leading)
+                Text("工作流").frame(width: 50, alignment: .leading)
                 track(height: 36) { width in
                     ForEach(taskIntervals) { interval in
                         let frame = frameFor(start: interval.startedAt, end: interval.endedAt ?? now, width: width)
@@ -366,7 +389,7 @@ struct TimelineChart: View {
     }
 
     private func taskName(_ id: UUID) -> String {
-        tasks.first(where: { $0.id == id })?.title ?? "已删除任务"
+        tasks.first(where: { $0.id == id })?.title ?? "已删除工作流"
     }
 
     private func taskColor(_ id: UUID) -> Color { stableColor(id.uuidString) }
@@ -431,11 +454,11 @@ struct TimelineChart: View {
         case .screenWoke: return "屏幕唤醒"
         case .sessionBecameInactive: return "会话锁定"
         case .sessionBecameActive: return "会话恢复"
-        case .taskChanged: return "任务切换"
+        case .taskChanged: return "手动工作流切换"
         case .workflowChanged: return "桌面工作流切换"
         case .reminderSent: return "发送温和提醒"
-        case .taskParked: return "挂起任务"
-        case .taskResumed: return "恢复任务"
+        case .taskParked: return "挂起工作流"
+        case .taskResumed: return "恢复工作流"
         case .focusPaused: return "跨桌面暂停专注"
         case .focusResumed: return "返回后恢复专注"
         }
@@ -500,7 +523,7 @@ struct SwitchingScalePopover: View {
                 scaleRow(color: .red, text: "11 次以上 / 5 分钟：非常密集")
             }
 
-            Text("顶部标签取当天所有有活动的 5 分钟区间的平均值；当前为 \(averageSwitches, specifier: "%.1f") 次。它只描述 Bundle ID 之间的变化，不代表任务切换，也看不到 Chrome 内部标签页。")
+            Text("顶部标签取当天所有有活动的 5 分钟区间的平均值；当前为 \(averageSwitches, specifier: "%.1f") 次。它只描述 Bundle ID 之间的变化，不代表工作流切换，也看不到 Chrome 内部标签页。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -551,7 +574,7 @@ struct ClassificationBadge: View {
         case .necessary: return "必要"
         case .suspectedDistraction: return "疑似"
         case .confirmedDistraction: return "确认分心"
-        case .taskSwitch: return "任务切换"
+        case .taskSwitch: return "工作流切换"
         case .systemInactive: return "非活动"
         case .trackerControl: return "控制"
         }

@@ -16,9 +16,9 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
 
     func configure() {
         let actions = [
-            UNNotificationAction(identifier: Self.returnAction, title: "返回任务", options: [.foreground]),
-            UNNotificationAction(identifier: Self.necessaryAction, title: "本任务所需"),
-            UNNotificationAction(identifier: Self.switchTaskAction, title: "切换任务", options: [.foreground]),
+            UNNotificationAction(identifier: Self.returnAction, title: "返回工作流", options: [.foreground]),
+            UNNotificationAction(identifier: Self.necessaryAction, title: "本工作流所需"),
+            UNNotificationAction(identifier: Self.switchTaskAction, title: "切换工作流", options: [.foreground]),
             UNNotificationAction(identifier: Self.endSessionAction, title: "结束专注", options: [.destructive])
         ]
         let category = UNNotificationCategory(
@@ -32,7 +32,7 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
             actions: [
                 UNNotificationAction(
                     identifier: Self.resumeParkingAction,
-                    title: "返回任务",
+                    title: "返回工作流",
                     options: [.foreground]
                 ),
                 UNNotificationAction(
@@ -45,7 +45,15 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         let center = UNUserNotificationCenter.current()
         center.setNotificationCategories([category, taskParkingCategory])
         center.delegate = self
+    }
+
+    /// Ask only when the user starts a feature that actually needs a system
+    /// notification. This keeps first launch focused on naming the workflow.
+    func requestAuthorizationIfNeeded() {
         Task {
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            guard settings.authorizationStatus == .notDetermined else { return }
             _ = try? await center.requestAuthorization(options: [.alert, .sound])
         }
     }

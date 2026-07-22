@@ -22,7 +22,7 @@ final class AttentionCueOverlayController {
     private let model = AttentionCueOverlayModel()
     private var panel: NSPanel?
     private var collapseTask: Task<Void, Never>?
-    private let panelSize = NSSize(width: 330, height: 88)
+    private let panelSize = NSSize(width: 300, height: 64)
 
     func updateProgress(
         taskName: String,
@@ -66,7 +66,7 @@ final class AttentionCueOverlayController {
                 ? "10 分钟切换了 \(switchCount) 次 · 先挂起或回到主线"
                 : "10 分钟切换了 \(switchCount) 次 · 停一下，确认下一步"
         } else {
-            model.message = "基线观察：10 分钟切换了 \(switchCount) 次任务"
+            model.message = "基线观察：10 分钟切换了 \(switchCount) 次工作流"
         }
         model.mode = .warning
         ensurePanel(on: displayIdentifier)
@@ -112,7 +112,7 @@ final class AttentionCueOverlayController {
         let frame = screen.visibleFrame
         panel.setFrame(
             NSRect(
-                x: frame.maxX - panelSize.width - 8,
+                x: frame.maxX - panelSize.width,
                 y: frame.midY - panelSize.height / 2,
                 width: panelSize.width,
                 height: panelSize.height
@@ -156,49 +156,44 @@ private struct AttentionCueOverlayView: View {
                     .transition(.opacity)
             } else {
                 expandedCue
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    .transition(.opacity)
             }
         }
-        .frame(width: 330, height: 88, alignment: .trailing)
-        .animation(.easeOut(duration: 0.22), value: model.mode)
+        .frame(width: 300, height: 64, alignment: .trailing)
+        .animation(.easeOut(duration: 0.16), value: model.mode)
     }
 
     private var progressRail: some View {
         ZStack(alignment: .bottom) {
-            Capsule().fill(.secondary.opacity(0.16))
-            Capsule()
+            Rectangle().fill(.secondary.opacity(0.12))
+            Rectangle()
                 .fill(Color.blue.opacity(0.85))
-                .frame(height: max(6, 72 * model.progress))
+                .frame(height: max(4, 52 * model.progress))
         }
-        .frame(width: 7, height: 72)
-        .padding(.trailing, 1)
-        .accessibilityLabel("当前任务五分钟连续进度")
+        .frame(width: 3, height: 52)
+        .accessibilityLabel("当前工作流五分钟连续进度")
         .accessibilityValue("\(Int(model.progress * 100))%")
     }
 
     private var expandedCue: some View {
-        HStack(spacing: 12) {
-            Image(systemName: iconName)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(accentColor)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 10) {
+            Rectangle()
+                .fill(accentColor)
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(model.message)
-                    .font(.headline)
+                    .font(.callout.weight(.semibold))
                     .lineLimit(1)
-                Text(model.taskName)
-                    .font(.caption)
+                Text("工作流 · \(model.taskName)")
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
         }
-        .padding(.horizontal, 16)
-        .frame(width: 318, height: 70)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(accentColor.opacity(0.42), lineWidth: 1)
-        }
+        .padding(.trailing, 12)
+        .frame(width: 292, height: 48)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
     }
 
     private var accentColor: Color {
@@ -206,14 +201,6 @@ private struct AttentionCueOverlayView: View {
         case .progress: return .blue
         case .reward: return .green
         case .warning: return model.isStrongWarning ? .orange : .yellow
-        }
-    }
-
-    private var iconName: String {
-        switch model.mode {
-        case .progress: return "scope"
-        case .reward: return "sparkles"
-        case .warning: return model.isStrongWarning ? "arrow.triangle.branch" : "pause.circle.fill"
         }
     }
 }

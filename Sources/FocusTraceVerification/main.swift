@@ -162,6 +162,86 @@ private func phaseTwoFixture() -> (
 
 private var suite = VerificationSuite()
 
+suite.run("流程引导始终只给出当前下一步") {
+    let create = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: false,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    try expect(create.action == .createWorkflow, "无工作流时应先引导创建")
+
+    let bind = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    try expect(bind.action == .bindWorkflow, "有工作流但桌面未绑定时应先引导绑定")
+
+    let start = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 20
+    )
+    try expect(start.action == .startFocus(minutes: 20), "记录就绪后应只显示开始专注")
+
+    let active = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: 125,
+        planMinutes: 20
+    )
+    try expect(active.action == .viewFocus, "专注中应只引导查看当前轮次")
+    try expect(active.detail.contains("02:05"), "专注引导应显示剩余时间")
+
+    let paused = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: true,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 20
+    )
+    try expect(paused.action == .resumeCapture, "记录暂停时应只引导恢复")
+
+    let outsideSchedule = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: false,
+        focusRemainingSeconds: nil,
+        planMinutes: 20
+    )
+    try expect(outsideSchedule.action == .openSchedule, "工作时段外应只引导调整记录时段")
+}
+
+suite.run("首次专注工具建议只使用当前工作流的真实应用") {
+    let taskID = UUID()
+    let otherTaskID = UUID()
+    let start = Date(timeIntervalSince1970: 1_000)
+    let terminal = AppIdentity(bundleID: "com.apple.Terminal", name: "Terminal")
+    let codex = AppIdentity(bundleID: "com.openai.codex", name: "Codex")
+    let helper = AppIdentity(bundleID: "com.example.Helper", name: "Helper")
+    let activities = [
+        ActivityRecord(app: terminal, startedAt: start, endedAt: start.addingTimeInterval(600), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: codex, startedAt: start, endedAt: start.addingTimeInterval(300), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: helper, startedAt: start, endedAt: start.addingTimeInterval(900), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: codex, startedAt: start, endedAt: start.addingTimeInterval(1_200), taskID: otherTaskID, focusSessionID: nil, classification: .allowed)
+    ]
+    let suggestions = ToolSuggestionEngine.suggestions(from: activities, taskID: taskID)
+    try expect(suggestions == [terminal, codex], "建议应按当前工作流使用时长排序并排除 Helper")
+}
+
 suite.run("应用切换状态机按事件闭合片段") {
     let start = Date(timeIntervalSince1970: 1_000)
     let appA = AppIdentity(bundleID: "a", name: "A")
@@ -904,6 +984,133 @@ suite.run("阶段 2 完整 10 日 / 20 次样本识别模式") {
     try expect(result.insights.first(where: { $0.id == "necessary-app" })?.value == "Safari", "必要应用统计错误")
 }
 
+suite.run("每日教练先校验数据质量再给行为建议") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [
+            ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(30 * 60), taskID: task, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: app, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(60 * 60), taskID: nil, focusSessionID: nil, classification: .allowed)
+        ],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    try expect(result.metrics.attributedRatio == 0.5, "归因率应为 50%")
+    try expect(!result.quality.isReliableForBehavior, "低归因率不得生成可靠行为结论")
+    try expect(result.recommendation.kind == .repairAttribution, "应先建议修复桌面绑定")
+}
+
+suite.run("每日教练把极密 Space 信号视为采集风险") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let intervals = (0..<31).map { index in
+        TaskIntervalRecord(
+            taskID: task,
+            startedAt: day.addingTimeInterval(Double(index * 120)),
+            endedAt: day.addingTimeInterval(Double((index + 1) * 120)),
+            workflowSource: .space
+        )
+    }
+    let snapshot = FocusTraceLocalSnapshot(
+        taskIntervals: intervals,
+        activities: [ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed)],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    try expect(!result.quality.isReliableForBehavior, "极密 Space 信号不得用于行为判断")
+    try expect(result.quality.warnings.contains { $0.contains("Space 识别噪声") }, "应给出 Space 数据质量警告")
+    try expect(result.recommendation.kind == .verifySpaceTracking, "应先建议校准 Space 记录")
+}
+
+suite.run("每日教练执行训练并在下一工作日验证结果") {
+    let calendar = utcCalendar()
+    let firstDay = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let secondDay = calendar.date(byAdding: .day, value: 1, to: firstDay)!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let session = FocusSessionRecord(
+        taskID: task,
+        startedAt: secondDay.addingTimeInterval(10 * 60),
+        endedAt: secondDay.addingTimeInterval(25 * 60),
+        targetSeconds: 15 * 60,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0
+    )
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [
+            ActivityRecord(app: app, startedAt: firstDay, endedAt: firstDay.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: app, startedAt: secondDay, endedAt: secondDay.addingTimeInterval(60 * 60), taskID: task, focusSessionID: session.id, classification: .allowed)
+        ],
+        focusSessions: [session],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: secondDay,
+        generatedAt: secondDay.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    try expect(result.previousRecommendationEvaluation?.status == .improved, "成功训练应闭环为已改善")
+    try expect(result.previousRecommendationEvaluation?.evidence.contains("1/1") == true, "验证证据应包含训练结果")
+}
+
+suite.run("每日教练验证实际发出的建议而不是事后重算") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 21, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let issued = DailyCoachRecommendation(
+        kind: .repairAttribution,
+        title: "fix attribution",
+        rationale: "test",
+        evidence: [],
+        confidence: .high,
+        action: .bindWorkflow,
+        method: DailyTrainingMethod(title: "bind", steps: ["bind"], successMeasure: "70%")
+    )
+    let previousMetrics = DailyNormalizedMetrics(
+        recordedMinutes: 60,
+        attributedMinutes: 30,
+        attributedRatio: 0.5,
+        appSwitchesPerHour: 10,
+        workflowSwitchesPerHour: 2,
+        medianFocusMinutes: nil,
+        trainingCount: 0,
+        successfulTrainingCount: 0,
+        feedbackCompletionRatio: nil,
+        parkingCount: 0
+    )
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed)],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar,
+        previousIssuedRecommendation: issued,
+        previousIssuedMetrics: previousMetrics
+    )
+    try expect(result.previousRecommendationEvaluation?.status == .improved, "工作流归因恢复应验证为已改善")
+    try expect(result.previousRecommendationEvaluation?.title.contains("归因") == true, "应评价实际发出的归因建议")
+}
+
 suite.run("Codex 日报只暴露聚合结果") {
     let fixture = phaseTwoFixture()
     let report = AutomationReportEngine.makeReport(
@@ -916,10 +1123,16 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(markdown.contains("状态：已解锁"), "日报应显示阶段 2 状态")
     try expect(markdown.contains("Codex → 微信"), "日报应包含聚合模式")
     try expect(markdown.contains("本周单项建议"), "日报应限制为单项建议")
-    try expect(markdown.contains("任务停车 / 已返回：2 / 1 次"), "日报应包含停车聚合指标")
+    try expect(markdown.contains("挂起工作流 / 已返回：2 / 1 次"), "日报应包含挂起聚合指标")
     try expect(!markdown.contains("PRIVATE_RESUME_CUE"), "日报不应暴露恢复线索")
     try expect(!markdown.contains("com.openai.codex"), "日报不应泄露 Bundle ID")
     try expect(!markdown.contains(fixture.snapshot.activities[0].id.uuidString), "日报不应泄露原始事件 ID")
+    let json = try AutomationReportEngine.jsonData(for: report)
+    let jsonText = String(decoding: json, as: UTF8.self)
+    try expect(jsonText.contains("\"schemaVersion\" : 2"), "结构化日报应包含协议版本")
+    try expect(jsonText.contains("\"recommendation\""), "结构化日报应包含单项训练")
+    try expect(!jsonText.contains("PRIVATE_RESUME_CUE"), "结构化日报不应暴露恢复线索")
+    try expect(!jsonText.contains("com.openai.codex"), "结构化日报不应泄露 Bundle ID")
 }
 
 suite.run("本地 store.json 兼容解码") {

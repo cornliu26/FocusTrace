@@ -4,75 +4,95 @@ import FocusTraceCore
 struct TaskEditorSheet: View {
     @ObservedObject var state: ApplicationState
     let editingTask: FocusTaskModel?
+    let bindCurrentSpaceOnCreate: Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var title: String
     @State private var outcome: String
     @State private var selectedApps: Set<String>
     @State private var runningApps: [AppIdentity] = []
+    @State private var showDetails: Bool
 
     private var reusableTasks: [FocusTaskModel] {
         state.activeTasks.filter { $0.id != editingTask?.id && !$0.allowedBundleIDs.isEmpty }
     }
 
-    init(state: ApplicationState, editingTask: FocusTaskModel? = nil) {
+    init(
+        state: ApplicationState,
+        editingTask: FocusTaskModel? = nil,
+        bindCurrentSpaceOnCreate: Bool = false
+    ) {
         self.state = state
         self.editingTask = editingTask
+        self.bindCurrentSpaceOnCreate = bindCurrentSpaceOnCreate
         _title = State(initialValue: editingTask?.title ?? "")
         _outcome = State(initialValue: editingTask?.expectedOutcome ?? "")
         _selectedApps = State(initialValue: Set(editingTask?.allowedBundleIDs ?? []))
+        _showDetails = State(initialValue: editingTask != nil)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(editingTask == nil ? "新建任务" : "编辑任务")
+            Text(editingTask == nil ? "新建工作流" : "编辑工作流")
                 .font(.title2.bold())
-            TextField("任务名称", text: $title)
-            TextField("期望产出 / 当前上下文（可选）", text: $outcome)
-
-            HStack {
-                Text("此任务可能用到的工具")
-                    .font(.headline)
-                Spacer()
-                Menu("复用已有任务的工具") {
-                    ForEach(reusableTasks) { task in
-                        Button(task.title) { reuseApps(from: task) }
-                    }
-                }
-                .disabled(reusableTasks.isEmpty)
-            }
-            Text("允许应用是工具集合，不是任务归属规则。Chrome 可以同时属于多个任务；FocusTrace 不读取标签页，也不会把 Chrome 内部跳转推断为任务切换。")
+            TextField("工作流名称", text: $title)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.large)
+            Text("先保存名称就可以开始；其余信息只在你需要专注训练时再补。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
-            HStack {
-                Text("已选择 \(selectedApps.count) 个应用")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                if selectedApps.isEmpty {
-                    Text("专注训练前建议至少选择一个")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-            }
+            DisclosureGroup("目标与允许应用（可稍后设置）", isExpanded: $showDetails) {
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField("期望产出 / 当前上下文（可选）", text: $outcome)
+                        .textFieldStyle(.roundedBorder)
 
-            List(runningApps, id: \.bundleID) { app in
-                Toggle(isOn: binding(for: app.bundleID)) {
-                    VStack(alignment: .leading) {
-                        Text(app.name)
-                        Text(app.bundleID)
+                    HStack {
+                        Text("专注时允许的工具")
+                            .font(.headline)
+                        Spacer()
+                        Menu("复用其他工作流") {
+                            ForEach(reusableTasks) { task in
+                                Button(task.title) { reuseApps(from: task) }
+                            }
+                        }
+                        .disabled(reusableTasks.isEmpty)
+                    }
+                    Text("只影响专注提醒；普通记录不要求设置。Chrome 可以同时属于多个工作流。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    HStack {
+                        Text("已选择 \(selectedApps.count) 个应用")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
+                        Spacer()
+                        if selectedApps.isEmpty {
+                            Text("首次专注前再设置即可")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
                     }
+
+                    List(runningApps, id: \.bundleID) { app in
+                        Toggle(isOn: binding(for: app.bundleID)) {
+                            VStack(alignment: .leading) {
+                                Text(app.name)
+                                Text(app.bundleID)
+                                    .font(.caption2)
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                    .frame(height: 245)
                 }
+                .padding(.top, 10)
             }
-            .frame(minHeight: 260)
 
             HStack {
                 Button("取消") { dismiss() }
                 Spacer()
-                Button("保存") {
+                Button(editingTask == nil ? "创建工作流" : "保存") {
                     if let editingTask {
                         state.updateTask(
                             id: editingTask.id,
@@ -81,11 +101,19 @@ struct TaskEditorSheet: View {
                             allowedBundleIDs: selectedApps
                         )
                     } else {
-                        state.createTask(
-                            title: title,
-                            expectedOutcome: outcome,
-                            allowedBundleIDs: selectedApps
-                        )
+                        if bindCurrentSpaceOnCreate {
+                            state.createWorkflowAndBindCurrentSpace(
+                                title: title,
+                                expectedOutcome: outcome,
+                                allowedBundleIDs: selectedApps
+                            )
+                        } else {
+                            state.createTask(
+                                title: title,
+                                expectedOutcome: outcome,
+                                allowedBundleIDs: selectedApps
+                            )
+                        }
                     }
                     dismiss()
                 }
@@ -94,7 +122,7 @@ struct TaskEditorSheet: View {
             }
         }
         .padding(22)
-        .frame(width: 560, height: 520)
+        .frame(width: 560, height: showDetails ? 560 : 230)
         .onAppear { loadVisibleApps() }
     }
 
@@ -132,7 +160,7 @@ struct TaskSwitcherSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(state.isSpaceWorkflowModeEnabled ? "绑定当前桌面到工作流" : "切换主任务")
+            Text(state.isSpaceWorkflowModeEnabled ? "绑定当前桌面到工作流" : "切换工作流")
                 .font(.title2.bold())
             List(state.activeTasks) { task in
                 Button {
@@ -163,7 +191,7 @@ struct TaskSwitcherSheet: View {
                 .buttonStyle(.plain)
             }
             HStack {
-                Button("新建任务") { showingNewTask = true }
+                Button("新建工作流") { showingNewTask = true }
                 Spacer()
                 Button("取消") {
                     state.showTaskSwitcher = false
@@ -174,7 +202,10 @@ struct TaskSwitcherSheet: View {
         .padding(20)
         .frame(width: 480, height: 420)
         .sheet(isPresented: $showingNewTask) {
-            TaskEditorSheet(state: state)
+            TaskEditorSheet(
+                state: state,
+                bindCurrentSpaceOnCreate: state.currentSpaceWorkflowID == nil
+            )
         }
     }
 }
@@ -193,9 +224,9 @@ struct TaskParkingSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("挂起当前任务")
+                Text("挂起当前工作流")
                     .font(.title2.bold())
-                Text(state.currentTask?.title ?? "未选择任务")
+                Text(state.currentTask?.title ?? "未选择工作流")
                     .foregroundStyle(.secondary)
             }
 
@@ -217,10 +248,16 @@ struct TaskParkingSheet: View {
                 Text("30 分钟").tag(Int?.some(30))
             }
 
-            Picker("接下来做", selection: $destinationTaskID) {
-                Text("暂不选择").tag(UUID?.none)
-                ForEach(destinationTasks) { task in
-                    Text(task.title).tag(UUID?.some(task.id))
+            if state.isSpaceWorkflowModeEnabled {
+                Label("挂起后直接切换 macOS 桌面，目标工作流会自动恢复。", systemImage: "rectangle.2.swap")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                Picker("接下来做", selection: $destinationTaskID) {
+                    Text("暂不选择").tag(UUID?.none)
+                    ForEach(destinationTasks) { task in
+                        Text(task.title).tag(UUID?.some(task.id))
+                    }
                 }
             }
 
@@ -236,11 +273,11 @@ struct TaskParkingSheet: View {
                     dismiss()
                 }
                 Spacer()
-                Button(destinationTaskID == nil ? "挂起任务" : "挂起并切换") {
+                Button(parkingButtonTitle) {
                     state.parkCurrentTask(
                         resumeCue: resumeCue,
                         reminderMinutes: reminderMinutes,
-                        switchTo: destinationTaskID
+                        switchTo: state.isSpaceWorkflowModeEnabled ? nil : destinationTaskID
                     )
                     dismiss()
                 }
@@ -251,9 +288,14 @@ struct TaskParkingSheet: View {
         .padding(24)
         .frame(width: 540)
         .onAppear {
-            if destinationTaskID == nil {
+            if !state.isSpaceWorkflowModeEnabled && destinationTaskID == nil {
                 destinationTaskID = destinationTasks.first?.id
             }
         }
+    }
+
+    private var parkingButtonTitle: String {
+        if state.isSpaceWorkflowModeEnabled { return "挂起，接着切换桌面" }
+        return destinationTaskID == nil ? "挂起工作流" : "挂起并切换"
     }
 }

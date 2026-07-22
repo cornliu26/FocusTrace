@@ -52,6 +52,8 @@ final class ApplicationState: ObservableObject {
     @Published var showTaskCreator = false
     @Published var showTaskParking = false
     @Published var showQuickStart = false
+    @Published var showFocusToolSetup = false
+    @Published var selectedAppSection: AppSection? = .focus
     @Published var errorMessage: String?
     @Published private(set) var isSystemActive = true
 
@@ -78,6 +80,7 @@ final class ApplicationState: ObservableObject {
     private var lastRewardedMilestoneMinutes = 0
     private var lastSwitchCueAt: Date?
     private var lastSwitchCueLevel: AttentionCueLevel = .none
+    private var pendingRequestedFocusMinutes: Int?
 
     init(store: FocusTraceStore, preferences: AppPreferences = AppPreferences()) {
         self.store = store
@@ -112,6 +115,17 @@ final class ApplicationState: ObservableObject {
     var currentFocus: FocusSessionModel? {
         guard let currentFocusID else { return nil }
         return focusSessions.first { $0.id == currentFocusID }
+    }
+
+    var flowGuidance: FlowGuidance {
+        FlowGuidanceEngine.guidance(
+            hasOpenWorkflows: !activeTasks.isEmpty,
+            currentWorkflowTitle: currentTask?.title,
+            capturePaused: preferences.capturePaused,
+            isWithinSchedule: preferences.isWithinWorkSchedule(now),
+            focusRemainingSeconds: currentFocusID == nil ? nil : focusRemainingSeconds,
+            planMinutes: currentPlan.focusMinutes
+        )
     }
 
     var isSpaceWorkflowModeEnabled: Bool {
@@ -266,6 +280,21 @@ final class ApplicationState: ObservableObject {
         )
     }
 
+    var selectedCoachingAnalysis: DailyCoachingAnalysis {
+        DailyCoachEngine.analyze(
+            snapshot: FocusTraceLocalSnapshot(
+                taskIntervals: taskIntervals.map(\.record),
+                activities: activities.map(\.record),
+                focusSessions: focusSessions.map(\.record),
+                interruptions: interruptions.map(\.record),
+                trainingPlans: trainingPlans.map(\.record),
+                taskParkings: taskParkings.map(\.record)
+            ),
+            reportDate: selectedDate,
+            generatedAt: now
+        )
+    }
+
     var analysisResult: AnalysisResult {
         let plan = currentPlan
         let result = AdaptiveAnalyzer.analyze(
@@ -350,13 +379,16 @@ final class ApplicationState: ObservableObject {
         allowedBundleIDs: Set<String>
     ) {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty, !allowedBundleIDs.isEmpty else { return }
+        guard !cleanTitle.isEmpty else { return }
         createTask(
             title: cleanTitle,
             expectedOutcome: expectedOutcome,
             allowedBundleIDs: allowedBundleIDs
         )
         preferences.completeOnboarding()
+        if let currentTaskID {
+            bindCurrentSpace(to: currentTaskID)
+        }
         refreshCaptureForCurrentState()
     }
 
@@ -390,14 +422,15 @@ final class ApplicationState: ObservableObject {
 
     func createWorkflowAndBindCurrentSpace(
         title: String,
-        expectedOutcome: String = ""
+        expectedOutcome: String = "",
+        allowedBundleIDs: Set<String> = []
     ) {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { return }
         let workflow = FocusTaskModel(
             title: cleanTitle,
             expectedOutcome: expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines),
-            allowedBundleIDs: []
+            allowedBundleIDs: Array(allowedBundleIDs).sorted()
         )
         store.insert(workflow)
         tasks.append(workflow)
@@ -672,6 +705,9 @@ final class ApplicationState: ObservableObject {
         let reminder = reminderMinutes.flatMap {
             Calendar.current.date(byAdding: .minute, value: max(1, $0), to: date)
         }
+        if reminder != nil {
+            notificationRouter.requestAuthorizationIfNeeded()
+        }
         let parking = TaskParkingModel(
             taskID: taskID,
             parkedAt: date,
@@ -695,6 +731,14 @@ final class ApplicationState: ObservableObject {
 
     func resumeTaskParking(_ id: UUID) {
         guard let parking = taskParkings.first(where: { $0.id == id && $0.isActive }) else { return }
+        if isSpaceWorkflowModeEnabled {
+            // FocusTrace cannot move macOS to another Space. Keep the parked
+            // item unresolved and show its recovery cue until the user returns
+            // to the workflow's bound desktop.
+            selectedAppSection = .focus
+            showMainWindow()
+            return
+        }
         switchTask(to: parking.taskID)
         showMainWindow()
     }
@@ -719,6 +763,33 @@ final class ApplicationState: ObservableObject {
         resegmentCurrentApp(at: focus.startedAt)
         startFocusClock()
         saveOrReport()
+    }
+
+    func requestStartFocus(minutes: Int? = nil) {
+        guard let task = currentTask, currentFocusID == nil else { return }
+        notificationRouter.requestAuthorizationIfNeeded()
+        if task.allowedBundleIDs.isEmpty {
+            pendingRequestedFocusMinutes = minutes
+            showFocusToolSetup = true
+            selectedAppSection = .focus
+            return
+        }
+        startFocus(minutes: minutes)
+    }
+
+    func confirmFocusToolsAndStart(_ bundleIDs: Set<String>) {
+        guard let task = currentTask, !bundleIDs.isEmpty else { return }
+        task.allowedBundleIDs = Array(bundleIDs).sorted()
+        let minutes = pendingRequestedFocusMinutes
+        pendingRequestedFocusMinutes = nil
+        showFocusToolSetup = false
+        saveOrReport()
+        startFocus(minutes: minutes)
+    }
+
+    func cancelFocusToolSetup() {
+        pendingRequestedFocusMinutes = nil
+        showFocusToolSetup = false
     }
 
     func endFocus() {
@@ -944,7 +1015,7 @@ final class ApplicationState: ObservableObject {
 
     func taskName(for id: UUID?) -> String {
         guard let id else { return "未标注" }
-        return tasks.first(where: { $0.id == id })?.title ?? "已删除任务"
+        return tasks.first(where: { $0.id == id })?.title ?? "已删除工作流"
     }
 
     func verifiedSpaceBindingCount(for workflowID: UUID) -> Int {
@@ -988,6 +1059,17 @@ final class ApplicationState: ObservableObject {
         return appsByBundleID.values.sorted {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
+    }
+
+    func suggestedAppsForCurrentWorkflow(limit: Int = 8) -> [AppIdentity] {
+        guard let currentTaskID else { return [] }
+        return ToolSuggestionEngine.suggestions(
+            from: activities.map(\.record),
+            taskID: currentTaskID,
+            now: now,
+            limit: limit
+        )
+        .filter { $0.bundleID != Bundle.main.bundleIdentifier }
     }
 
     private func isSelectableTool(_ app: AppIdentity) -> Bool {
@@ -1716,7 +1798,7 @@ final class ApplicationState: ObservableObject {
         case let .conflict(workflowIDs):
             switchTask(to: nil, source: source, at: date)
             let names = workflowIDs.map { taskName(for: $0) }.joined(separator: "、")
-            errorMessage = "当前桌面检测到多个工作流锚点（\(names)），已停止任务归因。请解除后重新绑定。"
+            errorMessage = "当前桌面检测到多个工作流锚点（\(names)），已停止工作流归因。请解除后重新绑定。"
         }
         updateClock(to: date)
     }

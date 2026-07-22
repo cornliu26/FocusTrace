@@ -13,5 +13,14 @@
 
 - Never commit generated reports, local application data, or files from `~/Library/Application Support/FocusTrace`.
 - Do not inspect or expose raw activity logs for report/review requests.
-- For a daily aggregate review, run `./Scripts/generate-daily-report.sh` and read only `.focustrace/reports/latest.md`.
+- For a daily aggregate review, run `./Scripts/generate-daily-report.sh` and read only `.focustrace/reports/latest.json` and `.focustrace/reports/latest.md`.
+- Both report artifacts must remain aggregate-only: no raw activity rows, Bundle IDs, event IDs, window titles, URLs, input content, or task parking recovery text.
 - Reporting and deployment must not automatically alter training plans, allowed applications, notification settings, or other user preferences.
+
+## UX invariants
+
+- Keep the first-run mandatory path to one meaningful input: the current workflow name.
+- Use “工作流” consistently in user-facing copy; “task” remains an internal model name only.
+- The menu bar and main window must expose one shared primary next action through `FlowGuidanceEngine`.
+- Keep schedule tuning, expected outcomes, allowed applications, plan history, exports, and deletion controls out of the primary daily path.
+- In Space workflow mode, switching desktops is the workflow switch. Do not ask the user to select a destination workflow when parking work.

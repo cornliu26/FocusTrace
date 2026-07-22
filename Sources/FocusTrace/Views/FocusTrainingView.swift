@@ -7,11 +7,11 @@ struct FocusTrainingView: View {
     @State private var editingTask: FocusTaskModel?
     @State private var workflowToComplete: FocusTaskModel?
     @State private var showCompletedWorkflows = false
+    @State private var showWorkflowManagement = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                baselineCard
                 currentSessionCard
                 if !state.activeTaskParkings.isEmpty {
                     parkedTasksCard
@@ -19,6 +19,7 @@ struct FocusTrainingView: View {
                 if let proposal = state.trainingProposal {
                     proposalCard(proposal)
                 }
+                baselineCard
                 taskCard
                 privacyNote
             }
@@ -26,7 +27,10 @@ struct FocusTrainingView: View {
             .frame(maxWidth: 820, alignment: .leading)
         }
         .sheet(isPresented: $showingNewTask) {
-            TaskEditorSheet(state: state)
+            TaskEditorSheet(
+                state: state,
+                bindCurrentSpaceOnCreate: state.currentSpaceWorkflowID == nil
+            )
         }
         .sheet(item: $editingTask) { task in
             TaskEditorSheet(state: state, editingTask: task)
@@ -73,16 +77,16 @@ struct FocusTrainingView: View {
 
     private var baselineGuidance: String {
         if state.activeTasks.isEmpty {
-            return "还没有任务：当前记录不会累积基线。请先创建任务。"
+            return "还没有工作流：当前记录不会累积基线。请先创建工作流。"
         }
         if state.currentTaskID == nil {
-            return "请先选择当前任务；未标注的时间不计入 3 日基线。"
+            return "请先绑定当前工作流；未标注的时间不计入 3 日基线。"
         }
-        return "前三个工作日只观察，不发送分心提醒。请通过菜单栏及时切换任务标签。"
+        return "前三个工作日只观察，不发送分心提醒。之后切换桌面即可切换工作流。"
     }
 
     private var currentSessionCard: some View {
-        GroupBox("当前训练") {
+        GroupBox(state.currentFocus == nil ? "下一步" : "当前训练") {
             VStack(alignment: .leading, spacing: 16) {
                 if let focus = state.currentFocus {
                     HStack(alignment: .firstTextBaseline) {
@@ -119,48 +123,51 @@ struct FocusTrainingView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Button("切换任务") { state.showTaskSwitcher = true }
+                            Button("切换工作流") { state.showTaskSwitcher = true }
                         }
                         Button("Agent 等待：挂起并切换") { state.showTaskParking = true }
                     }
                 } else {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(state.currentTask?.title ?? "请先选择一个主任务")
-                                .font(.title2.bold())
-                            if let outcome = state.currentTask?.expectedOutcome, !outcome.isEmpty {
-                                Text("期望产出：\(outcome)")
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text("今日已开始 \(state.todayTrainingCount)/\(state.currentPlan.sessionsPerDay) 次")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        if state.currentTaskID != nil {
-                            VStack(alignment: .trailing, spacing: 8) {
-                                Button("开始 \(state.currentPlan.focusMinutes) 分钟") {
-                                    state.startFocus()
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
-                                Button("先挂起当前任务") {
-                                    state.showTaskParking = true
-                                }
-                            }
-                        } else {
-                            Button("选择任务") { state.showTaskSwitcher = true }
-                                .buttonStyle(.borderedProminent)
-                        }
-                    }
+                    idleGuidance
                 }
             }
             .padding(8)
         }
     }
 
+    private var idleGuidance: some View {
+        let guidance = state.flowGuidance
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(guidance.title)
+                        .font(.title2.bold())
+                    Text(guidance.detail)
+                        .foregroundStyle(.secondary)
+                    if state.currentTaskID != nil {
+                        Text("今日已开始 \(state.todayTrainingCount)/\(state.currentPlan.sessionsPerDay) 次")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer()
+                Button(guidance.buttonTitle) {
+                    perform(guidance.action)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            }
+            if state.currentTaskID != nil {
+                Button("Agent 等待：先留一句恢复线索") {
+                    state.showTaskParking = true
+                }
+                .buttonStyle(.borderless)
+            }
+        }
+    }
+
     private var parkedTasksCard: some View {
-        GroupBox("待返回任务") {
+        GroupBox("待返回工作流") {
             VStack(spacing: 0) {
                 ForEach(state.activeTaskParkings) { parking in
                     HStack(alignment: .top, spacing: 12) {
@@ -186,8 +193,14 @@ struct FocusTrainingView: View {
                         Spacer()
                         Button("不再返回") { state.dismissTaskParking(parking.id) }
                             .buttonStyle(.borderless)
-                        Button("继续任务") { state.resumeTaskParking(parking.id) }
-                            .buttonStyle(.borderedProminent)
+                        if state.isSpaceWorkflowModeEnabled {
+                            Label("切回对应桌面继续", systemImage: "rectangle.2.swap")
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.blue)
+                        } else {
+                            Button("继续工作流") { state.resumeTaskParking(parking.id) }
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
                     .padding(.vertical, 10)
                     if parking.id != state.activeTaskParkings.last?.id { Divider() }
@@ -213,7 +226,14 @@ struct FocusTrainingView: View {
     }
 
     private var taskCard: some View {
-        GroupBox("工作流、桌面与允许应用") {
+        GroupBox {
+            DisclosureGroup(
+                "管理工作流与允许应用",
+                isExpanded: Binding(
+                    get: { showWorkflowManagement || state.activeTasks.isEmpty },
+                    set: { showWorkflowManagement = $0 }
+                )
+            ) {
             VStack(spacing: 0) {
                 ForEach(state.activeTasks) { task in
                     HStack {
@@ -263,14 +283,14 @@ struct FocusTrainingView: View {
                 }
                 if state.activeTasks.isEmpty {
                     ContentUnavailableView(
-                        "还没有任务",
+                        "还没有工作流",
                         systemImage: "checklist",
-                        description: Text("新建任务并选择它需要使用的应用。")
+                        description: Text("先起一个名称即可，允许应用可以稍后设置。")
                     )
                     .frame(height: 150)
                 }
                 HStack {
-                    Button("新建任务", systemImage: "plus") { showingNewTask = true }
+                    Button("新建工作流", systemImage: "plus") { showingNewTask = true }
                     Spacer()
                 }
                 .padding(.top, 12)
@@ -301,6 +321,7 @@ struct FocusTrainingView: View {
                 }
             }
             .padding(8)
+            }
         }
     }
 
@@ -316,6 +337,102 @@ struct FocusTrainingView: View {
     private func format(_ seconds: Int) -> String {
         if seconds == 0 && state.currentFocusID != nil { return "已完成" }
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func perform(_ action: FlowNextAction) {
+        switch action {
+        case .resumeCapture:
+            state.setCapturePaused(false)
+        case .createWorkflow:
+            showingNewTask = true
+            showWorkflowManagement = true
+        case .bindWorkflow:
+            state.showTaskSwitcher = true
+        case .viewFocus:
+            break
+        case .openSchedule:
+            state.selectedAppSection = .settings
+        case let .startFocus(minutes):
+            state.requestStartFocus(minutes: minutes)
+        }
+    }
+}
+
+struct FocusToolSetupSheet: View {
+    @ObservedObject var state: ApplicationState
+    @State private var apps: [AppIdentity] = []
+    @State private var selectedBundleIDs = Set<String>()
+    @State private var usedRecentHistory = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("第一次专注前，确认会用到的工具")
+                    .font(.title2.bold())
+                Text("只设置一次，以后这个工作流直接开始专注。")
+                    .foregroundStyle(.secondary)
+            }
+
+            if usedRecentHistory {
+                Label("已根据这个工作流最近使用过的应用预选；请取消微信等非必要应用。", systemImage: "wand.and.stars")
+                    .font(.callout)
+                    .foregroundStyle(.blue)
+            } else {
+                Text("请选择本轮确实需要的应用。FocusTrace 不读取窗口标题或网页内容。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            List(apps, id: \.bundleID) { app in
+                Toggle(isOn: binding(for: app.bundleID)) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(app.name)
+                        Text(app.bundleID)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            .frame(height: 260)
+
+            HStack {
+                Text("已选择 \(selectedBundleIDs.count) 个")
+                    .font(.caption)
+                    .foregroundStyle(selectedBundleIDs.isEmpty ? .orange : .secondary)
+                Spacer()
+                Button("取消") { state.cancelFocusToolSetup() }
+                Button("确认并开始专注") {
+                    state.confirmFocusToolsAndStart(selectedBundleIDs)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedBundleIDs.isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(width: 560)
+        .onAppear { loadApps() }
+    }
+
+    private func loadApps() {
+        let recent = state.suggestedAppsForCurrentWorkflow()
+        if !recent.isEmpty {
+            usedRecentHistory = true
+            apps = recent
+            selectedBundleIDs = Set(recent.map(\.bundleID))
+        } else {
+            usedRecentHistory = false
+            apps = state.availableApps()
+        }
+    }
+
+    private func binding(for bundleID: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedBundleIDs.contains(bundleID) },
+            set: { selected in
+                if selected { selectedBundleIDs.insert(bundleID) }
+                else { selectedBundleIDs.remove(bundleID) }
+            }
+        )
     }
 }
 

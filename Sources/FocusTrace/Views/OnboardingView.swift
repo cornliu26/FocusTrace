@@ -8,6 +8,8 @@ struct OnboardingView: View {
     @State private var expectedOutcome = ""
     @State private var runningApps: [AppIdentity] = []
     @State private var selectedApps = Set<String>()
+    @State private var showSchedule = false
+    @State private var showDetails = false
 
     init(state: ApplicationState) {
         self.state = state
@@ -16,55 +18,80 @@ struct OnboardingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Label("先告诉 FocusTrace 你在做什么", systemImage: "scope")
+            VStack(alignment: .leading, spacing: 16) {
+                Label("只做一件事，就可以开始", systemImage: "scope")
                     .font(.largeTitle.bold())
 
-                Text("完成下面两项后就会开始记录。以后只要切换主任务，正常使用 Codex、终端和浏览器不需要反复操作。")
+                Text("给当前桌面的工作流起个名字。以后切换 macOS 桌面，FocusTrace 会自动恢复对应工作流。")
                     .foregroundStyle(.secondary)
 
-                GroupBox("1 · 自动记录时段") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        WeekdayPicker(preferences: preferences)
-                        HStack {
-                            TimePicker(title: "开始", minutes: $preferences.workStartMinutes)
-                            TimePicker(title: "结束", minutes: $preferences.workEndMinutes)
-                        }
+                GroupBox("当前工作流") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField("例如：完成登录问题修复", text: $taskTitle)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.large)
+                        Text("现在只填名称即可；创建后会自动绑定当前桌面并开始记录。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(8)
                 }
 
-                GroupBox("2 · 创建第一个主任务") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        TextField("任务名称", text: $taskTitle)
-                            .textFieldStyle(.roundedBorder)
-                        TextField("期望产出 / 当前上下文（可选）", text: $expectedOutcome)
-                            .textFieldStyle(.roundedBorder)
-
-                        Text("勾选这个任务确实会用到的应用")
-                            .font(.headline)
-                        Text("这些工具可以同时属于多个任务；应用列表不是任务归属规则。工具间切换会记录，但不会被当作偏离任务。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-
-                        List(runningApps, id: \.bundleID) { app in
-                            Toggle(isOn: appBinding(app.bundleID)) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(app.name)
-                                    Text(app.bundleID)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
+                GroupBox {
+                    DisclosureGroup(
+                        "自动记录：\(workScheduleSummary)",
+                        isExpanded: $showSchedule
+                    ) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            WeekdayPicker(preferences: preferences)
+                            HStack {
+                                TimePicker(title: "开始", minutes: $preferences.workStartMinutes)
+                                TimePicker(title: "结束", minutes: $preferences.workEndMinutes)
+                            }
+                            if !preferences.isWithinWorkSchedule(Date()) {
+                                Label("当前不在这个时段内，设置完成后会等到下个记录时段自动开始。", systemImage: "clock.badge.exclamationmark")
+                                    .font(.caption)
+                                    .foregroundStyle(.orange)
                             }
                         }
-                        .frame(height: 185)
+                        .padding(.top, 10)
+                    }
+                    .padding(8)
+                }
+
+                GroupBox {
+                    DisclosureGroup(
+                        "可选：补充目标和专注时允许的应用",
+                        isExpanded: $showDetails
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            TextField("期望产出（可选）", text: $expectedOutcome)
+                                .textFieldStyle(.roundedBorder)
+
+                            Text("允许应用只在专注训练时使用，前三天基线记录不要求现在设置。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            List(runningApps, id: \.bundleID) { app in
+                                Toggle(isOn: appBinding(app.bundleID)) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(app.name)
+                                        Text(app.bundleID)
+                                            .font(.caption2)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                }
+                            }
+                            .frame(height: 170)
+                        }
+                        .padding(.top, 10)
                     }
                     .padding(8)
                 }
 
                 GroupBox {
                     Label {
-                        Text("只记录前台应用、任务标签和时间；不读取窗口标题、网页地址、聊天对象或键盘内容。数据只保存在本机，也不用于 ADHD 诊断。")
+                        Text("只记录前台应用、工作流标签和时间；不读取窗口标题、网页地址、聊天对象或键盘内容。数据只保存在本机，也不用于 ADHD 诊断。")
                     } icon: {
                         Image(systemName: "lock.shield")
                     }
@@ -73,11 +100,11 @@ struct OnboardingView: View {
                 }
 
                 HStack {
-                    Text(selectedApps.isEmpty ? "请先选择至少一个工作应用" : "之后：选任务 → 开始专注 → 需要时挂起")
+                    Text("之后通常只需切换桌面；专注计时和允许应用都可以稍后设置。")
                         .font(.caption)
-                        .foregroundStyle(selectedApps.isEmpty ? .orange : .secondary)
+                        .foregroundStyle(.secondary)
                     Spacer()
-                    Button("创建任务并开始记录") {
+                    Button("开始记录当前工作流") {
                         state.completeOnboardingAndCreateTask(
                             title: taskTitle,
                             expectedOutcome: expectedOutcome,
@@ -88,17 +115,26 @@ struct OnboardingView: View {
                     .controlSize(.large)
                     .disabled(
                         preferences.workdayNumbers.isEmpty
-                            || selectedApps.isEmpty
                             || taskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     )
                 }
             }
             .padding(26)
         }
-        .frame(width: 690, height: 700)
+        .frame(width: 690, height: 620)
         .onAppear {
             runningApps = state.runningApps().filter { $0.bundleID != "com.apple.loginwindow" }
         }
+    }
+
+    private var workScheduleSummary: String {
+        let start = timeText(preferences.workStartMinutes)
+        let end = timeText(preferences.workEndMinutes)
+        return "每周 \(preferences.workdayNumbers.count) 天，\(start)–\(end)"
+    }
+
+    private func timeText(_ minutes: Int) -> String {
+        String(format: "%02d:%02d", minutes / 60, minutes % 60)
     }
 
     private func appBinding(_ bundleID: String) -> Binding<Bool> {
@@ -119,36 +155,36 @@ struct QuickStartSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 5) {
-                Label("FocusTrace 的正确姿势", systemImage: "figure.mind.and.body")
+                Label("FocusTrace 平时怎么用", systemImage: "figure.mind.and.body")
                     .font(.title2.bold())
-                Text("平时只需要记住三步，不用盯着时间轴工作。")
+                Text("正常工作只需要记住一条：一个桌面对应一个工作流。")
                     .foregroundStyle(.secondary)
             }
 
             guideStep(
                 number: "1",
-                title: "先选一个主任务",
-                detail: "任务按“你想完成的产出”定义；Codex、终端、Chrome 只是可复用工具。它们之间的正常切换不等于任务切换或分心。"
+                title: "切桌面就是切工作流",
+                detail: "第一次绑定后自动识别，不需要每次再选。Codex、终端和浏览器只是工具，它们之间切换不等于换工作流。"
             )
             guideStep(
                 number: "2",
-                title: "开始一轮 15 分钟专注",
-                detail: "前 3 个工作日只采集基线，不发分心提醒。完成后只需记录是否完成和难度。"
+                title: "平时直接工作，训练时再计时",
+                detail: "记录会在工作时段自动进行。想训练注意力时，再点一次“开始专注”；前三个工作日只观察，不提醒。"
             )
             guideStep(
                 number: "3",
-                title: "Agent 等待时先挂起",
-                detail: "留下“回来后的第一步”，再切到另一个任务；结果出来后从菜单栏恢复，避免把并发全放在脑子里。"
+                title: "Agent 等待时留一句恢复线索",
+                detail: "写下回来后的第一步，然后切到另一个桌面。这样不用在脑中同时维持多个上下文。"
             )
 
-            Text("时间轴是下班后的描述性回顾：颜色显示主应用，柱高显示 5 分钟内的切换密度。高密度不自动等于走神。")
+            Text("不需要盯着时间轴工作。下班后再打开回顾；切换密度只是描述，不自动等于走神。")
                 .font(.callout)
                 .padding(12)
                 .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
 
             HStack {
                 if state.currentTaskID == nil {
-                    Button(state.activeTasks.isEmpty ? "创建第一个任务" : "选择当前任务") {
+                    Button(state.activeTasks.isEmpty ? "创建第一个工作流" : "绑定当前桌面") {
                         dismiss()
                         if state.activeTasks.isEmpty { state.showTaskCreator = true }
                         else { state.showTaskSwitcher = true }

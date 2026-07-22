@@ -22,11 +22,10 @@ enum AppSection: String, CaseIterable, Identifiable {
 
 struct RootView: View {
     @ObservedObject var state: ApplicationState
-    @State private var selection: AppSection = .timeline
 
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: $selection) { section in
+            List(AppSection.allCases, selection: $state.selectedAppSection) { section in
                 Label(section.rawValue, systemImage: section.icon)
                     .tag(section)
             }
@@ -36,7 +35,7 @@ struct RootView: View {
             }
         } detail: {
             Group {
-                switch selection {
+                switch state.selectedAppSection ?? .focus {
                 case .timeline:
                     TimelineView(state: state)
                 case .focus:
@@ -47,7 +46,7 @@ struct RootView: View {
                     SettingsView(state: state)
                 }
             }
-            .navigationTitle(selection.rawValue)
+            .navigationTitle((state.selectedAppSection ?? .focus).rawValue)
         }
         .sheet(
             isPresented: Binding(
@@ -66,13 +65,17 @@ struct RootView: View {
             TaskSwitcherSheet(state: state)
         }
         .sheet(isPresented: $state.showTaskCreator) {
-            TaskEditorSheet(state: state)
+            TaskEditorSheet(state: state, bindCurrentSpaceOnCreate: true)
         }
         .sheet(isPresented: $state.showTaskParking) {
             TaskParkingSheet(state: state)
         }
         .sheet(isPresented: $state.showQuickStart) {
             QuickStartSheet(state: state)
+        }
+        .sheet(isPresented: $state.showFocusToolSetup) {
+            FocusToolSetupSheet(state: state)
+                .interactiveDismissDisabled()
         }
         .alert(
             "FocusTrace",

@@ -83,17 +83,47 @@ private enum OptionError: Error, CustomStringConvertible {
     """
 }
 
+private func previousIssuedReport(
+    in directory: URL,
+    before reportDate: Date,
+    calendar: Calendar = .current
+) -> AutomationReportArtifact? {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let cutoff = calendar.startOfDay(for: reportDate)
+    guard let urls = try? FileManager.default.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil
+    ) else { return nil }
+    return urls
+        .filter { $0.pathExtension == "json" && $0.lastPathComponent != "latest.json" }
+        .compactMap { url -> AutomationReportArtifact? in
+            guard let data = try? Data(contentsOf: url),
+                  let report = try? decoder.decode(AutomationReportArtifact.self, from: data),
+                  report.schemaVersion == 2,
+                  report.reportDate < cutoff else { return nil }
+            return report
+        }
+        .max { $0.reportDate < $1.reportDate }
+}
+
 @main
 private struct FocusTraceReportCommand {
     static func main() {
         do {
             let options = try ReportOptions(arguments: Array(CommandLine.arguments.dropFirst()))
             let snapshot = try FocusTraceLocalSnapshot.load(from: options.storeURL)
+            let previousReport = previousIssuedReport(
+                in: options.outputDirectory,
+                before: options.reportDate
+            )
             let report = AutomationReportEngine.makeReport(
                 snapshot: snapshot,
-                reportDate: options.reportDate
+                reportDate: options.reportDate,
+                previousIssuedReport: previousReport
             )
             let markdown = AutomationReportEngine.markdown(for: report)
+            let json = try AutomationReportEngine.jsonData(for: report)
 
             try FileManager.default.createDirectory(
                 at: options.outputDirectory,
@@ -106,8 +136,13 @@ private struct FocusTraceReportCommand {
             let datedURL = options.outputDirectory
                 .appendingPathComponent("\(formatter.string(from: report.reportDate)).md")
             let latestURL = options.outputDirectory.appendingPathComponent("latest.md")
+            let datedJSONURL = options.outputDirectory
+                .appendingPathComponent("\(formatter.string(from: report.reportDate)).json")
+            let latestJSONURL = options.outputDirectory.appendingPathComponent("latest.json")
             try markdown.write(to: datedURL, atomically: true, encoding: .utf8)
             try markdown.write(to: latestURL, atomically: true, encoding: .utf8)
+            try json.write(to: datedJSONURL, options: .atomic)
+            try json.write(to: latestJSONURL, options: .atomic)
 
             if options.printReport {
                 print(markdown, terminator: "")

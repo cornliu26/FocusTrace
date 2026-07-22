@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import FocusTraceCore
 
 struct MenuBarView: View {
     @ObservedObject var state: ApplicationState
@@ -34,27 +35,12 @@ struct MenuBarView: View {
                     Spacer()
                     Button("结束并记录") { state.endFocus() }
                 }
-            } else if state.currentTaskID != nil {
-                Button("开始 \(state.currentPlan.focusMinutes) 分钟专注") {
-                    state.startFocus()
-                }
-                .buttonStyle(.borderedProminent)
-            } else if state.activeTasks.isEmpty {
-                Button("新建工作流并绑定当前桌面") {
-                    showingQuickWorkflowCreator = true
-                }
-                .buttonStyle(.borderedProminent)
             } else {
-                Button("选择当前任务") {
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
-                    state.showTaskSwitcher = true
-                }
-                .buttonStyle(.borderedProminent)
+                primaryAction
             }
 
             if state.currentTaskID != nil {
-                Button("Agent 等待：挂起当前任务") {
+                Button("Agent 等待：挂起当前工作流") {
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
                     state.showTaskParking = true
@@ -62,12 +48,19 @@ struct MenuBarView: View {
             }
 
             if !state.activeTaskParkings.isEmpty {
-                Menu("待返回任务（\(state.activeTaskParkings.count)）") {
+                Menu("待返回工作流（\(state.activeTaskParkings.count)）") {
                     ForEach(state.activeTaskParkings) { parking in
-                        Button {
-                            state.resumeTaskParking(parking.id)
-                        } label: {
-                            Text("\(state.taskName(for: parking.taskID)) · \(parking.resumeCue)")
+                        if state.isSpaceWorkflowModeEnabled {
+                            Label(
+                                "\(state.taskName(for: parking.taskID)) · 切回对应桌面",
+                                systemImage: "rectangle.2.swap"
+                            )
+                        } else {
+                            Button {
+                                state.resumeTaskParking(parking.id)
+                            } label: {
+                                Text("\(state.taskName(for: parking.taskID)) · \(parking.resumeCue)")
+                            }
                         }
                     }
                 }
@@ -88,39 +81,12 @@ struct MenuBarView: View {
 
             Divider()
 
-            if state.isSpaceWorkflowModeEnabled {
-                Label("切换工作流：切换 macOS 桌面", systemImage: "rectangle.2.swap")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Menu("切换任务") {
-                    ForEach(state.activeTasks) { task in
-                        Button {
-                            state.switchTask(to: task.id)
-                        } label: {
-                            if task.id == state.currentTaskID {
-                                Label(task.title, systemImage: "checkmark")
-                            } else {
-                                Text(task.title)
-                            }
-                        }
-                    }
-                    Divider()
-                    Button("停止当前任务") { state.switchTask(to: nil) }
-                }
-            }
-
-            Button(state.preferences.capturePaused ? "恢复记录" : "暂停记录") {
-                state.setCapturePaused(!state.preferences.capturePaused)
-            }
-
             HStack {
                 Button("打开今日回顾") {
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
+                    openMain(.review)
                 }
                 Spacer()
-                Button("退出") { NSApp.terminate(nil) }
+                moreMenu
             }
         }
         .padding(14)
@@ -153,6 +119,54 @@ struct MenuBarView: View {
     }
 
     @ViewBuilder
+    private var primaryAction: some View {
+        let guidance = state.flowGuidance
+        switch guidance.action {
+        case .bindWorkflow:
+            Menu(guidance.buttonTitle) {
+                ForEach(state.activeTasks) { workflow in
+                    Button(workflow.title) { state.bindCurrentSpace(to: workflow.id) }
+                }
+                Divider()
+                Button("新建工作流") { showingQuickWorkflowCreator = true }
+            }
+            .buttonStyle(.borderedProminent)
+        default:
+            Button(guidance.buttonTitle) { perform(guidance.action) }
+                .buttonStyle(.borderedProminent)
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu("更多") {
+            Button("打开专注训练") { openMain(.focus) }
+            Button("查看三步使用方法") {
+                openMain(.focus)
+                state.showQuickStart = true
+            }
+            Button("新建工作流并绑定当前桌面") {
+                showingQuickWorkflowCreator = true
+            }
+            if !state.isSpaceWorkflowModeEnabled && !state.activeTasks.isEmpty {
+                Menu("手动切换工作流") {
+                    ForEach(state.activeTasks) { task in
+                        Button(task.title) { state.switchTask(to: task.id) }
+                    }
+                    Divider()
+                    Button("停止当前工作流") { state.switchTask(to: nil) }
+                }
+            }
+            Divider()
+            Button(state.preferences.capturePaused ? "恢复记录" : "暂停记录") {
+                state.setCapturePaused(!state.preferences.capturePaused)
+            }
+            Button("设置") { openMain(.settings) }
+            Divider()
+            Button("退出 FocusTrace") { NSApp.terminate(nil) }
+        }
+    }
+
+    @ViewBuilder
     private var spaceWorkflowSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
@@ -178,21 +192,38 @@ struct MenuBarView: View {
                         Button("完成工作流") { workflowToComplete = workflow }
                     }
                 }
-            } else {
-                if !state.activeTasks.isEmpty {
-                    Menu(state.isSpaceWorkflowModeEnabled ? "绑定当前桌面到…" : "启用并绑定当前桌面到…") {
-                        ForEach(state.activeTasks) { workflow in
-                            Button(workflow.title) {
-                                state.bindCurrentSpace(to: workflow.id)
-                            }
-                        }
-                    }
-                }
-                Button("新建工作流并绑定此桌面") {
-                    showingQuickWorkflowCreator = true
-                }
+            } else if !state.activeTasks.isEmpty {
+                Label("从上方选择一次；之后切桌面会自动恢复", systemImage: "arrow.up")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func perform(_ action: FlowNextAction) {
+        switch action {
+        case .resumeCapture:
+            state.setCapturePaused(false)
+        case .createWorkflow:
+            showingQuickWorkflowCreator = true
+        case .bindWorkflow:
+            break
+        case .viewFocus:
+            openMain(.focus)
+        case .openSchedule:
+            openMain(.settings)
+        case let .startFocus(minutes):
+            state.requestStartFocus(minutes: minutes)
+            if state.showFocusToolSetup {
+                openMain(.focus)
+            }
+        }
+    }
+
+    private func openMain(_ section: AppSection) {
+        state.selectedAppSection = section
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private var statusText: String {
@@ -206,17 +237,17 @@ struct MenuBarView: View {
             return "专注中 · 目标 \(focus.targetSeconds / 60) 分钟"
         }
         if state.preferences.capturePaused { return "记录已暂停" }
-        if state.activeTasks.isEmpty { return "仅记录应用切换 · 还没有任务" }
+        if state.activeTasks.isEmpty { return "还没有工作流" }
         if state.isSpaceWorkflowModeEnabled && state.currentSpaceWorkflowID == nil {
             return "桌面未绑定 · 不归因到旧工作流"
         }
-        if state.currentTaskID == nil { return "仅记录应用切换 · 未选主任务" }
+        if state.currentTaskID == nil { return "当前桌面未绑定工作流" }
         return state.isRecording ? "应用切换记录中" : "工作时段之外"
     }
 
     private var menuTitle: String {
         state.currentFocus == nil
-            ? (state.currentTask?.title ?? "未选择任务")
+            ? (state.currentTask?.title ?? "等待绑定工作流")
             : state.focusWorkflowName
     }
 
@@ -239,17 +270,14 @@ private struct QuickWorkflowCreatorSheet: View {
     @ObservedObject var state: ApplicationState
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
-    @State private var expectedOutcome = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("新建并绑定当前桌面")
                 .font(.title2.bold())
-            Text("只需先给工作流起名；期望产出和允许应用可以稍后补充。")
+            Text("只需给工作流起名。创建后自动绑定当前桌面，其余设置稍后再补。")
                 .foregroundStyle(.secondary)
-            TextField("工作流名称", text: $title)
-                .textFieldStyle(.roundedBorder)
-            TextField("期望产出（可选）", text: $expectedOutcome)
+            TextField("例如：排查登录问题", text: $title)
                 .textFieldStyle(.roundedBorder)
             HStack {
                 Button("取消") { dismiss() }
@@ -257,7 +285,7 @@ private struct QuickWorkflowCreatorSheet: View {
                 Button("创建并绑定") {
                     state.createWorkflowAndBindCurrentSpace(
                         title: title,
-                        expectedOutcome: expectedOutcome
+                        expectedOutcome: ""
                     )
                     dismiss()
                 }
@@ -267,8 +295,5 @@ private struct QuickWorkflowCreatorSheet: View {
         }
         .padding(22)
         .frame(width: 440)
-        .onAppear {
-            if title.isEmpty { title = state.suggestedWorkflowTitle }
-        }
     }
 }

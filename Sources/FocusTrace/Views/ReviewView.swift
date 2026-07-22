@@ -3,18 +3,133 @@ import FocusTraceCore
 
 struct ReviewView: View {
     @ObservedObject var state: ApplicationState
+    @State private var showPlanHistory = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 dailySummary
-                unresolvedReview
+                dailyCoaching
+                if hasUnresolvedReview {
+                    unresolvedReview
+                }
                 phaseTwoAnalysis
                 trainingHistory
             }
             .padding(24)
             .frame(maxWidth: 900, alignment: .leading)
         }
+    }
+
+    private var dailyCoaching: some View {
+        let analysis = state.selectedCoachingAnalysis
+        let recommendation = analysis.recommendation
+        return GroupBox("本地分析 · 一次只练一项") {
+            VStack(alignment: .leading, spacing: 14) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
+                    MetricCard(
+                        title: "有效记录",
+                        value: String(format: "%.0f 分", analysis.metrics.recordedMinutes),
+                        detail: analysis.quality.isReliableForBehavior ? "可用于行为比较" : "先看数据质量"
+                    )
+                    MetricCard(
+                        title: "工作流归因",
+                        value: percent(analysis.metrics.attributedRatio),
+                        detail: "可靠门槛 70%"
+                    )
+                    MetricCard(
+                        title: "应用切换率",
+                        value: String(format: "%.1f/时", analysis.metrics.appSwitchesPerHour),
+                        detail: trendText(analysis.trend.appSwitchRateDeltaPercent)
+                    )
+                    MetricCard(
+                        title: "工作流切换率",
+                        value: String(format: "%.1f/时", analysis.metrics.workflowSwitchesPerHour),
+                        detail: trendText(analysis.trend.workflowSwitchRateDeltaPercent)
+                    )
+                }
+
+                if !analysis.quality.warnings.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(analysis.quality.warnings, id: \.self) { warning in
+                            Label(warning, systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+
+                if let evaluation = analysis.previousRecommendationEvaluation {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: evaluationIcon(evaluation.status))
+                            .foregroundStyle(evaluationColor(evaluation.status))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("上一项训练：\(evaluation.title)")
+                                .font(.headline)
+                            Text(evaluation.evidence)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(10)
+                    .background(evaluationColor(evaluation.status).opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+                }
+
+                Divider()
+
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(recommendation.title)
+                            .font(.title3.bold())
+                        Text(recommendation.rationale)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("可信度：\(confidenceText(recommendation.confidence))")
+                        .font(.caption.weight(.medium))
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(.secondary.opacity(0.1), in: Capsule())
+                }
+
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(recommendation.evidence, id: \.self) { evidence in
+                        Label(evidence, systemImage: "chart.bar.xaxis")
+                            .font(.callout)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(recommendation.method.title)
+                        .font(.headline)
+                    ForEach(Array(recommendation.method.steps.enumerated()), id: \.offset) { index, step in
+                        HStack(alignment: .top, spacing: 9) {
+                            Text("\(index + 1)")
+                                .font(.caption.bold())
+                                .frame(width: 22, height: 22)
+                                .background(.blue.opacity(0.12), in: Circle())
+                            Text(step).font(.callout)
+                        }
+                    }
+                    Label("成功标准：\(recommendation.method.successMeasure)", systemImage: "checkmark.seal")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.blue)
+                }
+
+                if Calendar.current.isDateInToday(state.selectedDate),
+                   let buttonTitle = actionButtonTitle(recommendation.action) {
+                    Button(buttonTitle) {
+                        perform(recommendation.action)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding(8)
+        }
+    }
+
+    private var hasUnresolvedReview: Bool {
+        state.selectedInterruptions.contains { $0.resolution == .unresolved }
     }
 
     private var dailySummary: some View {
@@ -37,7 +152,7 @@ struct ReviewView: View {
                     MetricCard(title: "确认分心", value: "\(summary.confirmedDistractionCount)", detail: "用户确认")
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
-                    MetricCard(title: "任务停车", value: "\(summary.taskParkingCount)", detail: "有意挂起")
+                    MetricCard(title: "挂起工作流", value: "\(summary.taskParkingCount)", detail: "有意保存恢复线索")
                     MetricCard(title: "已返回", value: "\(summary.resumedTaskCount)", detail: "根据恢复线索继续")
                     MetricCard(
                         title: "平均恢复耗时",
@@ -112,6 +227,9 @@ struct ReviewView: View {
                     Text("数据不足时只展示描述性统计，不生成个性化判断。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Text(phaseTwoNextStep(workdays: workdays, sessions: sessions))
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.blue)
                 case .ready:
                     if !state.analysisResult.insights.isEmpty {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
@@ -142,7 +260,8 @@ struct ReviewView: View {
     }
 
     private var trainingHistory: some View {
-        GroupBox("训练计划版本") {
+        GroupBox {
+            DisclosureGroup("训练计划版本（\(state.trainingPlans.count)）", isExpanded: $showPlanHistory) {
             VStack(spacing: 0) {
                 ForEach(state.trainingPlans.sorted(by: { $0.version > $1.version })) { plan in
                     HStack(alignment: .top) {
@@ -170,12 +289,90 @@ struct ReviewView: View {
                 }
             }
             .padding(8)
+            }
         }
+    }
+
+    private func phaseTwoNextStep(workdays: Int, sessions: Int) -> String {
+        let missingDays = max(0, 10 - workdays)
+        let missingSessions = max(0, 20 - sessions)
+        if missingDays > 0 && missingSessions > 0 {
+            return "下一步：照常记录，并完成今天的专注训练；还差 \(missingDays) 个工作日和 \(missingSessions) 次训练。"
+        }
+        if missingDays > 0 {
+            return "下一步：继续正常工作并保持记录；还差 \(missingDays) 个工作日。"
+        }
+        return "下一步：再完成 \(missingSessions) 次专注训练。"
     }
 
     private func duration(_ seconds: TimeInterval) -> String {
         let total = max(0, Int(seconds))
         if total >= 3600 { return String(format: "%d 小时 %02d 分", total / 3600, total / 60 % 60) }
         return "\(total / 60) 分 \(total % 60) 秒"
+    }
+
+    private func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func trendText(_ value: Double?) -> String {
+        value.map { String(format: "较近 7 日 %+.0f%%", $0) } ?? "可比样本不足"
+    }
+
+    private func confidenceText(_ value: DailyCoachConfidence) -> String {
+        switch value {
+        case .low: return "低"
+        case .medium: return "中"
+        case .high: return "高"
+        }
+    }
+
+    private func evaluationIcon(_ value: DailyCoachEvaluationStatus) -> String {
+        switch value {
+        case .improved: return "checkmark.circle.fill"
+        case .needsAdjustment: return "arrow.triangle.2.circlepath"
+        case .notRun: return "circle.dashed"
+        case .insufficientData: return "questionmark.circle"
+        }
+    }
+
+    private func evaluationColor(_ value: DailyCoachEvaluationStatus) -> Color {
+        switch value {
+        case .improved: return .green
+        case .needsAdjustment: return .orange
+        case .notRun, .insufficientData: return .secondary
+        }
+    }
+
+    private func actionButtonTitle(_ action: DailyCoachAction) -> String? {
+        switch action {
+        case .none: return nil
+        case .bindWorkflow: return "绑定当前桌面"
+        case let .startFocus(minutes): return "现在开始 \(minutes) 分钟"
+        case .parkWorkflow: return "练习一次挂起"
+        case .reviewTimeline: return "打开时间轴校准"
+        }
+    }
+
+    private func perform(_ action: DailyCoachAction) {
+        switch action {
+        case .none:
+            break
+        case .bindWorkflow:
+            if state.activeTasks.isEmpty { state.showTaskCreator = true }
+            else { state.showTaskSwitcher = true }
+        case let .startFocus(minutes):
+            state.requestStartFocus(minutes: minutes)
+            state.selectedAppSection = .focus
+        case .parkWorkflow:
+            if state.currentTaskID == nil {
+                if state.activeTasks.isEmpty { state.showTaskCreator = true }
+                else { state.showTaskSwitcher = true }
+            } else {
+                state.showTaskParking = true
+            }
+        case .reviewTimeline:
+            state.selectedAppSection = .timeline
+        }
     }
 }

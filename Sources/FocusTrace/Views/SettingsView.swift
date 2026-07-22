@@ -54,7 +54,7 @@ struct SettingsView: View {
                     Text("基线前三个工作日不会发送提醒。未由你确认的事件始终只算疑似分心。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次任务才提示，主动挂起和原始 Space 事件不计入。")
+                    Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次工作流才提示，主动挂起和原始 Space 事件不计入。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -82,7 +82,7 @@ struct SettingsView: View {
                 }
 
                 Section("隐私边界") {
-                    Label("仅保存应用名称、Bundle ID、时间、手动任务标签和训练反馈", systemImage: "checkmark.shield")
+                    Label("仅保存应用名称、Bundle ID、时间、手动工作流标签和训练反馈", systemImage: "checkmark.shield")
                     Label("不读取窗口标题、网页地址、聊天对象、键盘内容或手机数据", systemImage: "xmark.shield")
                     Text("FocusTrace 是工作习惯工具，不提供 ADHD 诊断或治疗。")
                         .foregroundStyle(.secondary)
@@ -98,7 +98,7 @@ struct SettingsView: View {
             Button("删除当天数据", role: .destructive) { state.deleteSelectedDay() }
         }
         .confirmationDialog(
-            "清空所有时间轴、训练和分析数据？任务定义会保留。此操作不可撤销。",
+            "清空所有时间轴、训练和分析数据？工作流定义会保留。此操作不可撤销。",
             isPresented: $showingDeleteAllConfirmation
         ) {
             Button("清空所有行为数据", role: .destructive) { state.deleteAllBehaviorData() }

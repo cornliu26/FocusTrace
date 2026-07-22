@@ -3,6 +3,88 @@ import Testing
 @testable import FocusTraceCore
 
 @Test
+func flowGuidanceAlwaysExposesOnlyTheNextRequiredAction() {
+    let create = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: false,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(create.action == .createWorkflow)
+
+    let bind = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(bind.action == .bindWorkflow)
+
+    let start = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 17
+    )
+    #expect(start.action == .startFocus(minutes: 17))
+
+    let active = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: 125,
+        planMinutes: 15
+    )
+    #expect(active.action == .viewFocus)
+    #expect(active.detail.contains("02:05"))
+
+    let paused = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: true,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(paused.action == .resumeCapture)
+
+    let outsideSchedule = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: false,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(outsideSchedule.action == .openSchedule)
+}
+
+@Test
+func toolSuggestionsPreferTheWorkflowMostUsedRealApps() {
+    let taskID = UUID()
+    let otherTaskID = UUID()
+    let start = Date(timeIntervalSince1970: 1_000)
+    let terminal = AppIdentity(bundleID: "com.apple.Terminal", name: "Terminal")
+    let codex = AppIdentity(bundleID: "com.openai.codex", name: "Codex")
+    let helper = AppIdentity(bundleID: "com.example.Helper", name: "Helper")
+    let activities = [
+        ActivityRecord(app: terminal, startedAt: start, endedAt: start.addingTimeInterval(600), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: codex, startedAt: start, endedAt: start.addingTimeInterval(300), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: helper, startedAt: start, endedAt: start.addingTimeInterval(900), taskID: taskID, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: codex, startedAt: start, endedAt: start.addingTimeInterval(1_200), taskID: otherTaskID, focusSessionID: nil, classification: .allowed)
+    ]
+    let suggestions = ToolSuggestionEngine.suggestions(from: activities, taskID: taskID)
+    #expect(suggestions == [terminal, codex])
+}
+
+@Test
 func activationClosesPreviousAndIgnoresDuplicate() {
     let start = Date(timeIntervalSince1970: 1_000)
     let second = start.addingTimeInterval(12)
@@ -792,6 +874,203 @@ func analysisSurfacesRepeatedRiskAppFirst() {
     )
     #expect(result.readiness == .ready)
     #expect(result.suggestion?.kind == .highRiskApp)
+}
+
+@Test
+func dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [
+            ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(30 * 60), taskID: task, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: app, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(60 * 60), taskID: nil, focusSessionID: nil, classification: .allowed)
+        ],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    #expect(result.metrics.attributedRatio == 0.5)
+    #expect(!result.quality.isReliableForBehavior)
+    #expect(result.recommendation.kind == .repairAttribution)
+    #expect(result.recommendation.action == .bindWorkflow)
+}
+
+@Test
+func dailyCoachTreatsExtremelyDenseSpaceSignalsAsInstrumentationRisk() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let intervals = (0..<31).map { index in
+        TaskIntervalRecord(
+            taskID: task,
+            startedAt: day.addingTimeInterval(Double(index * 120)),
+            endedAt: day.addingTimeInterval(Double((index + 1) * 120)),
+            workflowSource: .space
+        )
+    }
+    let snapshot = FocusTraceLocalSnapshot(
+        taskIntervals: intervals,
+        activities: [ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed)],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    #expect(!result.quality.isReliableForBehavior)
+    #expect(result.quality.warnings.contains { $0.contains("Space 识别噪声") })
+    #expect(result.recommendation.kind == .verifySpaceTracking)
+}
+
+@Test
+func dailyCoachNormalizesRatesAndStartsWithOneMeasurableTrainingRound() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let start = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let appA = AppIdentity(bundleID: "a", name: "A")
+    let appB = AppIdentity(bundleID: "b", name: "B")
+    var activities: [ActivityRecord] = []
+    for dayOffset in 0..<3 {
+        let day = calendar.date(byAdding: .day, value: dayOffset, to: start)!
+        activities.append(ActivityRecord(app: appA, startedAt: day, endedAt: day.addingTimeInterval(30 * 60), taskID: task, focusSessionID: nil, classification: .allowed))
+        activities.append(ActivityRecord(app: appB, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed))
+    }
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: activities,
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let reportDate = calendar.date(byAdding: .day, value: 2, to: start)!
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: reportDate,
+        generatedAt: reportDate.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    #expect(result.metrics.recordedMinutes == 60)
+    #expect(result.metrics.appSwitchesPerHour == 1)
+    #expect(result.trend.baselineDays == 2)
+    #expect(result.recommendation.kind == .startFocusRound)
+    #expect(result.recommendation.action == .startFocus(minutes: 15))
+    #expect(result.recommendation.method.successMeasure.contains("目标时长"))
+}
+
+@Test
+func dailyCoachEvaluatesThePreviousTrainingFromObservedOutcome() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let firstDay = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let secondDay = calendar.date(byAdding: .day, value: 1, to: firstDay)!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let session = FocusSessionRecord(
+        taskID: task,
+        startedAt: secondDay.addingTimeInterval(10 * 60),
+        endedAt: secondDay.addingTimeInterval(25 * 60),
+        targetSeconds: 15 * 60,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0
+    )
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [
+            ActivityRecord(app: app, startedAt: firstDay, endedAt: firstDay.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: app, startedAt: secondDay, endedAt: secondDay.addingTimeInterval(60 * 60), taskID: task, focusSessionID: session.id, classification: .allowed)
+        ],
+        focusSessions: [session],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: secondDay,
+        generatedAt: secondDay.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    #expect(result.previousRecommendationEvaluation?.status == .improved)
+    #expect(result.previousRecommendationEvaluation?.evidence.contains("1/1") == true)
+}
+
+@Test
+func dailyCoachEvaluatesTheExactPreviouslyIssuedRecommendation() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 21, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let issued = DailyCoachRecommendation(
+        kind: .repairAttribution,
+        title: "fix attribution",
+        rationale: "test",
+        evidence: [],
+        confidence: .high,
+        action: .bindWorkflow,
+        method: DailyTrainingMethod(title: "bind", steps: ["bind"], successMeasure: "70%")
+    )
+    let previousMetrics = DailyNormalizedMetrics(
+        recordedMinutes: 60,
+        attributedMinutes: 30,
+        attributedRatio: 0.5,
+        appSwitchesPerHour: 10,
+        workflowSwitchesPerHour: 2,
+        medianFocusMinutes: nil,
+        trainingCount: 0,
+        successfulTrainingCount: 0,
+        feedbackCompletionRatio: nil,
+        parkingCount: 0
+    )
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed)],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")]
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar,
+        previousIssuedRecommendation: issued,
+        previousIssuedMetrics: previousMetrics
+    )
+    #expect(result.previousRecommendationEvaluation?.status == .improved)
+    #expect(result.previousRecommendationEvaluation?.title.contains("归因") == true)
+}
+
+@Test
+func automationJSONIsStructuredAndAggregateOnly() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "private.bundle", name: "Private App")
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(60 * 60), taskID: task, focusSessionID: nil, classification: .allowed)],
+        trainingPlans: [TrainingPlanRecord(version: 1, focusMinutes: 15, reason: "default")],
+        taskParkings: [TaskParkingRecord(taskID: task, parkedAt: day, resumeCue: "SECRET_RESUME_CUE")]
+    )
+    let report = AutomationReportEngine.makeReport(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    let data = try AutomationReportEngine.jsonData(for: report)
+    let text = String(decoding: data, as: UTF8.self)
+    #expect(text.contains("\"schemaVersion\" : 2"))
+    #expect(text.contains("\"recommendation\""))
+    #expect(text.contains("\"appSwitchesPerHour\""))
+    #expect(!text.contains("private.bundle"))
+    #expect(!text.contains("Private App"))
+    #expect(!text.contains("SECRET_RESUME_CUE"))
 }
 
 @Test
