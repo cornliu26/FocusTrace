@@ -112,6 +112,23 @@ Codex 定时任务以 `latest.json` 的 `schemaVersion` 协议为事实源，并
 - `build-app.sh` 生成带应用图标、本地签名的 `dist/FocusTrace.app`，但不负责日常安装。
 - `run-space-acceptance.sh` 使用进程内临时绑定验证真实 Space 切换，不读写正式 FocusTrace 数据。
 
+## 发布与自动更新
+
+每个 `vX.Y.Z` 标签会触发 GitHub Actions：运行完整测试、构建 Apple Silicon
+应用、生成带 SHA-256 的 `latest.json`，并发布 GitHub Release。应用默认每天检查
+一次该公开清单；发现新版后只提示，由你点击“安装并重启”才会替换应用包。
+
+发布前让 `Packaging/Info.plist` 的版本与标签一致，然后：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+更新只替换当前 `FocusTrace.app`，不会改动
+`~/Library/Application Support/FocusTrace` 或偏好设置；替换前会校验来源 URL、
+文件大小、SHA-256、Bundle ID、版本与代码签名，失败时回滚旧应用。
+
 当前版本使用 Codable 原子快照存储，因为纯 Command Line Tools 缺少 `SwiftDataMacros`。领域模型与 UI 不依赖具体存储实现，安装完整 Xcode 后可以迁移到 SwiftData 后端。
 
 <details>

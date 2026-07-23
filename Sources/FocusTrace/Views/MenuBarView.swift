@@ -4,6 +4,7 @@ import FocusTraceCore
 
 struct MenuBarView: View {
     @ObservedObject var state: ApplicationState
+    @EnvironmentObject private var updateManager: UpdateManager
     @Environment(\.openWindow) private var openWindow
     @State private var workflowToComplete: FocusTaskModel?
     @State private var showingQuickWorkflowCreator = false
@@ -115,6 +116,11 @@ struct MenuBarView: View {
         .onAppear {
             state.start()
             state.refreshSpaceContextForMenuPresentation()
+            Task {
+                await updateManager.checkAutomatically(
+                    enabled: state.preferences.automaticUpdateChecks
+                )
+            }
         }
     }
 
@@ -161,6 +167,13 @@ struct MenuBarView: View {
                 state.setCapturePaused(!state.preferences.capturePaused)
             }
             Button("设置") { openMain(.settings) }
+            if let release = updateManager.availableRelease {
+                Button("可更新到 \(release.version)…") { openMain(.settings) }
+            } else {
+                Button("检查更新") {
+                    Task { await updateManager.checkForUpdates() }
+                }
+            }
             Divider()
             Button("退出 FocusTrace") { NSApp.terminate(nil) }
         }

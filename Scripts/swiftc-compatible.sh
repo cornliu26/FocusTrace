@@ -4,8 +4,9 @@ set -euo pipefail
 # macOS beta Command Line Tools can briefly ship a Swift compiler one patch
 # newer than the SDK's .swiftinterface files. Detect that patch skew instead
 # of baking in a version, so the wrapper becomes a no-op after CLT updates.
-SWIFTC_BIN="/Library/Developer/CommandLineTools/usr/bin/swiftc"
-SDK_INTERFACE="/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/swift/Swift.swiftmodule/arm64e-apple-macos.swiftinterface"
+SWIFTC_BIN="$(xcrun --find swiftc)"
+SDK_PATH="$(xcrun --sdk macosx --show-sdk-path)"
+SDK_INTERFACE="$SDK_PATH/usr/lib/swift/Swift.swiftmodule/arm64e-apple-macos.swiftinterface"
 
 SDK_COMPILER_VERSION=""
 if [[ -f "$SDK_INTERFACE" ]]; then

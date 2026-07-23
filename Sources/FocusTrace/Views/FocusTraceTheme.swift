@@ -246,15 +246,10 @@ struct FocusTraceCalendarPopover: View {
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var displayedMonth: Date
-    @State private var hoveredDay: Date?
 
     private let latestDay: Date
     private let dismiss: () -> Void
     private let calendar = Calendar.current
-    private let columns = Array(
-        repeating: GridItem(.fixed(32), spacing: 7),
-        count: 7
-    )
 
     init(
         selection: Binding<Date>,
@@ -275,15 +270,15 @@ struct FocusTraceCalendarPopover: View {
     }
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 9) {
             monthHeader
             weekdayHeader
             dayGrid
             Divider()
             footer
         }
-        .padding(16)
-        .frame(width: 300)
+        .padding(12)
+        .frame(width: 238)
         .background(FocusTraceTheme.cardFill(colorScheme))
     }
 
@@ -298,7 +293,7 @@ struct FocusTraceCalendarPopover: View {
 
             Spacer()
             Text(displayedMonth.formatted(.dateTime.year().month(.wide)))
-                .font(.system(.headline, design: .rounded, weight: .semibold))
+                .font(.system(.subheadline, design: .rounded, weight: .semibold))
                 .monospacedDigit()
             Spacer()
 
@@ -313,24 +308,28 @@ struct FocusTraceCalendarPopover: View {
     }
 
     private var weekdayHeader: some View {
-        LazyVGrid(columns: columns, spacing: 0) {
+        HStack(spacing: 5) {
             ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
                 Text(symbol)
-                    .font(.caption.weight(.medium))
+                    .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .frame(width: 32, height: 22)
+                    .frame(width: 24, height: 16)
             }
         }
     }
 
     private var dayGrid: some View {
-        LazyVGrid(columns: columns, spacing: 7) {
-            ForEach(Array(monthCells.enumerated()), id: \.offset) { _, date in
-                if let date {
-                    dayButton(date)
-                } else {
-                    Color.clear
-                        .frame(width: 32, height: 32)
+        VStack(spacing: 5) {
+            ForEach(Array(monthRows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 5) {
+                    ForEach(Array(row.enumerated()), id: \.offset) { _, date in
+                        if let date {
+                            dayButton(date)
+                        } else {
+                            Color.clear
+                                .frame(width: 24, height: 24)
+                        }
+                    }
                 }
             }
         }
@@ -339,7 +338,7 @@ struct FocusTraceCalendarPopover: View {
     private var footer: some View {
         HStack {
             Text(selection.formatted(date: .long, time: .omitted))
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
@@ -362,10 +361,10 @@ struct FocusTraceCalendarPopover: View {
         return Array(symbols[offset...] + symbols[..<offset])
     }
 
-    private var monthCells: [Date?] {
+    private var monthRows: [[Date?]] {
         guard let dayRange = calendar.range(of: .day, in: .month, for: displayedMonth),
               let weekday = calendar.dateComponents([.weekday], from: displayedMonth).weekday else {
-            return Array(repeating: nil, count: 42)
+            return []
         }
 
         let leading = (weekday - calendar.firstWeekday + 7) % 7
@@ -375,8 +374,11 @@ struct FocusTraceCalendarPopover: View {
                 calendar.date(byAdding: .day, value: day - 1, to: displayedMonth)
             }
         )
-        cells.append(contentsOf: Array(repeating: nil, count: max(0, 42 - cells.count)))
-        return Array(cells.prefix(42))
+        let trailing = (7 - cells.count % 7) % 7
+        cells.append(contentsOf: Array(repeating: nil, count: trailing))
+        return stride(from: 0, to: cells.count, by: 7).map {
+            Array(cells[$0..<min($0 + 7, cells.count)])
+        }
     }
 
     private var latestMonth: Date {
@@ -391,7 +393,6 @@ struct FocusTraceCalendarPopover: View {
         let isSelected = calendar.isDate(date, inSameDayAs: selection)
         let isToday = calendar.isDate(date, inSameDayAs: latestDay)
         let isUnavailable = date > latestDay
-        let isHovered = hoveredDay.map { calendar.isDate($0, inSameDayAs: date) } ?? false
 
         return Button {
             selection = calendar.startOfDay(for: date)
@@ -401,9 +402,6 @@ struct FocusTraceCalendarPopover: View {
                 if isSelected {
                     Circle()
                         .fill(FocusTraceTheme.accentGradient)
-                } else if isHovered && !isUnavailable {
-                    Circle()
-                        .fill(Color.secondary.opacity(0.12))
                 }
 
                 if isToday && !isSelected {
@@ -412,7 +410,7 @@ struct FocusTraceCalendarPopover: View {
                 }
 
                 Text("\(calendar.component(.day, from: date))")
-                    .font(.callout.weight(isSelected || isToday ? .semibold : .regular))
+                    .font(.caption.weight(isSelected || isToday ? .semibold : .regular))
                     .monospacedDigit()
                     .foregroundStyle(
                         isUnavailable
@@ -420,14 +418,11 @@ struct FocusTraceCalendarPopover: View {
                             : (isSelected ? FocusTraceTheme.navy : Color.primary)
                     )
             }
-            .frame(width: 32, height: 32)
+            .frame(width: 24, height: 24)
             .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .disabled(isUnavailable)
-        .onHover { hovering in
-            hoveredDay = hovering ? date : nil
-        }
         .accessibilityLabel(date.formatted(date: .long, time: .omitted))
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -440,7 +435,7 @@ struct FocusTraceCalendarPopover: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.caption.weight(.semibold))
-                .frame(width: 28, height: 28)
+                .frame(width: 24, height: 24)
                 .background(
                     Color.secondary.opacity(0.08),
                     in: RoundedRectangle(cornerRadius: 7, style: .continuous)

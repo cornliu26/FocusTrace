@@ -6,6 +6,7 @@ import FocusTraceMacSupport
 @main
 struct FocusTraceApp: App {
     @StateObject private var state: ApplicationState
+    @StateObject private var updateManager: UpdateManager
     private let store: FocusTraceStore
     private let isSpaceAnchorProbe: Bool
 
@@ -16,6 +17,7 @@ struct FocusTraceApp: App {
             let store = try FocusTraceStore(inMemory: isSpaceAnchorProbe)
             self.store = store
             _state = StateObject(wrappedValue: ApplicationState(store: store))
+            _updateManager = StateObject(wrappedValue: UpdateManager())
         } catch {
             fatalError("FocusTrace 无法初始化本地数据库：\(error)")
         }
@@ -29,13 +31,20 @@ struct FocusTraceApp: App {
             } else {
                 RootView(state: state)
                     .frame(minWidth: 920, minHeight: 640)
+                    .environmentObject(updateManager)
                     .task { state.start() }
+                    .task {
+                        await updateManager.checkAutomatically(
+                            enabled: state.preferences.automaticUpdateChecks
+                        )
+                    }
             }
         }
         .defaultSize(width: 1080, height: 760)
 
         MenuBarExtra {
             MenuBarView(state: state)
+                .environmentObject(updateManager)
         } label: {
             Label(
                 "FocusTrace",
@@ -50,6 +59,7 @@ struct FocusTraceApp: App {
         Settings {
             SettingsView(state: state)
                 .frame(width: 620, height: 560)
+                .environmentObject(updateManager)
         }
     }
 }

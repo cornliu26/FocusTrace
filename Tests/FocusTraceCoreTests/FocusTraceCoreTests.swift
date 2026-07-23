@@ -1109,3 +1109,33 @@ func jsonRoundTrip() throws {
     #expect(decoded.tasks.first?.title == "Task")
     #expect(decoded.taskParkings.isEmpty)
 }
+
+@Test
+func releaseManifestUsesSemanticVersionAndBuildOrdering() throws {
+    let manifest = FocusTraceReleaseManifest(
+        version: "0.2.0",
+        build: "3",
+        minimumSystemVersion: "14.0",
+        bundleIdentifier: "com.local.FocusTrace",
+        assetURL: try #require(
+            URL(string: "https://github.com/cornliu26/FocusTrace/releases/download/v0.2.0/FocusTrace-macOS-arm64.zip")
+        ),
+        sha256: String(repeating: "a", count: 64),
+        size: 42
+    )
+    #expect(manifest.isNewer(thanVersion: "0.1.9", build: "99"))
+    #expect(!manifest.isNewer(thanVersion: "0.2.0", build: "3"))
+    #expect(manifest.hasValidChecksum)
+
+    let newerBuild = FocusTraceReleaseManifest(
+        version: "0.2.0",
+        build: "4",
+        minimumSystemVersion: "14.0",
+        bundleIdentifier: manifest.bundleIdentifier,
+        assetURL: manifest.assetURL,
+        sha256: manifest.sha256,
+        size: manifest.size
+    )
+    #expect(newerBuild.isNewer(thanVersion: "0.2.0", build: "3"))
+    #expect(FocusTraceSemanticVersion("1.10.0")! > FocusTraceSemanticVersion("1.9.9")!)
+}

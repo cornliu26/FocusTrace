@@ -5,8 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/swiftpm-common.sh"
 cd "$FOCUS_TRACE_ROOT"
 
-swift build -c release "${SWIFTPM_COMMON_ARGS[@]}"
-BIN_DIR="$(swift build -c release --show-bin-path "${SWIFTPM_COMMON_ARGS[@]}")"
+BUILD_ARGS=(-c release "${SWIFTPM_COMMON_ARGS[@]}")
+if [[ -n "${FOCUS_TRACE_BUILD_ARCH:-}" ]]; then
+  BUILD_ARGS+=(--arch "$FOCUS_TRACE_BUILD_ARCH")
+fi
+
+swift build "${BUILD_ARGS[@]}"
+BIN_DIR="$(swift build --show-bin-path "${BUILD_ARGS[@]}")"
 
 APP_PATH="$FOCUS_TRACE_ROOT/dist/FocusTrace.app"
 CONTENTS="$APP_PATH/Contents"
@@ -18,6 +23,7 @@ if [[ -d "$APP_PATH" ]]; then
 fi
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 install -m 755 "$BIN_DIR/FocusTrace" "$MACOS_DIR/FocusTrace"
+install -m 755 "$BIN_DIR/FocusTraceUpdater" "$MACOS_DIR/FocusTraceUpdater"
 install -m 755 "$BIN_DIR/FocusTraceReport" "$FOCUS_TRACE_ROOT/dist/FocusTraceReport"
 install -m 644 "$FOCUS_TRACE_ROOT/Packaging/Info.plist" "$CONTENTS/Info.plist"
 install -m 644 "$FOCUS_TRACE_ROOT/Packaging/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"

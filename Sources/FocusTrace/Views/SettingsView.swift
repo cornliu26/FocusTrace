@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var state: ApplicationState
     @ObservedObject private var preferences: AppPreferences
+    @EnvironmentObject private var updateManager: UpdateManager
     @State private var showingDeleteDayConfirmation = false
     @State private var showingDeleteAllConfirmation = false
 
@@ -97,6 +98,56 @@ struct SettingsView: View {
                             }
                             Spacer()
                         }
+                    }
+                    .padding(4)
+                }
+
+                SettingsSectionCard(
+                    title: "软件更新",
+                    systemImage: "arrow.triangle.2.circlepath"
+                ) {
+                    VStack(alignment: .leading, spacing: 13) {
+                        HStack {
+                            Text("当前版本")
+                            Spacer()
+                            Text(updateManager.currentVersionText)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                        Toggle(
+                            "每天自动检查一次更新",
+                            isOn: $preferences.automaticUpdateChecks
+                        )
+                        HStack {
+                            if let release = updateManager.availableRelease {
+                                Button("安装 \(release.version) 并重启") {
+                                    Task { await updateManager.installAvailableUpdate() }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            } else {
+                                Button("立即检查") {
+                                    Task { await updateManager.checkForUpdates() }
+                                }
+                            }
+                            Spacer()
+                            if updateManager.isBusy {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                        if !updateManager.detail.isEmpty {
+                            Text(updateManager.detail)
+                                .font(.caption)
+                                .foregroundStyle(
+                                    updateManager.state == .failed
+                                        ? Color.red
+                                        : Color.secondary
+                                )
+                                .textSelection(.enabled)
+                        }
+                        Text("更新从公开 GitHub Release 下载，并在替换前校验文件哈希、版本和代码签名。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(4)
                 }

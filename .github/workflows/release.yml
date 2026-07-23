@@ -1,0 +1,38 @@
+name: Release FocusTrace
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Select Swift toolchain
+        run: sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Test
+        env:
+          FOCUSTRACE_NATIVE_TESTING: "1"
+        run: ./Scripts/test.sh
+
+      - name: Package Apple Silicon app
+        run: ./Scripts/package-release.sh "$GITHUB_REF_NAME" --skip-tests
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/release/FocusTrace-macOS-arm64.zip#FocusTrace for macOS (Apple Silicon)" \
+            "dist/release/latest.json#FocusTrace update manifest" \
+            --verify-tag \
+            --generate-notes \
+            --title "FocusTrace $GITHUB_REF_NAME"

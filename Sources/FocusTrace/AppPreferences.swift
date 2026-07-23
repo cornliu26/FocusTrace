@@ -13,6 +13,7 @@ final class AppPreferences: ObservableObject {
         static let capturePaused = "capturePaused"
         static let launchAtLogin = "launchAtLogin"
         static let attentionCueEnabled = "attentionCueEnabled"
+        static let automaticUpdateChecks = "automaticUpdateChecks"
     }
 
     private let defaults: UserDefaults
@@ -26,6 +27,7 @@ final class AppPreferences: ObservableObject {
     @Published var capturePaused: Bool { didSet { save() } }
     @Published var launchAtLogin: Bool { didSet { save() } }
     @Published var attentionCueEnabled: Bool { didSet { save() } }
+    @Published var automaticUpdateChecks: Bool { didSet { save() } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -49,6 +51,9 @@ final class AppPreferences: ObservableObject {
         attentionCueEnabled = defaults.object(forKey: Key.attentionCueEnabled) == nil
             ? true
             : defaults.bool(forKey: Key.attentionCueEnabled)
+        automaticUpdateChecks = defaults.object(forKey: Key.automaticUpdateChecks) == nil
+            ? true
+            : defaults.bool(forKey: Key.automaticUpdateChecks)
     }
 
     func completeOnboarding() {
@@ -87,5 +92,6 @@ final class AppPreferences: ObservableObject {
         defaults.set(capturePaused, forKey: Key.capturePaused)
         defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
         defaults.set(attentionCueEnabled, forKey: Key.attentionCueEnabled)
+        defaults.set(automaticUpdateChecks, forKey: Key.automaticUpdateChecks)
     }
 }

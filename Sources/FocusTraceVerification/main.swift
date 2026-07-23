@@ -1215,6 +1215,39 @@ suite.run("JSON 导出可往返") {
     try expect(decoded.taskParkings.isEmpty, "空停车数组往返失败")
 }
 
+suite.run("更新清单按语义版本和构建号判断") {
+    let assetURL = URL(
+        string: "https://github.com/cornliu26/FocusTrace/releases/download/v0.2.0/FocusTrace-macOS-arm64.zip"
+    )!
+    let manifest = FocusTraceReleaseManifest(
+        version: "0.2.0",
+        build: "3",
+        minimumSystemVersion: "14.0",
+        bundleIdentifier: "com.local.FocusTrace",
+        assetURL: assetURL,
+        sha256: String(repeating: "a", count: 64),
+        size: 42
+    )
+    try expect(manifest.isNewer(thanVersion: "0.1.9", build: "99"), "语义版本比较错误")
+    try expect(!manifest.isNewer(thanVersion: "0.2.0", build: "3"), "相同版本不应更新")
+    try expect(manifest.hasValidChecksum, "合法 SHA-256 未通过校验")
+
+    let newerBuild = FocusTraceReleaseManifest(
+        version: "0.2.0",
+        build: "4",
+        minimumSystemVersion: "14.0",
+        bundleIdentifier: manifest.bundleIdentifier,
+        assetURL: manifest.assetURL,
+        sha256: manifest.sha256,
+        size: manifest.size
+    )
+    try expect(newerBuild.isNewer(thanVersion: "0.2.0", build: "3"), "构建号比较错误")
+    try expect(
+        FocusTraceSemanticVersion("1.10.0")! > FocusTraceSemanticVersion("1.9.9")!,
+        "语义版本不应按字符串排序"
+    )
+}
+
 print("")
 if suite.failures.isEmpty {
     print("FocusTrace verification: \(suite.passed) checks passed")
