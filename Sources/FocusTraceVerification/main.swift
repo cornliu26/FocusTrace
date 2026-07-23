@@ -1123,7 +1123,7 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(markdown.contains("状态：已解锁"), "日报应显示阶段 2 状态")
     try expect(markdown.contains("Codex → 微信"), "日报应包含聚合模式")
     try expect(markdown.contains("本周单项建议"), "日报应限制为单项建议")
-    try expect(markdown.contains("挂起工作流 / 已返回：2 / 1 次"), "日报应包含挂起聚合指标")
+    try expect(markdown.contains("保存返回点 / 已返回：2 / 1 次"), "日报应包含返回点聚合指标")
     try expect(!markdown.contains("PRIVATE_RESUME_CUE"), "日报不应暴露恢复线索")
     try expect(!markdown.contains("com.openai.codex"), "日报不应泄露 Bundle ID")
     try expect(!markdown.contains(fixture.snapshot.activities[0].id.uuidString), "日报不应泄露原始事件 ID")

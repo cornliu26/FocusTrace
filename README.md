@@ -14,7 +14,7 @@ FocusTrace 不把“切了多少次应用”直接解释成分心。它把工作
 
 - 按时间轴查看应用与工作流切换；
 - 将 macOS Space 绑定到不同工作流；
-- 在 Agent 等待时保存返回线索；
+- 在 Agent 或构建等待时保存“回来后第一步”；
 - 进行本地专注训练并比较前后效果。
 
 ## 一分钟开始
@@ -42,7 +42,7 @@ cd FocusTrace
 1. **一个桌面对应一个工作流。** 第一次绑定后，切换 macOS Space 就是切换工作流。
 2. **平时直接工作。** 应用切换只是轨迹，不会自动被判定成走神。
 3. **想训练时再点“开始专注”。** 必要工具切换不会让训练失败。
-4. **Agent 等待时先挂起。** 写一句回来后的第一步，然后切到另一个桌面。
+4. **Agent 等待时保存返回点。** 写下回来后立刻做的第一步，再切到另一个桌面；切回来时这一步会重新出现。
 5. **下班后再看回顾。** 不需要在工作时一直盯着仪表盘。
 
 菜单栏与主窗口始终由同一个 `FlowGuidanceEngine` 给出当前唯一的主要下一步。
@@ -55,7 +55,7 @@ cd FocusTrace
 | 应用轨迹 | 记录前台应用、起止时间、锁屏、睡眠与唤醒 | 不读取窗口标题、网页地址或输入内容 |
 | 专注训练 | 静默基线、倒计时、必要工具集合、渐进时长 | 不因合理工具切换判定失败 |
 | 专注护栏 | 5 分钟进度反馈；频繁且稳定的工作流切换才提示 | 不把原始 Space 事件直接当作分心 |
-| Agent 挂起 | 保存本地恢复线索并统计返回耗时 | 不把恢复文字写入日报 |
+| Agent 返回点 | 保存本地“回来后第一步”并统计返回耗时 | 不把这段文字写入日报或交给 Codex |
 | 本地分析 | 归一化每小时指标、近 7 日趋势、单项训练与次日验证 | 不使用黑盒 ADHD 评分 |
 | 数据管理 | JSON/CSV 导出、保留期、按日删除与全部清空 | 不上传云端，不建立账号 |
 
@@ -91,14 +91,23 @@ FocusTrace：
 ./Scripts/generate-daily-report.sh
 ```
 
-脚本生成两个仅含聚合结果的文件：
+脚本生成仅含聚合结果的输入文件，并向 App 注册这个本地目录：
 
 ```text
 .focustrace/reports/latest.json
 .focustrace/reports/latest.md
+~/Library/Application Support/FocusTrace/CodexBridge/bridge.json
 ```
 
-Codex 定时任务以 `latest.json` 的 `schemaVersion` 协议为事实源，并只读取这两个文件。报告不包含原始活动行、Bundle ID、事件 ID、窗口标题、URL、输入内容或工作流恢复文字。
+App 自己始终提供无需 Codex 的实时规则分析。Codex 定时任务是可选的第二层：
+
+1. 只读取 `latest.json` / `latest.md` 的聚合指标；
+2. 形成一个结论、一项建议、两条证据和一个次日验证点；
+3. 通过 `Scripts/install-codex-review.py` 校验后写回
+   `.focustrace/reports/codex-YYYY-MM-DD.json`；
+4. App 校验 `sourceReportID` 后，在“回顾分析”页直接呈现结论。
+
+文件桥不包含原始活动行、Bundle ID、事件 ID、窗口标题、URL、输入内容或“回来后第一步”。Codex 不参与采集；即使定时任务没有运行，本地分析、时间轴和训练也照常工作。
 
 ## 构建与验证
 

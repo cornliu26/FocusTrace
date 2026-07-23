@@ -46,13 +46,12 @@ struct FocusTraceApp: App {
             MenuBarView(state: state)
                 .environmentObject(updateManager)
         } label: {
-            Label(
-                "FocusTrace",
-                systemImage: state.currentFocusID == nil
-                    ? "rectangle.3.group"
-                    : "rectangle.3.group.fill"
-            )
-            .labelStyle(.iconOnly)
+            FocusTraceStatusMark(isFocusing: state.currentFocusID != nil)
+                .accessibilityLabel(
+                    state.currentFocusID == nil
+                        ? "FocusTrace"
+                        : "FocusTrace 正在专注"
+                )
         }
         .menuBarExtraStyle(.window)
 

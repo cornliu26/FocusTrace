@@ -3,52 +3,51 @@ import FocusTraceCore
 
 struct ReviewView: View {
     @ObservedObject var state: ApplicationState
+    @StateObject private var codexBridge = CodexReviewBridge()
     @State private var showPlanHistory = false
+    @State private var showLocalEvidence = false
+    @State private var showDailyDetails = false
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                dailySummary
-                dailyCoaching
+                reviewHeader
+                localAnalysis
+                codexAnalysis
                 if hasUnresolvedReview {
                     unresolvedReview
                 }
                 phaseTwoAnalysis
+                dailySummary
                 trainingHistory
             }
             .focusTracePageContent()
         }
         .focusTraceScreen()
+        .task(id: state.selectedDate) {
+            await codexBridge.observe(for: state.selectedDate)
+        }
     }
 
-    private var dailyCoaching: some View {
+    private var reviewHeader: some View {
+        HStack(alignment: .center, spacing: 16) {
+            FocusTraceDateNavigator(selection: $state.selectedDate)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("先看结论，再决定是否展开数据")
+                    .font(.headline)
+                Text("本地分析实时可用；Codex 是可选的每日深度复盘，不参与采集。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    private var localAnalysis: some View {
         let analysis = state.selectedCoachingAnalysis
         let recommendation = analysis.recommendation
-        return GroupBox("每日分析") {
+        return GroupBox {
             VStack(alignment: .leading, spacing: 14) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
-                    MetricCard(
-                        title: "有效记录",
-                        value: String(format: "%.0f 分", analysis.metrics.recordedMinutes),
-                        detail: analysis.quality.isReliableForBehavior ? "可用于行为比较" : "先看数据质量"
-                    )
-                    MetricCard(
-                        title: "工作流归因",
-                        value: percent(analysis.metrics.attributedRatio),
-                        detail: "可靠门槛 70%"
-                    )
-                    MetricCard(
-                        title: "应用切换率",
-                        value: String(format: "%.1f/时", analysis.metrics.appSwitchesPerHour),
-                        detail: trendText(analysis.trend.appSwitchRateDeltaPercent)
-                    )
-                    MetricCard(
-                        title: "工作流切换率",
-                        value: String(format: "%.1f/时", analysis.metrics.workflowSwitchesPerHour),
-                        detail: trendText(analysis.trend.workflowSwitchRateDeltaPercent)
-                    )
-                }
-
                 if !analysis.quality.warnings.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(analysis.quality.warnings, id: \.self) { warning in
@@ -75,12 +74,13 @@ struct ReviewView: View {
                     .background(evaluationColor(evaluation.status).opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
                 }
 
-                Divider()
-
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
+                        Text("今天唯一建议")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(FocusTraceTheme.mint)
                         Text(recommendation.title)
-                            .font(.title3.bold())
+                            .font(.title2.bold())
                         Text(recommendation.rationale)
                             .foregroundStyle(.secondary)
                     }
@@ -90,13 +90,6 @@ struct ReviewView: View {
                         .padding(.horizontal, 9)
                         .padding(.vertical, 4)
                         .background(.secondary.opacity(0.1), in: Capsule())
-                }
-
-                VStack(alignment: .leading, spacing: 5) {
-                    ForEach(recommendation.evidence, id: \.self) { evidence in
-                        Label(evidence, systemImage: "chart.bar.xaxis")
-                            .font(.callout)
-                    }
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -123,9 +116,161 @@ struct ReviewView: View {
                     }
                     .buttonStyle(FocusTracePrimaryButtonStyle())
                 }
+
+                DisclosureGroup(
+                    "为什么这么建议",
+                    isExpanded: $showLocalEvidence
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(recommendation.evidence, id: \.self) { evidence in
+                            Label(evidence, systemImage: "chart.bar.xaxis")
+                                .font(.callout)
+                        }
+                        LazyVGrid(
+                            columns: Array(repeating: GridItem(.flexible()), count: 4),
+                            spacing: 10
+                        ) {
+                            MetricCard(
+                                title: "有效记录",
+                                value: String(format: "%.0f 分", analysis.metrics.recordedMinutes),
+                                detail: analysis.quality.isReliableForBehavior ? "可用于比较" : "暂不做行为判断"
+                            )
+                            MetricCard(
+                                title: "工作流归因",
+                                value: percent(analysis.metrics.attributedRatio),
+                                detail: "可靠门槛 70%"
+                            )
+                            MetricCard(
+                                title: "应用切换率",
+                                value: String(format: "%.1f/时", analysis.metrics.appSwitchesPerHour),
+                                detail: trendText(analysis.trend.appSwitchRateDeltaPercent)
+                            )
+                            MetricCard(
+                                title: "工作流切换率",
+                                value: String(format: "%.1f/时", analysis.metrics.workflowSwitchesPerHour),
+                                detail: trendText(analysis.trend.workflowSwitchRateDeltaPercent)
+                            )
+                        }
+                    }
+                    .padding(.top, 10)
+                }
             }
             .padding(8)
+        } label: {
+            HStack {
+                Label("FocusTrace 本地分析", systemImage: "cpu")
+                Spacer()
+                Text("无需 Codex · 实时")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
         }
+    }
+
+    @ViewBuilder
+    private var codexAnalysis: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 13) {
+                Text("FocusTrace 只把匿名聚合报告交给 Codex；Codex 负责解释趋势并写回本页，不会读取窗口标题、输入内容或逐条轨迹。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                switch codexBridge.status {
+                case .notConnected:
+                    bridgeStatus(
+                        title: "尚未连接每日复盘",
+                        detail: "让 Codex 定时任务运行一次 ./Scripts/generate-daily-report.sh，App 会自动发现文件协议。",
+                        systemImage: "link.badge.plus",
+                        color: .orange
+                    )
+                case .noAggregate:
+                    bridgeStatus(
+                        title: "这一天还没有聚合报告",
+                        detail: "定时任务运行后会生成；这不影响上面的本地分析。",
+                        systemImage: "calendar.badge.exclamationmark",
+                        color: .secondary
+                    )
+                case let .waiting(report):
+                    bridgeStatus(
+                        title: "聚合报告已准备，等待 Codex 写回",
+                        detail: "报告生成于 \(report.generatedAt.formatted(date: .omitted, time: .shortened))；每日定时任务完成后会自动出现在这里。",
+                        systemImage: "clock.arrow.circlepath",
+                        color: .blue
+                    )
+                case let .ready(_, review):
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(review.headline)
+                            .font(.title3.bold())
+                        Text(review.interpretation)
+                            .foregroundStyle(.secondary)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Codex 建议")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.purple)
+                            Text(review.recommendation)
+                                .font(.headline)
+                            ForEach(review.evidence, id: \.self) { evidence in
+                                Label(evidence, systemImage: "checkmark.circle")
+                                    .font(.callout)
+                            }
+                            Label("下次验证：\(review.nextCheck)", systemImage: "scope")
+                                .font(.callout.weight(.medium))
+                                .foregroundStyle(.purple)
+                        }
+                        Text("写回于 \(review.generatedAt.formatted(date: .omitted, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                case let .invalid(message):
+                    bridgeStatus(
+                        title: "Codex 写回内容未通过校验",
+                        detail: message,
+                        systemImage: "exclamationmark.shield",
+                        color: .red
+                    )
+                }
+
+                HStack {
+                    Spacer()
+                    Button("刷新 Codex 结果") {
+                        codexBridge.load(for: state.selectedDate)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(8)
+        } label: {
+            HStack {
+                Label("Codex 每日深度复盘", systemImage: "sparkles")
+                Spacer()
+                Text("可选增强 · 文件桥")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func bridgeStatus(
+        title: String,
+        detail: String,
+        systemImage: String,
+        color: Color
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(color)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private var hasUnresolvedReview: Bool {
@@ -134,12 +279,12 @@ struct ReviewView: View {
 
     private var dailySummary: some View {
         let summary = state.selectedSummary
-        return GroupBox("每日回顾") {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    FocusTraceDateNavigator(selection: $state.selectedDate)
-                    Spacer()
-                }
+        return GroupBox {
+            DisclosureGroup(
+                "当天记录明细",
+                isExpanded: $showDailyDetails
+            ) {
+                VStack(alignment: .leading, spacing: 14) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
                     MetricCard(title: "应用切换", value: "\(summary.appSwitchCount)", detail: "原始切换")
                     MetricCard(
@@ -151,12 +296,12 @@ struct ReviewView: View {
                     MetricCard(title: "确认分心", value: "\(summary.confirmedDistractionCount)", detail: "用户确认")
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
-                    MetricCard(title: "挂起工作流", value: "\(summary.taskParkingCount)", detail: "有意保存恢复线索")
-                    MetricCard(title: "已返回", value: "\(summary.resumedTaskCount)", detail: "根据恢复线索继续")
+                    MetricCard(title: "保存返回点", value: "\(summary.taskParkingCount)", detail: "离开前写下下一步")
+                    MetricCard(title: "已返回", value: "\(summary.resumedTaskCount)", detail: "按返回点继续")
                     MetricCard(
                         title: "平均恢复耗时",
                         value: summary.averageTaskResumeLatency.map(duration) ?? "—",
-                        detail: "从挂起到继续"
+                        detail: "从离开到继续"
                     )
                 }
 
@@ -170,8 +315,12 @@ struct ReviewView: View {
                         }
                     }
                 }
+                }
+                .padding(.top, 12)
             }
             .padding(8)
+        } label: {
+            Text("数据证据")
         }
     }
 
@@ -348,7 +497,7 @@ struct ReviewView: View {
         case .none: return nil
         case .bindWorkflow: return "绑定当前桌面"
         case let .startFocus(minutes): return "现在开始 \(minutes) 分钟"
-        case .parkWorkflow: return "练习一次挂起"
+        case .parkWorkflow: return "练习一次保存返回点"
         case .reviewTimeline: return "打开时间轴校准"
         }
     }

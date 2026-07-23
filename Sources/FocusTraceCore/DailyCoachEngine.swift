@@ -510,15 +510,15 @@ public enum DailyCoachEngine {
         if workflowRateHigh, slice.summary.workflowSwitchCount >= 3 {
             return DailyCoachRecommendation(
                 kind: .agentParkingDrill,
-                title: "练习一次“挂起—切换—返回”",
-                rationale: "工作流切换偏密集时，训练目标不是禁止切换，而是把切换变成有恢复线索的计划行为。",
+                title: "练习一次“保存返回点—切换—回来”",
+                rationale: "工作流切换偏密集时，训练目标不是禁止切换，而是让每次切换都有明确的回来第一步。",
                 evidence: ["工作流切换 \(rounded(slice.metrics.workflowSwitchesPerHour)) 次/小时", trend.workflowSwitchRateDeltaPercent.map { "较近 7 日基线 \(signedPercent($0))" } ?? "趋势样本尚不足"],
                 confidence: confidence,
                 action: .parkWorkflow,
                 method: DailyTrainingMethod(
-                    title: "Agent 等待切换协议",
-                    steps: ["离开前写下回来后的第一步", "使用“挂起当前工作流”再切桌面", "返回原桌面后立刻执行这一步"],
-                    successMeasure: "至少产生一次挂起和返回记录，且恢复线索被执行"
+                    title: "Agent 等待返回点",
+                    steps: ["离开前写下回来后的第一步", "保存返回点后再切桌面", "返回原桌面后立刻执行这一步"],
+                    successMeasure: "至少保存并返回一次，回来后执行了第一步"
                 )
             )
         }
@@ -550,7 +550,7 @@ public enum DailyCoachEngine {
             action: .startFocus(minutes: minutes),
             method: DailyTrainingMethod(
                 title: "单一产出训练",
-                steps: ["开始前写清这一轮唯一产出", "只使用该工作流的必要工具；Agent 等待时先挂起", "结束后记录完成情况和主观难度 1–5"],
+                steps: ["开始前写清这一轮唯一产出", "只使用该工作流的必要工具；Agent 等待时先保存返回点", "结束后记录完成情况和主观难度 1–5"],
                 successMeasure: "达到目标时长、完成目标且没有确认的非必要偏离"
             )
         )
@@ -588,15 +588,15 @@ public enum DailyCoachEngine {
             return DailyCoachEvaluation(status: .needsAdjustment, title: "训练已执行但尚未成功", evidence: "今天训练 \(current.metrics.trainingCount) 次，成功 0 次；下一轮应降低负荷。")
         case .agentParkingDrill:
             guard current.metrics.parkingCount > 0 else {
-                return DailyCoachEvaluation(status: .notRun, title: "挂起协议尚未练习", evidence: "今天没有挂起工作流记录。")
+                return DailyCoachEvaluation(status: .notRun, title: "返回点流程尚未练习", evidence: "今天没有保存返回点的记录。")
             }
             let improved = previousMetrics.map {
                 current.metrics.workflowSwitchesPerHour < $0.workflowSwitchesPerHour
             } ?? true
             return DailyCoachEvaluation(
                 status: improved ? .improved : .needsAdjustment,
-                title: improved ? "挂起协议已执行" : "已挂起，但切换密度未下降",
-                evidence: "今天挂起 \(current.metrics.parkingCount) 次，工作流切换 \(rounded(current.metrics.workflowSwitchesPerHour)) 次/小时。"
+                title: improved ? "返回点流程已执行" : "已保存返回点，但切换密度未下降",
+                evidence: "今天保存返回点 \(current.metrics.parkingCount) 次，工作流切换 \(rounded(current.metrics.workflowSwitchesPerHour)) 次/小时。"
             )
         }
     }

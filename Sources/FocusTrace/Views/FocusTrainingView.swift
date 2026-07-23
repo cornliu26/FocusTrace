@@ -12,6 +12,9 @@ struct FocusTrainingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if let checkpoint = state.resumedWorkflowCheckpoint {
+                    resumedCheckpointCard(checkpoint)
+                }
                 currentSessionCard
                 if !state.activeTaskParkings.isEmpty {
                     parkedTasksCard
@@ -52,6 +55,33 @@ struct FocusTrainingView: View {
             }
         } message: {
             Text("会闭合当前区间并释放桌面绑定；30 秒内可以撤销。")
+        }
+    }
+
+    private func resumedCheckpointCard(
+        _ checkpoint: ResumedWorkflowCheckpoint
+    ) -> some View {
+        GroupBox {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "arrow.uturn.backward.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(FocusTraceTheme.mint)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("你已回到“\(checkpoint.taskTitle)”")
+                        .font(.headline)
+                    Text("现在先做：\(checkpoint.nextStep)")
+                        .font(.title3.weight(.semibold))
+                    Text("这就是刚才保存的返回点；执行第一步后，大脑不需要重新回忆整个上下文。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("开始做") {
+                    state.acknowledgeResumedWorkflowCheckpoint()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .padding(8)
         }
     }
 
@@ -125,7 +155,9 @@ struct FocusTrainingView: View {
                         } else {
                             Button("切换工作流") { state.showTaskSwitcher = true }
                         }
-                        Button("Agent 等待：挂起并切换") { state.showTaskParking = true }
+                        Button("Agent 还在运行：保存返回点") {
+                            state.showTaskParking = true
+                        }
                     }
                 } else {
                     idleGuidance
@@ -158,7 +190,7 @@ struct FocusTrainingView: View {
                 .controlSize(.large)
             }
             if state.currentTaskID != nil {
-                Button("Agent 等待：先留一句恢复线索") {
+                Button("Agent 还在运行？保存返回点再切走") {
                     state.showTaskParking = true
                 }
                 .buttonStyle(.borderless)
@@ -177,10 +209,10 @@ struct FocusTrainingView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(state.taskName(for: parking.taskID))
                                 .font(.headline)
-                            Text(parking.resumeCue)
+                            Text("回来先做：\(parking.resumeCue)")
                                 .foregroundStyle(.secondary)
                             HStack(spacing: 6) {
-                                Text("挂起于")
+                                Text("离开于")
                                 Text(parking.parkedAt, style: .relative)
                                 if let remindAt = parking.remindAt {
                                     Text("· 提醒")

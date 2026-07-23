@@ -210,6 +210,72 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     }
 }
 
+/// Aggregate-only interpretation written back by the optional Codex daily task.
+/// It deliberately references an AutomationReportArtifact instead of activity
+/// rows, so the app can reject stale or unrelated reviews.
+public struct CodexReviewArtifact: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let sourceReportID: String
+    public let reportDate: Date
+    public let generatedAt: Date
+    public let headline: String
+    public let interpretation: String
+    public let recommendation: String
+    public let evidence: [String]
+    public let nextCheck: String
+
+    public init(
+        schemaVersion: Int = 1,
+        sourceReportID: String,
+        reportDate: Date,
+        generatedAt: Date,
+        headline: String,
+        interpretation: String,
+        recommendation: String,
+        evidence: [String],
+        nextCheck: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.sourceReportID = sourceReportID
+        self.reportDate = reportDate
+        self.generatedAt = generatedAt
+        self.headline = headline
+        self.interpretation = interpretation
+        self.recommendation = recommendation
+        self.evidence = evidence
+        self.nextCheck = nextCheck
+    }
+
+    public var hasValidShape: Bool {
+        schemaVersion == 1
+            && !sourceReportID.isEmpty
+            && !headline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !interpretation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !recommendation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && evidence.count == 2
+            && evidence.allSatisfy {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            && !nextCheck.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+public struct CodexBridgeRegistration: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let reportDirectory: String
+    public let updatedAt: Date
+
+    public init(
+        schemaVersion: Int = 1,
+        reportDirectory: String,
+        updatedAt: Date
+    ) {
+        self.schemaVersion = schemaVersion
+        self.reportDirectory = reportDirectory
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum AutomationReportEngine {
     public static func makeReport(
         snapshot: FocusTraceLocalSnapshot,
@@ -325,8 +391,8 @@ public enum AutomationReportEngine {
             "- 平均返回耗时：\(returnLatency)",
             "- 中位连续专注：\(medianFocus)",
             "- 训练：\(report.trainingCount) 次，成功 \(report.successfulTrainingCount) 次",
-            "- 挂起工作流 / 已返回：\(report.summary.taskParkingCount) / \(report.summary.resumedTaskCount) 次",
-            "- 挂起工作流平均恢复耗时：\(formatDuration(report.summary.averageTaskResumeLatency))",
+            "- 保存返回点 / 已返回：\(report.summary.taskParkingCount) / \(report.summary.resumedTaskCount) 次",
+            "- 返回点平均恢复耗时：\(formatDuration(report.summary.averageTaskResumeLatency))",
             "- 当前计划：v\(report.currentPlan.version)，\(report.currentPlan.focusMinutes) 分钟 × 每日 \(report.currentPlan.sessionsPerDay) 次",
             "",
             "## 数据质量与归一化",

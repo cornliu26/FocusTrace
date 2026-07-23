@@ -65,7 +65,7 @@ struct SettingsView: View {
                         Text("基线前三个工作日不会发送提醒。未由你确认的事件始终只算疑似分心。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次工作流才提示，主动挂起和原始 Space 事件不计入。")
+                        Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次工作流才提示，主动保存返回点和原始 Space 事件不计入。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -77,12 +77,30 @@ struct SettingsView: View {
                     systemImage: "externaldrive"
                 ) {
                     VStack(alignment: .leading, spacing: 13) {
-                        Picker("自动保留", selection: $preferences.retentionDays) {
-                            Text("30 天").tag(30)
-                            Text("90 天").tag(90)
-                            Text("365 天").tag(365)
+                        HStack {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("自动保留行为数据")
+                                Text("到期数据会在本机自动清理")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Menu("\(preferences.retentionDays) 天") {
+                                ForEach([30, 90, 365], id: \.self) { days in
+                                    Button {
+                                        preferences.retentionDays = days
+                                    } label: {
+                                        if preferences.retentionDays == days {
+                                            Label("\(days) 天", systemImage: "checkmark")
+                                        } else {
+                                            Text("\(days) 天")
+                                        }
+                                    }
+                                }
+                            }
+                            .menuStyle(.borderlessButton)
+                            .fixedSize()
                         }
-                        .pickerStyle(.segmented)
 
                         HStack {
                             Button("导出 JSON") { exportJSON() }

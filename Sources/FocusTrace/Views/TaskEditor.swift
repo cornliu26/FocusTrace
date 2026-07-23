@@ -223,6 +223,11 @@ struct TaskParkingSheet: View {
     @State private var resumeCue = ""
     @State private var reminderMinutes: Int? = 10
     @State private var destinationTaskID: UUID?
+    private let examples = [
+        "查看 Agent 结果，然后运行测试",
+        "确认构建结果，处理第一个错误",
+        "检查改动 diff，决定是否继续"
+    ]
 
     private var destinationTasks: [FocusTaskModel] {
         state.activeTasks.filter { $0.id != state.currentTaskID }
@@ -231,20 +236,43 @@ struct TaskParkingSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("挂起当前工作流")
+                Text("保存返回点，再切去别的工作流")
                     .font(.title2.bold())
-                Text(state.currentTask?.title ?? "未选择工作流")
+                Text("当前：\(state.currentTask?.title ?? "未选择工作流")")
                     .foregroundStyle(.secondary)
             }
 
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "bookmark.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(FocusTraceTheme.mint)
+                Text("当 Agent、编译或测试还在运行，而你想先做别的事时，用这里记下“回来后立刻做的第一步”。它不是工作总结，也不会把文字交给 Codex。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(12)
+            .background(
+                FocusTraceTheme.mint.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10)
+            )
+
             VStack(alignment: .leading, spacing: 7) {
-                Text("回来后的第一步")
+                Text("回来后立刻做什么？")
                     .font(.headline)
                 TextField("例如：查看 Agent 输出，然后跑一次测试", text: $resumeCue)
                     .textFieldStyle(.roundedBorder)
-                Text("留下一个可执行的恢复线索，不用在脑中反复记着进度。")
+                Text("写动作，不写背景。例如“看结果并跑测试”，而不是“继续这个问题”。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ForEach(examples, id: \.self) { example in
+                        Button(example) {
+                            resumeCue = example
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                    }
+                }
             }
 
             Picker("提醒我返回", selection: $reminderMinutes) {
@@ -256,7 +284,7 @@ struct TaskParkingSheet: View {
             }
 
             if state.isSpaceWorkflowModeEnabled {
-                Label("挂起后直接切换 macOS 桌面，目标工作流会自动恢复。", systemImage: "rectangle.2.swap")
+                Label("保存后手动切换 macOS 桌面；回到这个桌面时，FocusTrace 会把这一步重新显示出来。", systemImage: "rectangle.2.swap")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } else {
@@ -269,7 +297,7 @@ struct TaskParkingSheet: View {
             }
 
             if state.currentFocusID != nil {
-                Label("挂起会结束当前专注轮次，并请你记录本轮结果。", systemImage: "info.circle")
+                Label("保存返回点会结束当前专注轮次，并请你记录本轮结果。", systemImage: "info.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -293,7 +321,7 @@ struct TaskParkingSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 540)
+        .frame(width: 620)
         .focusTraceScreen()
         .focusTraceVisualSystem()
         .onAppear {
@@ -304,7 +332,7 @@ struct TaskParkingSheet: View {
     }
 
     private var parkingButtonTitle: String {
-        if state.isSpaceWorkflowModeEnabled { return "挂起，接着切换桌面" }
-        return destinationTaskID == nil ? "挂起工作流" : "挂起并切换"
+        if state.isSpaceWorkflowModeEnabled { return "保存返回点" }
+        return destinationTaskID == nil ? "保存返回点" : "保存并切换"
     }
 }

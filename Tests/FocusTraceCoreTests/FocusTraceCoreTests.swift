@@ -1074,6 +1074,33 @@ func automationJSONIsStructuredAndAggregateOnly() throws {
 }
 
 @Test
+func codexReviewRequiresACompleteTwoEvidenceWriteback() {
+    let review = CodexReviewArtifact(
+        sourceReportID: "focustrace-report",
+        reportDate: Date(timeIntervalSince1970: 100),
+        generatedAt: Date(timeIntervalSince1970: 200),
+        headline: "今天的记录质量足够，但训练样本仍不足。",
+        interpretation: "切换率只描述工作方式，不能单独证明分心。",
+        recommendation: "今天完成一次 15 分钟训练。",
+        evidence: ["有效记录 120 分钟", "工作流归因 86%"],
+        nextCheck: "明天比较训练是否完成及主观难度。"
+    )
+    #expect(review.hasValidShape)
+
+    let incomplete = CodexReviewArtifact(
+        sourceReportID: review.sourceReportID,
+        reportDate: review.reportDate,
+        generatedAt: review.generatedAt,
+        headline: review.headline,
+        interpretation: review.interpretation,
+        recommendation: review.recommendation,
+        evidence: ["只有一条证据"],
+        nextCheck: review.nextCheck
+    )
+    #expect(!incomplete.hasValidShape)
+}
+
+@Test
 func csvQuotesSeparatorsWithoutAddingExtraFields() {
     let start = Date(timeIntervalSince1970: 100)
     let record = ActivityRecord(

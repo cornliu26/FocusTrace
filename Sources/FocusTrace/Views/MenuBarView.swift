@@ -10,87 +10,31 @@ struct MenuBarView: View {
     @State private var showingQuickWorkflowCreator = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 11) {
-                FocusTraceBrandMark(size: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(menuTitle)
-                        .font(.system(.headline, design: .rounded, weight: .semibold))
-                    Text(statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
+        VStack(alignment: .leading, spacing: 10) {
+            header
             if state.currentFocusID != nil {
-                ProgressView(
-                    value: Double(state.focusElapsedSeconds),
-                    total: Double(max(1, state.currentFocus?.targetSeconds ?? 1))
-                )
-                HStack {
-                    Text(focusProgressText)
-                        .monospacedDigit()
-                    Spacer()
-                    Button("结束并记录") { state.endFocus() }
-                }
+                activeFocusPanel
             } else {
                 primaryAction
             }
-
-            if state.currentTaskID != nil {
-                Button("Agent 等待：挂起当前工作流") {
-                    openWindow(id: "main")
-                    NSApp.activate(ignoringOtherApps: true)
-                    state.showTaskParking = true
-                }
+            if let checkpoint = state.resumedWorkflowCheckpoint {
+                checkpointStrip(checkpoint)
+            } else if state.currentTaskID != nil {
+                returnPointButton
             }
-
             if !state.activeTaskParkings.isEmpty {
-                Menu("待返回工作流（\(state.activeTaskParkings.count)）") {
-                    ForEach(state.activeTaskParkings) { parking in
-                        if state.isSpaceWorkflowModeEnabled {
-                            Label(
-                                "\(state.taskName(for: parking.taskID)) · 切回对应桌面",
-                                systemImage: "rectangle.2.swap"
-                            )
-                        } else {
-                            Button {
-                                state.resumeTaskParking(parking.id)
-                            } label: {
-                                Text("\(state.taskName(for: parking.taskID)) · \(parking.resumeCue)")
-                            }
-                        }
-                    }
-                }
+                parkedWorkflowsMenu
             }
-
-            Divider()
-            spaceWorkflowSection
-
             if let undo = state.pendingWorkflowUndo {
-                HStack(spacing: 8) {
-                    Text("已完成“\(undo.title)”")
-                        .font(.caption)
-                        .lineLimit(1)
-                    Spacer()
-                    Button("撤销") { state.undoWorkflowCompletion() }
-                }
+                undoStrip(undo)
             }
-
-            Divider()
-
-            HStack {
-                Button("打开今日回顾") {
-                    openMain(.review)
-                }
-                Spacer()
-                moreMenu
-            }
+            contextStrip
+            Divider().padding(.vertical, 1)
+            footer
         }
-        .padding(16)
-        .frame(width: 340)
-        .focusTraceScreen()
+        .padding(12)
+        .frame(width: 304)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
         .focusTraceVisualSystem()
         .confirmationDialog(
             "完成这个工作流？",
@@ -124,34 +68,240 @@ struct MenuBarView: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 9) {
+            FocusTraceBrandMark(size: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(menuTitle)
+                    .font(.system(.subheadline, design: .rounded, weight: .semibold))
+                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 6, height: 6)
+                    Text(statusText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if state.currentFocusID != nil {
+                Text(format(state.focusRemainingSeconds))
+                    .font(.system(.body, design: .rounded, weight: .semibold))
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    private var activeFocusPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ProgressView(
+                value: Double(state.focusElapsedSeconds),
+                total: Double(max(1, state.currentFocus?.targetSeconds ?? 1))
+            )
+            HStack(spacing: 8) {
+                Text(focusProgressText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Spacer()
+                Button("保存返回点") { showReturnPointSheet() }
+                    .buttonStyle(.borderless)
+                Button("结束") { state.endFocus() }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(
+            Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+    }
+
     @ViewBuilder
     private var primaryAction: some View {
         let guidance = state.flowGuidance
         switch guidance.action {
         case .bindWorkflow:
-            Menu(guidance.buttonTitle) {
+            Menu {
                 ForEach(state.activeTasks) { workflow in
                     Button(workflow.title) { state.bindCurrentSpace(to: workflow.id) }
                 }
                 Divider()
                 Button("新建工作流") { showingQuickWorkflowCreator = true }
+            } label: {
+                primaryActionLabel(
+                    guidance.buttonTitle,
+                    systemImage: "rectangle.on.rectangle"
+                )
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         default:
-            Button(guidance.buttonTitle) { perform(guidance.action) }
-                .buttonStyle(FocusTracePrimaryButtonStyle())
+            Button {
+                perform(guidance.action)
+            } label: {
+                primaryActionLabel(
+                    guidance.buttonTitle,
+                    systemImage: primaryActionIcon(guidance.action)
+                )
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 
+    private func primaryActionLabel(
+        _ title: String,
+        systemImage: String
+    ) -> some View {
+        HStack {
+            Label(title, systemImage: systemImage)
+            Spacer()
+            Image(systemName: "arrow.right")
+                .font(.caption.weight(.semibold))
+                .opacity(0.72)
+        }
+        .font(.subheadline.weight(.semibold))
+        .frame(maxWidth: .infinity)
+    }
+
+    private var returnPointButton: some View {
+        Button {
+            showReturnPointSheet()
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "bookmark")
+                Text("Agent 还在运行？保存返回点")
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .font(.caption)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+    }
+
+    private func checkpointStrip(
+        _ checkpoint: ResumedWorkflowCheckpoint
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "arrow.uturn.backward.circle.fill")
+                .foregroundStyle(FocusTraceTheme.mint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("回来先做")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(checkpoint.nextStep)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 4)
+            Button {
+                state.acknowledgeResumedWorkflowCheckpoint()
+            } label: {
+                Image(systemName: "checkmark")
+            }
+            .buttonStyle(.borderless)
+            .help("这一步已开始")
+        }
+        .padding(9)
+        .background(
+            FocusTraceTheme.mint.opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
+    }
+
+    private var parkedWorkflowsMenu: some View {
+        Menu {
+            ForEach(state.activeTaskParkings) { parking in
+                if state.isSpaceWorkflowModeEnabled {
+                    Label(
+                        "\(state.taskName(for: parking.taskID)) · 切回对应桌面",
+                        systemImage: "rectangle.2.swap"
+                    )
+                } else {
+                    Button {
+                        state.resumeTaskParking(parking.id)
+                    } label: {
+                        Text("\(state.taskName(for: parking.taskID)) · \(parking.resumeCue)")
+                    }
+                }
+            }
+        } label: {
+            Label(
+                "待返回工作流 \(state.activeTaskParkings.count)",
+                systemImage: "tray"
+            )
+            .font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+    }
+
+    private func undoStrip(_ undo: PendingWorkflowUndo) -> some View {
+        HStack(spacing: 8) {
+            Text("已完成“\(undo.title)”")
+                .font(.caption)
+                .lineLimit(1)
+            Spacer()
+            Button("撤销") { state.undoWorkflowCompletion() }
+                .buttonStyle(.borderless)
+        }
+    }
+
+    private var contextStrip: some View {
+        HStack(spacing: 7) {
+            Image(systemName: state.currentSpaceWorkflowID == nil
+                  ? "rectangle.on.rectangle"
+                  : "rectangle.fill.on.rectangle.fill")
+                .foregroundStyle(state.currentSpaceWorkflowID == nil
+                                 ? Color.secondary
+                                 : FocusTraceTheme.sky)
+            Text(state.spaceContextText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 1)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 13) {
+            Button {
+                openMain(.review)
+            } label: {
+                Label("回顾", systemImage: "chart.line.uptrend.xyaxis")
+            }
+            Button {
+                openMain(.focus)
+            } label: {
+                Label("训练", systemImage: "scope")
+            }
+            Spacer()
+            moreMenu
+        }
+        .font(.caption)
+        .buttonStyle(.borderless)
+    }
+
     private var moreMenu: some View {
-        Menu("更多") {
-            Button("打开专注训练") { openMain(.focus) }
+        Menu {
             Button("查看三步使用方法") {
                 openMain(.focus)
                 state.showQuickStart = true
             }
             Button("新建工作流并绑定当前桌面") {
                 showingQuickWorkflowCreator = true
+            }
+            if state.currentTaskID != nil {
+                Button("保存返回点") { showReturnPointSheet() }
             }
             if !state.isSpaceWorkflowModeEnabled && !state.activeTasks.isEmpty {
                 Menu("手动切换工作流") {
@@ -160,6 +310,13 @@ struct MenuBarView: View {
                     }
                     Divider()
                     Button("停止当前工作流") { state.switchTask(to: nil) }
+                }
+            }
+            if state.currentSpaceWorkflowID != nil {
+                Divider()
+                Button("解除当前桌面") { state.unbindCurrentSpace() }
+                if let workflow = state.currentSpaceWorkflow {
+                    Button("完成当前工作流") { workflowToComplete = workflow }
                 }
             }
             Divider()
@@ -176,49 +333,8 @@ struct MenuBarView: View {
             }
             Divider()
             Button("退出 FocusTrace") { NSApp.terminate(nil) }
-        }
-    }
-
-    @ViewBuilder
-    private var spaceWorkflowSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: state.currentSpaceWorkflowID == nil ? "rectangle.on.rectangle" : "rectangle.fill.on.rectangle.fill")
-                    .foregroundStyle(state.currentSpaceWorkflowID == nil ? Color.secondary : Color.blue)
-                Text(state.spaceContextText)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Spacer()
-            }
-
-            if !state.needsRebindBindings.isEmpty && !state.isSpaceWorkflowModeEnabled {
-                Text("桌面识别算法已修正，旧绑定需在目标桌面重新绑定（\(state.needsRebindBindings.count) 个待恢复）。")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if state.currentSpaceWorkflowID != nil {
-                HStack {
-                    Button("解除当前桌面") { state.unbindCurrentSpace() }
-                    Spacer()
-                    if let workflow = state.currentSpaceWorkflow {
-                        Button("完成工作流") { workflowToComplete = workflow }
-                    }
-                }
-            } else if !state.activeTasks.isEmpty {
-                Label("从上方选择一次；之后切桌面会自动恢复", systemImage: "arrow.up")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(11)
-        .background(
-            FocusTraceTheme.mint.opacity(0.065),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(FocusTraceTheme.mint.opacity(0.12), lineWidth: 1)
+        } label: {
+            Label("更多", systemImage: "ellipsis.circle")
         }
     }
 
@@ -248,23 +364,41 @@ struct MenuBarView: View {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    private func showReturnPointSheet() {
+        openWindow(id: "main")
+        NSApp.activate(ignoringOtherApps: true)
+        state.showTaskParking = true
+    }
+
     private var statusText: String {
         if let focus = state.currentFocus {
             if state.isCurrentFocusPaused {
-                return "专注已暂停 · 回到“\(state.focusWorkflowName)”桌面自动恢复"
+                return "专注暂停"
             }
             if let grace = state.focusDepartureGraceRemaining {
-                return "暂时离开 · \(grace) 秒内返回不暂停"
+                return "离开宽限 \(grace) 秒"
             }
-            return "专注中 · 目标 \(focus.targetSeconds / 60) 分钟"
+            return "专注中 · \(focus.targetSeconds / 60) 分钟目标"
         }
-        if state.preferences.capturePaused { return "记录已暂停" }
-        if state.activeTasks.isEmpty { return "还没有工作流" }
+        if state.preferences.capturePaused { return "记录暂停" }
+        if state.activeTasks.isEmpty { return "未设置工作流" }
         if state.isSpaceWorkflowModeEnabled && state.currentSpaceWorkflowID == nil {
-            return "桌面未绑定 · 不归因到旧工作流"
+            return "当前桌面未绑定"
         }
-        if state.currentTaskID == nil { return "当前桌面未绑定工作流" }
-        return state.isRecording ? "应用切换记录中" : "工作时段之外"
+        if state.currentTaskID == nil { return "当前桌面未绑定" }
+        return state.isRecording ? "记录中" : "工作时段外"
+    }
+
+    private var statusColor: Color {
+        if state.currentFocusID != nil {
+            return state.isCurrentFocusPaused
+                ? FocusTraceTheme.amber
+                : FocusTraceTheme.mint
+        }
+        if state.preferences.capturePaused {
+            return FocusTraceTheme.coral
+        }
+        return state.isRecording ? FocusTraceTheme.mint : Color.secondary
     }
 
     private var menuTitle: String {
@@ -285,6 +419,17 @@ struct MenuBarView: View {
 
     private func format(_ seconds: Int) -> String {
         String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func primaryActionIcon(_ action: FlowNextAction) -> String {
+        switch action {
+        case .resumeCapture: return "record.circle"
+        case .createWorkflow: return "plus"
+        case .bindWorkflow: return "rectangle.on.rectangle"
+        case .viewFocus: return "scope"
+        case .openSchedule: return "calendar"
+        case .startFocus: return "play.fill"
+        }
     }
 }
 

@@ -449,7 +449,7 @@ struct TimelineChart: View {
         case .taskChanged: return "手动工作流切换"
         case .workflowChanged: return "桌面工作流切换"
         case .reminderSent: return "发送温和提醒"
-        case .taskParked: return "挂起工作流"
+        case .taskParked: return "保存返回点"
         case .taskResumed: return "恢复工作流"
         case .focusPaused: return "跨桌面暂停专注"
         case .focusResumed: return "返回后恢复专注"

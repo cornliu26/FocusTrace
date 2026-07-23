@@ -24,6 +24,14 @@ struct PendingWorkflowUndo: Identifiable, Equatable {
     let expiresAt: Date
 }
 
+struct ResumedWorkflowCheckpoint: Identifiable, Equatable {
+    let id = UUID()
+    let taskID: UUID
+    let taskTitle: String
+    let nextStep: String
+    let resumedAt: Date
+}
+
 @MainActor
 final class ApplicationState: ObservableObject {
     let store: FocusTraceStore
@@ -47,6 +55,7 @@ final class ApplicationState: ObservableObject {
     @Published private(set) var now = Date()
     @Published var pendingSessionReview: PendingSessionReview?
     @Published private(set) var pendingWorkflowUndo: PendingWorkflowUndo?
+    @Published private(set) var resumedWorkflowCheckpoint: ResumedWorkflowCheckpoint?
     @Published var trainingProposal: TrainingProposal?
     @Published var showTaskSwitcher = false
     @Published var showTaskCreator = false
@@ -748,6 +757,10 @@ final class ApplicationState: ObservableObject {
         parking.dismissedAt = Date()
         saveOrReport()
         objectWillChange.send()
+    }
+
+    func acknowledgeResumedWorkflowCheckpoint() {
+        resumedWorkflowCheckpoint = nil
     }
 
     func startFocus(minutes: Int? = nil) {
@@ -1642,6 +1655,12 @@ final class ApplicationState: ObservableObject {
     private func resolveTaskParking(_ parking: TaskParkingModel, resumedAt date: Date) {
         guard parking.isActive else { return }
         parking.resumedAt = date
+        resumedWorkflowCheckpoint = ResumedWorkflowCheckpoint(
+            taskID: parking.taskID,
+            taskTitle: taskName(for: parking.taskID),
+            nextStep: parking.resumeCue,
+            resumedAt: date
+        )
         insertMarker(.taskResumed, at: date, taskID: parking.taskID)
         saveOrReport()
         objectWillChange.send()
