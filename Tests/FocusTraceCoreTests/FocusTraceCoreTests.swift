@@ -1137,7 +1137,8 @@ func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
     #expect(instructions.contains("evidence"))
     #expect(instructions.contains("at most one training"))
     #expect(script.contains("FocusTraceReport"))
-    #expect(script.contains("CodexBridge/bridge.json"))
+    #expect(script.contains("Application Support/FocusTrace/CodexBridge"))
+    #expect(script.contains("$BRIDGE_DIR/bridge.json"))
     #expect(!CodexWorkspaceContract.setupPrompt.contains("API key"))
 }
 
