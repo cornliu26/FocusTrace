@@ -57,7 +57,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "FocusTraceVerification",
-            dependencies: ["FocusTraceCore"]
+            dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
         ),
         .executableTarget(
             name: "FocusTraceSpaceAcceptance",
@@ -69,7 +69,7 @@ let package = Package(
         ),
         .testTarget(
             name: "FocusTraceCoreTests",
-            dependencies: ["FocusTraceCore"],
+            dependencies: ["FocusTraceCore", "FocusTraceMacSupport"],
             swiftSettings: focusTraceTestSwiftSettings,
             linkerSettings: focusTraceTestLinkerSettings
         )

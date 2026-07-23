@@ -85,7 +85,19 @@ FocusTrace：
 
 ## Codex 每日回顾
 
-无需单独开发 API。运行：
+无需单独开发 API。普通用户在 App 的“回顾分析”页点击
+“在 Codex 中接入每日复盘”即可：
+
+1. FocusTrace 在本机生成一个只含聚合报告协议的 Codex 工作区；
+2. 通过官方 `codex://threads/new` 深链打开 ChatGPT / Codex 桌面端，
+   同时预填工作区路径和完整接入指令；
+3. 用户在 Codex 中发送一次预填指令，Codex 完成首次验证并创建每日
+   18:35 的定时任务。
+
+Codex 深链不会替用户自动发送消息，所以最后一次发送确认仍由用户完成。
+FocusTrace 不写入 Codex 私有配置，也不需要 API key。
+
+源码开发或手动验证时也可以运行：
 
 ```bash
 ./Scripts/generate-daily-report.sh

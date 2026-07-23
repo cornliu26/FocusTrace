@@ -17,14 +17,19 @@ APP_PATH="$FOCUS_TRACE_ROOT/dist/FocusTrace.app"
 CONTENTS="$APP_PATH/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
 RESOURCES_DIR="$CONTENTS/Resources"
+CODEX_BRIDGE_RESOURCES="$RESOURCES_DIR/CodexBridge"
 
 if [[ -d "$APP_PATH" ]]; then
   rm -rf "$APP_PATH"
 fi
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$CODEX_BRIDGE_RESOURCES"
 install -m 755 "$BIN_DIR/FocusTrace" "$MACOS_DIR/FocusTrace"
 install -m 755 "$BIN_DIR/FocusTraceUpdater" "$MACOS_DIR/FocusTraceUpdater"
 install -m 755 "$BIN_DIR/FocusTraceReport" "$FOCUS_TRACE_ROOT/dist/FocusTraceReport"
+install -m 755 "$BIN_DIR/FocusTraceReport" "$CODEX_BRIDGE_RESOURCES/FocusTraceReport"
+install -m 755 \
+  "$FOCUS_TRACE_ROOT/Scripts/install-codex-review.py" \
+  "$CODEX_BRIDGE_RESOURCES/install-codex-review.py"
 install -m 644 "$FOCUS_TRACE_ROOT/Packaging/Info.plist" "$CONTENTS/Info.plist"
 install -m 644 "$FOCUS_TRACE_ROOT/Packaging/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 

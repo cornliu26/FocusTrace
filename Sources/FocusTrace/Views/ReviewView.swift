@@ -4,6 +4,7 @@ import FocusTraceCore
 struct ReviewView: View {
     @ObservedObject var state: ApplicationState
     @StateObject private var codexBridge = CodexReviewBridge()
+    @StateObject private var codexLauncher = CodexConnectionLauncher()
     @State private var showPlanHistory = false
     @State private var showLocalEvidence = false
     @State private var showDailyDetails = false
@@ -177,12 +178,25 @@ struct ReviewView: View {
 
                 switch codexBridge.status {
                 case .notConnected:
-                    bridgeStatus(
-                        title: "尚未连接每日复盘",
-                        detail: "让 Codex 定时任务运行一次 ./Scripts/generate-daily-report.sh，App 会自动发现文件协议。",
-                        systemImage: "link.badge.plus",
-                        color: .orange
-                    )
+                    VStack(alignment: .leading, spacing: 12) {
+                        bridgeStatus(
+                            title: "尚未连接每日复盘",
+                            detail: "FocusTrace 会准备匿名聚合工作区，并把完整接入指令预填到 Codex。",
+                            systemImage: "link.badge.plus",
+                            color: .orange
+                        )
+                        Button {
+                            codexLauncher.connect()
+                            codexBridge.load(for: state.selectedDate)
+                        } label: {
+                            Label(
+                                codexConnectButtonTitle,
+                                systemImage: "arrow.up.forward.app"
+                            )
+                        }
+                        .buttonStyle(FocusTracePrimaryButtonStyle())
+                        .disabled(codexLauncher.status == .preparing)
+                    }
                 case .noAggregate:
                     bridgeStatus(
                         title: "这一天还没有聚合报告",
@@ -231,6 +245,8 @@ struct ReviewView: View {
                     )
                 }
 
+                codexConnectionFeedback
+
                 HStack {
                     Spacer()
                     Button("刷新 Codex 结果") {
@@ -248,6 +264,31 @@ struct ReviewView: View {
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    private var codexConnectButtonTitle: String {
+        codexLauncher.status == .preparing
+            ? "正在准备本地工作区…"
+            : "在 Codex 中接入每日复盘"
+    }
+
+    @ViewBuilder
+    private var codexConnectionFeedback: some View {
+        switch codexLauncher.status {
+        case .idle, .preparing:
+            EmptyView()
+        case .opened:
+            Label(
+                "Codex 已打开：发送已经填好的指令，即可完成首次验证和每日定时任务。",
+                systemImage: "checkmark.circle"
+            )
+            .font(.callout)
+            .foregroundStyle(.green)
+        case let .failed(message):
+            Label(message, systemImage: "exclamationmark.triangle")
+                .font(.callout)
+                .foregroundStyle(.red)
         }
     }
 

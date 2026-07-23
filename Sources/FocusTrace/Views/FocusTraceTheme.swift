@@ -1,4 +1,5 @@
 import SwiftUI
+import FocusTraceMacSupport
 
 enum FocusTraceTheme {
     static let pageMaxWidth: CGFloat = 1040
@@ -131,19 +132,12 @@ struct FocusTraceStatusMark: View {
     var isFocusing = false
 
     var body: some View {
-        HStack(alignment: .center, spacing: 1.5) {
-            panel(height: 8, opacity: isFocusing ? 0.72 : 0.45)
-            panel(height: 13, opacity: 1)
-            panel(height: 8, opacity: isFocusing ? 0.72 : 0.45)
-        }
-        .frame(width: 18, height: 16)
-        .accessibilityHidden(true)
-    }
-
-    private func panel(height: CGFloat, opacity: Double) -> some View {
-        RoundedRectangle(cornerRadius: 1.4, style: .continuous)
-            .fill(Color.primary.opacity(opacity))
-            .frame(width: 4.2, height: height)
+        Image(nsImage: FocusTraceMenuBarIcon.image(isFocusing: isFocusing))
+            .renderingMode(.template)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 18, height: 16)
+            .accessibilityHidden(true)
     }
 }
 

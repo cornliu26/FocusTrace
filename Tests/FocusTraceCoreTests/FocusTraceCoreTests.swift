@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import FocusTraceMacSupport
 @testable import FocusTraceCore
 
 @Test
@@ -1098,6 +1099,86 @@ func codexReviewRequiresACompleteTwoEvidenceWriteback() {
         nextCheck: review.nextCheck
     )
     #expect(!incomplete.hasValidShape)
+}
+
+@Test
+func codexWorkspaceDeepLinkPrefillsTheSupportedLocalChatContract() throws {
+    let workspace = URL(
+        fileURLWithPath: "/Users/example/Library/Application Support/FocusTrace/CodexWorkspace",
+        isDirectory: true
+    )
+    let url = try #require(
+        CodexWorkspaceContract.deepLink(workspaceURL: workspace)
+    )
+    let components = try #require(
+        URLComponents(url: url, resolvingAgainstBaseURL: false)
+    )
+    let query = Dictionary(
+        uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+            item.value.map { (item.name, $0) }
+        }
+    )
+
+    #expect(components.scheme == "codex")
+    #expect(components.host == "threads")
+    #expect(components.path == "/new")
+    #expect(query["path"] == workspace.standardizedFileURL.path)
+    #expect(query["prompt"] == CodexWorkspaceContract.setupPrompt)
+    #expect(query["prompt"]?.contains("每天 18:35") == true)
+}
+
+@Test
+func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
+    let instructions = CodexWorkspaceContract.agentsInstructions
+    let script = CodexWorkspaceContract.reportScript
+
+    #expect(instructions.contains("Read only `Reports/latest.json` and `Reports/latest.md`"))
+    #expect(instructions.contains("Never read or expose FocusTrace `store.json`"))
+    #expect(instructions.contains("evidence"))
+    #expect(instructions.contains("at most one training"))
+    #expect(script.contains("FocusTraceReport"))
+    #expect(script.contains("CodexBridge/bridge.json"))
+    #expect(!CodexWorkspaceContract.setupPrompt.contains("API key"))
+}
+
+@Test
+func codexWorkspaceReportScriptIsValidBash() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(
+        at: directory,
+        withIntermediateDirectories: true
+    )
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let scriptURL = directory.appendingPathComponent("generate-daily-report.sh")
+    try CodexWorkspaceContract.reportScript.write(
+        to: scriptURL,
+        atomically: true,
+        encoding: .utf8
+    )
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/bash")
+    process.arguments = ["-n", scriptURL.path]
+    try process.run()
+    process.waitUntilExit()
+
+    #expect(process.terminationStatus == 0)
+}
+
+@Test @MainActor
+func menuBarBrandMarkIsANonEmptyNativeTemplateImage() throws {
+    let idle = FocusTraceMenuBarIcon.image(isFocusing: false)
+    let focusing = FocusTraceMenuBarIcon.image(isFocusing: true)
+    let idleData = try #require(idle.tiffRepresentation)
+    let focusingData = try #require(focusing.tiffRepresentation)
+
+    #expect(idle.isTemplate)
+    #expect(focusing.isTemplate)
+    #expect(idle.size.width == 18 && idle.size.height == 16)
+    #expect(idleData.count > 100)
+    #expect(focusingData.count > 100)
+    #expect(idleData != focusingData)
 }
 
 @Test

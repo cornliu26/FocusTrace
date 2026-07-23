@@ -1,5 +1,6 @@
 import Foundation
 import FocusTraceCore
+import FocusTraceMacSupport
 
 private struct VerificationFailure: Error, CustomStringConvertible {
     let message: String
@@ -1133,6 +1134,54 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(jsonText.contains("\"recommendation\""), "结构化日报应包含单项训练")
     try expect(!jsonText.contains("PRIVATE_RESUME_CUE"), "结构化日报不应暴露恢复线索")
     try expect(!jsonText.contains("com.openai.codex"), "结构化日报不应泄露 Bundle ID")
+}
+
+suite.run("Codex 一键接入使用官方深链和聚合工作区") {
+    let workspace = URL(
+        fileURLWithPath: "/Users/example/Library/Application Support/FocusTrace/CodexWorkspace",
+        isDirectory: true
+    )
+    guard let url = CodexWorkspaceContract.deepLink(workspaceURL: workspace),
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+        throw VerificationFailure(message: "无法生成 Codex 接入深链")
+    }
+    let query = Dictionary(
+        uniqueKeysWithValues: (components.queryItems ?? []).compactMap { item in
+            item.value.map { (item.name, $0) }
+        }
+    )
+    try expect(components.scheme == "codex", "接入应使用 Codex 官方 URL scheme")
+    try expect(components.host == "threads" && components.path == "/new", "接入应打开新本地任务")
+    try expect(query["path"] == workspace.standardizedFileURL.path, "接入应绑定生成的本地工作区")
+    try expect(query["prompt"] == CodexWorkspaceContract.setupPrompt, "接入提示词应完整预填")
+    try expect(
+        CodexWorkspaceContract.agentsInstructions.contains(
+            "Never read or expose FocusTrace `store.json`"
+        ),
+        "工作区必须固定原始数据禁读边界"
+    )
+    try expect(
+        CodexWorkspaceContract.agentsInstructions.contains(
+            "Read only `Reports/latest.json` and `Reports/latest.md`"
+        ),
+        "工作区必须限制为聚合报告"
+    )
+}
+
+suite.run("状态栏品牌图标是非空的原生模板图") {
+    let idle = FocusTraceMenuBarIcon.image(isFocusing: false)
+    let focusing = FocusTraceMenuBarIcon.image(isFocusing: true)
+    try expect(idle.isTemplate && focusing.isTemplate, "状态栏图标必须交给 macOS 模板着色")
+    try expect(
+        idle.size.width == 18 && idle.size.height == 16,
+        "状态栏图标尺寸应保持紧凑"
+    )
+    guard let idleData = idle.tiffRepresentation,
+          let focusingData = focusing.tiffRepresentation else {
+        throw VerificationFailure(message: "状态栏模板图为空")
+    }
+    try expect(idleData.count > 100 && focusingData.count > 100, "状态栏模板图必须包含实际像素")
+    try expect(idleData != focusingData, "专注状态应有可区分的图标")
 }
 
 suite.run("本地 store.json 兼容解码") {
