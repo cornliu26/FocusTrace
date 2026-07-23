@@ -187,7 +187,7 @@ public final class SpaceAnchorRegistry {
         lastResolvedIdentity = identity
         seedCurrentSpaceSnapshot()
         let bindingIDs = bindings(on: identity).map(\.bindingID)
-        bindingIDs.forEach(release)
+        bindingIDs.forEach { release(bindingID: $0) }
         return bindingIDs.sorted { $0.uuidString < $1.uuidString }
     }
 
@@ -199,7 +199,7 @@ public final class SpaceAnchorRegistry {
         let bindingIDs = bindingsByID.values
             .filter { workflowID == nil || $0.workflowID == workflowID }
             .map(\.bindingID)
-        bindingIDs.forEach(release)
+        bindingIDs.forEach { release(bindingID: $0) }
     }
 
     public func contains(bindingID: UUID) -> Bool {
