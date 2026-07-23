@@ -22,9 +22,9 @@ struct OnboardingView: View {
                 HStack(spacing: 16) {
                     FocusTraceBrandMark(size: 64)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("只做一件事，就可以开始")
+                        Text("设置当前工作流")
                             .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("给当前桌面的工作流起个名字。以后切换 macOS 桌面，FocusTrace 会自动恢复对应工作流。")
+                        Text("输入名称后，当前桌面会自动绑定到这个工作流。")
                             .foregroundStyle(.secondary)
                     }
                 }

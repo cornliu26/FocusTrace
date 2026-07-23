@@ -44,7 +44,7 @@ final class AttentionCueOverlayController {
         displayIdentifier: String?
     ) {
         model.taskName = taskName
-        model.message = "连续守住主线 \(milestoneMinutes) 分钟"
+        model.message = "已连续工作 \(milestoneMinutes) 分钟"
         model.isStrongWarning = false
         model.mode = .reward
         ensurePanel(on: displayIdentifier)
@@ -62,9 +62,7 @@ final class AttentionCueOverlayController {
         model.taskName = taskName
         model.isStrongWarning = strong
         if baselineComplete {
-            model.message = strong
-                ? "10 分钟切换了 \(switchCount) 次 · 先挂起或回到主线"
-                : "10 分钟切换了 \(switchCount) 次 · 停一下，确认下一步"
+            model.message = "10 分钟内切换 \(switchCount) 次工作流"
         } else {
             model.message = "基线观察：10 分钟切换了 \(switchCount) 次工作流"
         }
@@ -182,7 +180,7 @@ private struct AttentionCueOverlayView: View {
                 Text(model.message)
                     .font(.callout.weight(.semibold))
                     .lineLimit(1)
-                Text("工作流 · \(model.taskName)")
+                Text(model.taskName)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -15,16 +15,8 @@ struct SettingsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                FocusTracePageHeader(
-                    eyebrow: "CONTROL",
-                    title: "设置与数据",
-                    detail: "记录、提醒、数据与隐私控制都在这里。",
-                    systemImage: "slider.horizontal.3"
-                )
-
                 SettingsSectionCard(
                     title: "自动记录",
-                    detail: "决定什么时候记录，以及是否随登录启动。",
                     systemImage: "calendar.badge.clock"
                 ) {
                     VStack(alignment: .leading, spacing: 13) {
@@ -56,7 +48,6 @@ struct SettingsView: View {
 
                 SettingsSectionCard(
                     title: "专注提醒",
-                    detail: "控制屏幕护栏和非允许应用的提醒时机。",
                     systemImage: "bell.badge"
                 ) {
                     VStack(alignment: .leading, spacing: 13) {
@@ -82,7 +73,6 @@ struct SettingsView: View {
 
                 SettingsSectionCard(
                     title: "数据与保留",
-                    detail: "所有导出、保留和删除操作都只作用于本机。",
                     systemImage: "externaldrive"
                 ) {
                     VStack(alignment: .leading, spacing: 13) {
@@ -113,7 +103,6 @@ struct SettingsView: View {
 
                 SettingsSectionCard(
                     title: "隐私边界",
-                    detail: "清楚说明 FocusTrace 会记录什么、不会记录什么。",
                     systemImage: "lock.shield"
                 ) {
                     VStack(alignment: .leading, spacing: 11) {
@@ -131,8 +120,7 @@ struct SettingsView: View {
                     .padding(4)
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
+            .focusTracePageContent()
         }
         .focusTraceScreen()
         .confirmationDialog(
@@ -172,7 +160,6 @@ struct SettingsView: View {
 
 private struct SettingsSectionCard<Content: View>: View {
     let title: String
-    let detail: String
     let systemImage: String
     @ViewBuilder let content: Content
     @Environment(\.colorScheme) private var colorScheme
@@ -188,13 +175,8 @@ private struct SettingsSectionCard<Content: View>: View {
                         FocusTraceTheme.mint.opacity(0.1),
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous)
                     )
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(.headline, design: .rounded, weight: .semibold))
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(title)
+                    .font(.system(.headline, design: .rounded, weight: .semibold))
             }
 
             Divider()

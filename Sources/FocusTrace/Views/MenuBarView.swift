@@ -11,12 +11,8 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 11) {
-                FocusTraceBrandMark(size: 40)
+                FocusTraceBrandMark(size: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("FOCUSTRACE")
-                        .font(.caption2.weight(.bold))
-                        .tracking(1.1)
-                        .foregroundStyle(FocusTraceTheme.mint)
                     Text(menuTitle)
                         .font(.system(.headline, design: .rounded, weight: .semibold))
                     Text(statusText)

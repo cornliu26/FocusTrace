@@ -25,40 +25,25 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(AppSection.allCases, selection: $state.selectedAppSection) { section in
-                HStack(spacing: 10) {
-                    Image(systemName: section.icon)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(
-                            state.selectedAppSection == section
-                                ? FocusTraceTheme.mint
-                                : Color.secondary
-                        )
-                        .frame(width: 26, height: 26)
-                        .background(
-                            (state.selectedAppSection == section
-                                ? FocusTraceTheme.mint.opacity(0.12)
-                                : Color.clear),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        )
-                    Text(section.rawValue)
-                        .font(.system(.body, design: .rounded, weight: .medium))
-                }
-                .tag(section)
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
-            .background(FocusTraceTheme.navy.opacity(0.025))
-            .safeAreaInset(edge: .top) {
+            VStack(spacing: 0) {
                 FocusTraceBrandLockup()
                     .padding(.horizontal, 14)
                     .padding(.top, 14)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .safeAreaInset(edge: .bottom) {
+
+                VStack(spacing: 4) {
+                    ForEach(AppSection.allCases) { section in
+                        sidebarButton(section)
+                    }
+                }
+                .padding(.horizontal, 10)
+
+                Spacer(minLength: 12)
                 captureStatus
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(FocusTraceTheme.navy.opacity(0.025))
             .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 260)
         } detail: {
             Group {
@@ -119,6 +104,33 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
             state.shutdown()
         }
+    }
+
+    private func sidebarButton(_ section: AppSection) -> some View {
+        let isSelected = state.selectedAppSection == section
+        return Button {
+            state.selectedAppSection = section
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(isSelected ? FocusTraceTheme.mint : Color.secondary)
+                    .frame(width: 24)
+                Text(section.rawValue)
+                    .font(.system(.body, design: .rounded, weight: .medium))
+                    .foregroundStyle(.primary)
+                Spacer()
+            }
+            .padding(.horizontal, 11)
+            .frame(height: 38)
+            .contentShape(Rectangle())
+            .background(
+                isSelected ? FocusTraceTheme.mint.opacity(0.12) : Color.clear,
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var captureStatus: some View {

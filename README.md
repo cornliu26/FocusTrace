@@ -1,41 +1,21 @@
 <p align="center">
-  <img src="./Assets/FocusTraceIcon.png" width="116" alt="FocusTrace icon">
+  <img src="./Assets/FocusTraceIcon.png" width="96" alt="FocusTrace icon">
 </p>
 
 <h1 align="center">FocusTrace</h1>
 
 <p align="center">
-  <strong>把注意力，留给主线。</strong><br>
-  为 Agent 并发时代设计的 macOS 本地专注轨迹与训练工具。
+  macOS 本地专注记录与训练工具
 </p>
-
-<p align="center">
-  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111827?style=flat-square&logo=apple&logoColor=white">
-  <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white">
-  <img alt="Local only" src="https://img.shields.io/badge/data-local_only-57E0C5?style=flat-square&labelColor=0B1220">
-  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-68C7FF?style=flat-square&labelColor=0B1220"></a>
-</p>
-
-![FocusTrace overview](./Assets/README-hero.svg)
 
 FocusTrace 不把“切了多少次应用”直接解释成分心。它把工作中容易混在一起的三件事分开：前台应用切换、真正的工作流切换，以及只有你才能确认的非必要偏离。
 
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <h3>◎ 观察轨迹</h3>
-      <p>用应用片段与 macOS Space 工作流构成时间轴。锁屏、睡眠和未知桌面不会被错误归因。</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>↗ 守住主线</h3>
-      <p>Agent 等待时保存“回来后的第一步”，再放心切换工作流，不必在脑中同时维护多个上下文。</p>
-    </td>
-    <td width="33%" valign="top">
-      <h3>✓ 每天只练一项</h3>
-      <p>先验证数据质量，再给一项有证据、有步骤、有成功标准的训练；下一工作日检查是否真的改善。</p>
-    </td>
-  </tr>
-</table>
+它主要提供：
+
+- 按时间轴查看应用与工作流切换；
+- 将 macOS Space 绑定到不同工作流；
+- 在 Agent 等待时保存返回线索；
+- 进行本地专注训练并比较前后效果。
 
 ## 一分钟开始
 
@@ -81,17 +61,7 @@ cd FocusTrace
 
 ## 分析闭环
 
-```text
-检查记录质量
-      ↓
-比较每小时指标与近 7 日基线
-      ↓
-只提出一项训练
-      ↓
-记录完成情况与主观难度
-      ↓
-下一工作日验证实际发出的建议
-```
+FocusTrace 先检查记录质量，再比较每小时指标与近 7 日基线。训练完成后记录完成情况和主观难度，并在下一工作日验证效果。
 
 数据不足时，FocusTrace 会明确说“现在不能判断注意力”，并优先修复工作流归因或 Space 识别。正式阶段 2 计划调整仍需至少 **10 个工作日 + 20 次训练**；每个计划版本至少运行 5 次训练，且只有用户确认后才会生效。
 

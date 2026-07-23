@@ -8,21 +8,9 @@ struct TimelineView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                FocusTracePageHeader(
-                    eyebrow: "TRACE",
-                    title: "今天发生了什么",
-                    detail: "工作流在上，应用轨迹在下；先观察，再判断。",
-                    systemImage: "timeline.selection"
-                )
                 nextStepBanner
                 HStack {
-                    DatePicker(
-                        "日期",
-                        selection: $state.selectedDate,
-                        in: ...Date(),
-                        displayedComponents: .date
-                    )
-                    .datePickerStyle(.field)
+                    FocusTraceDateNavigator(selection: $state.selectedDate)
                     Button {
                         state.showQuickStart = true
                     } label: {
@@ -48,7 +36,7 @@ struct TimelineView: View {
                 summaryGrid
                 rawActivityList
             }
-            .padding(24)
+            .focusTracePageContent()
         }
         .focusTraceScreen()
     }
@@ -248,7 +236,7 @@ struct TimelineChart: View {
                     SwitchingScalePopover(averageSwitches: averageSwitches)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("按 5 分钟聚合：颜色显示主应用，柱高显示切换密度")
+                    Text("每 5 分钟统计应用切换次数")
                         .font(.callout.weight(.medium))
                     Text(occupiedBuckets.isEmpty
                          ? "工作时段开始后会在这里形成概览"
@@ -257,9 +245,6 @@ struct TimelineChart: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Text("描述行为，不自动等于分心")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
 
             HStack {
@@ -554,20 +539,15 @@ struct MetricCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Capsule()
-                    .fill(FocusTraceTheme.accentGradient)
-                    .frame(width: 18, height: 3)
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+            Text(title)
+                .font(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
             Text(value)
                 .font(.system(.title2, design: .rounded, weight: .bold))
                 .monospacedDigit()
             Text(detail)
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)

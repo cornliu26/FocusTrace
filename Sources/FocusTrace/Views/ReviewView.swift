@@ -8,12 +8,6 @@ struct ReviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                FocusTracePageHeader(
-                    eyebrow: "REFLECT",
-                    title: "从轨迹里找下一步",
-                    detail: "先检查数据质量，再只练一项；切换次数本身不等于分心。",
-                    systemImage: "chart.xyaxis.line"
-                )
                 dailySummary
                 dailyCoaching
                 if hasUnresolvedReview {
@@ -22,8 +16,7 @@ struct ReviewView: View {
                 phaseTwoAnalysis
                 trainingHistory
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .focusTracePageContent()
         }
         .focusTraceScreen()
     }
@@ -31,7 +24,7 @@ struct ReviewView: View {
     private var dailyCoaching: some View {
         let analysis = state.selectedCoachingAnalysis
         let recommendation = analysis.recommendation
-        return GroupBox("本地分析 · 一次只练一项") {
+        return GroupBox("每日分析") {
             VStack(alignment: .leading, spacing: 14) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
                     MetricCard(
@@ -141,11 +134,10 @@ struct ReviewView: View {
 
     private var dailySummary: some View {
         let summary = state.selectedSummary
-        return GroupBox("\(state.selectedDate.formatted(date: .abbreviated, time: .omitted)) 回顾") {
+        return GroupBox("每日回顾") {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
-                    DatePicker("日期", selection: $state.selectedDate, in: ...Date(), displayedComponents: .date)
-                        .datePickerStyle(.field)
+                    FocusTraceDateNavigator(selection: $state.selectedDate)
                     Spacer()
                 }
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {

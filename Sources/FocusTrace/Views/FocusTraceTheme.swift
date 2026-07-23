@@ -1,6 +1,7 @@
 import SwiftUI
 
 enum FocusTraceTheme {
+    static let pageMaxWidth: CGFloat = 1040
     static let mint = Color(red: 0.34, green: 0.88, blue: 0.77)
     static let sky = Color(red: 0.35, green: 0.72, blue: 0.98)
     static let coral = Color(red: 1.0, green: 0.48, blue: 0.39)
@@ -128,78 +129,126 @@ struct FocusTraceBrandLockup: View {
 
     var body: some View {
         HStack(spacing: compact ? 9 : 12) {
-            FocusTraceBrandMark(size: compact ? 34 : 44)
-            VStack(alignment: .leading, spacing: 1) {
-                Text("FocusTrace")
-                    .font(.system(
-                        size: compact ? 16 : 20,
-                        weight: .bold,
-                        design: .rounded
-                    ))
-                if !compact {
-                    Text("把注意力，留给主线")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            FocusTraceBrandMark(size: compact ? 32 : 40)
+            Text("FocusTrace")
+                .font(.system(
+                    size: compact ? 16 : 20,
+                    weight: .bold,
+                    design: .rounded
+                ))
+        }
+    }
+}
+
+struct FocusTraceDateNavigator: View {
+    @Binding var selection: Date
+    var latestDate = Date()
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showingCalendar = false
+    private let calendar = Calendar.current
+
+    var body: some View {
+        HStack(spacing: 0) {
+            dateButton(systemImage: "chevron.left", accessibilityLabel: "前一天") {
+                moveSelection(by: -1)
+            }
+
+            Divider()
+                .frame(height: 18)
+
+            Button {
+                showingCalendar.toggle()
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "calendar")
+                    Text(dateLabel)
+                        .monospacedDigit()
                 }
+                .font(.callout.weight(.medium))
+                .frame(minWidth: 142)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .popover(isPresented: $showingCalendar, arrowEdge: .bottom) {
+                VStack(alignment: .trailing, spacing: 10) {
+                    DatePicker(
+                        "日期",
+                        selection: $selection,
+                        in: ...latestDay,
+                        displayedComponents: .date
+                    )
+                    .datePickerStyle(.graphical)
+                    .labelsHidden()
+
+                    Button("回到今天") {
+                        selection = latestDay
+                        showingCalendar = false
+                    }
+                    .disabled(calendar.isDate(selection, inSameDayAs: latestDay))
+                }
+                .padding(14)
+            }
+
+            Divider()
+                .frame(height: 18)
+
+            dateButton(systemImage: "chevron.right", accessibilityLabel: "后一天") {
+                moveSelection(by: 1)
+            }
+            .disabled(!canMoveForward)
         }
-    }
-}
-
-struct FocusTracePageHeader: View {
-    let eyebrow: String
-    let title: String
-    let detail: String
-    let systemImage: String
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(FocusTraceTheme.accentGradient.opacity(0.14))
-                Image(systemName: systemImage)
-                    .font(.system(size: 21, weight: .semibold))
-                    .foregroundStyle(FocusTraceTheme.accentGradient)
-            }
-            .frame(width: 48, height: 48)
-
-            VStack(alignment: .leading, spacing: 3) {
-                Text(eyebrow.uppercased())
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.2)
-                    .foregroundStyle(FocusTraceTheme.mint)
-                Text(title)
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
-                Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct FocusTraceStatusPill: View {
-    let text: String
-    let color: Color
-    var systemImage: String?
-
-    var body: some View {
-        Label {
-            Text(text)
-        } icon: {
-            if let systemImage {
-                Image(systemName: systemImage)
-            }
-        }
-        .font(.caption.weight(.semibold))
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .foregroundStyle(color)
-        .background(color.opacity(0.12), in: Capsule())
+        .background(
+            FocusTraceTheme.elevatedFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
         .overlay {
-            Capsule().stroke(color.opacity(0.18), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
         }
+    }
+
+    private var latestDay: Date {
+        calendar.startOfDay(for: latestDate)
+    }
+
+    private var selectedDay: Date {
+        calendar.startOfDay(for: selection)
+    }
+
+    private var canMoveForward: Bool {
+        selectedDay < latestDay
+    }
+
+    private var dateLabel: String {
+        if calendar.isDate(selection, inSameDayAs: latestDay) {
+            return "今天 · \(selection.formatted(.dateTime.month().day()))"
+        }
+        return selection.formatted(date: .abbreviated, time: .omitted)
+    }
+
+    private func moveSelection(by dayOffset: Int) {
+        guard let date = calendar.date(byAdding: .day, value: dayOffset, to: selectedDay) else {
+            return
+        }
+        selection = min(date, latestDay)
+    }
+
+    private func dateButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.callout.weight(.semibold))
+                .frame(width: 34, height: 34)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -272,6 +321,15 @@ struct FocusTraceScreenModifier: ViewModifier {
     }
 }
 
+struct FocusTracePageContentModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: FocusTraceTheme.pageMaxWidth, alignment: .leading)
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+}
+
 struct FocusTraceVisualSystemModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
@@ -283,6 +341,10 @@ struct FocusTraceVisualSystemModifier: ViewModifier {
 extension View {
     func focusTraceScreen() -> some View {
         modifier(FocusTraceScreenModifier())
+    }
+
+    func focusTracePageContent() -> some View {
+        modifier(FocusTracePageContentModifier())
     }
 
     func focusTraceVisualSystem() -> some View {

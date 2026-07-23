@@ -12,14 +12,6 @@ struct FocusTrainingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                FocusTracePageHeader(
-                    eyebrow: "TODAY",
-                    title: state.currentFocus == nil ? "守住当前主线" : "正在专注",
-                    detail: state.currentFocus == nil
-                        ? "一次只推进一个工作流，需要时再开始训练。"
-                        : "保持在所属桌面；必要的工具切换不会打断训练。",
-                    systemImage: state.currentFocus == nil ? "scope" : "timer"
-                )
                 currentSessionCard
                 if !state.activeTaskParkings.isEmpty {
                     parkedTasksCard
@@ -31,8 +23,7 @@ struct FocusTrainingView: View {
                 taskCard
                 privacyNote
             }
-            .padding(24)
-            .frame(maxWidth: 820, alignment: .leading)
+            .focusTracePageContent()
         }
         .focusTraceScreen()
         .sheet(isPresented: $showingNewTask) {
