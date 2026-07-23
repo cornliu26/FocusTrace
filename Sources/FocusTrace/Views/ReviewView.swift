@@ -8,6 +8,12 @@ struct ReviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                FocusTracePageHeader(
+                    eyebrow: "REFLECT",
+                    title: "从轨迹里找下一步",
+                    detail: "先检查数据质量，再只练一项；切换次数本身不等于分心。",
+                    systemImage: "chart.xyaxis.line"
+                )
                 dailySummary
                 dailyCoaching
                 if hasUnresolvedReview {
@@ -19,6 +25,7 @@ struct ReviewView: View {
             .padding(24)
             .frame(maxWidth: 900, alignment: .leading)
         }
+        .focusTraceScreen()
     }
 
     private var dailyCoaching: some View {
@@ -121,7 +128,7 @@ struct ReviewView: View {
                     Button(buttonTitle) {
                         perform(recommendation.action)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(FocusTracePrimaryButtonStyle())
                 }
             }
             .padding(8)

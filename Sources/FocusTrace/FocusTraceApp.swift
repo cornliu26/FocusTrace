@@ -37,7 +37,13 @@ struct FocusTraceApp: App {
         MenuBarExtra {
             MenuBarView(state: state)
         } label: {
-            Label("FocusTrace", systemImage: state.currentFocusID == nil ? "scope" : "scope")
+            Label(
+                "FocusTrace",
+                systemImage: state.currentFocusID == nil
+                    ? "rectangle.3.group"
+                    : "rectangle.3.group.fill"
+            )
+            .labelStyle(.iconOnly)
         }
         .menuBarExtraStyle(.window)
 

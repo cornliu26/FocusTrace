@@ -10,6 +10,8 @@
     <string>FocusTrace</string>
     <key>CFBundleIdentifier</key>
     <string>com.local.FocusTrace</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -26,6 +28,8 @@
     <true/>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSHumanReadableCopyright</key>
+    <string>FocusTrace contributors · MIT License</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>

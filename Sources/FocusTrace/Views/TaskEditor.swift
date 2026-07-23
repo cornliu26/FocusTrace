@@ -33,8 +33,11 @@ struct TaskEditorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(editingTask == nil ? "新建工作流" : "编辑工作流")
-                .font(.title2.bold())
+            HStack(spacing: 11) {
+                FocusTraceBrandMark(size: 38)
+                Text(editingTask == nil ? "新建工作流" : "编辑工作流")
+                    .font(.system(.title2, design: .rounded, weight: .bold))
+            }
             TextField("工作流名称", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.large)
@@ -117,12 +120,14 @@ struct TaskEditorSheet: View {
                     }
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
                 .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(22)
         .frame(width: 560, height: showDetails ? 560 : 230)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .onAppear { loadVisibleApps() }
     }
 
@@ -201,6 +206,8 @@ struct TaskSwitcherSheet: View {
         }
         .padding(20)
         .frame(width: 480, height: 420)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .sheet(isPresented: $showingNewTask) {
             TaskEditorSheet(
                 state: state,
@@ -281,12 +288,14 @@ struct TaskParkingSheet: View {
                     )
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
                 .disabled(resumeCue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(24)
         .frame(width: 540)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .onAppear {
             if !state.isSpaceWorkflowModeEnabled && destinationTaskID == nil {
                 destinationTaskID = destinationTasks.first?.id

@@ -10,13 +10,15 @@ struct MenuBarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: state.currentFocusID == nil ? "scope" : "timer")
-                    .font(.title2)
-                    .foregroundStyle(state.currentFocusID == nil ? Color.secondary : Color.blue)
+            HStack(spacing: 11) {
+                FocusTraceBrandMark(size: 40)
                 VStack(alignment: .leading, spacing: 2) {
+                    Text("FOCUSTRACE")
+                        .font(.caption2.weight(.bold))
+                        .tracking(1.1)
+                        .foregroundStyle(FocusTraceTheme.mint)
                     Text(menuTitle)
-                        .font(.headline)
+                        .font(.system(.headline, design: .rounded, weight: .semibold))
                     Text(statusText)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -89,8 +91,10 @@ struct MenuBarView: View {
                 moreMenu
             }
         }
-        .padding(14)
-        .frame(width: 320)
+        .padding(16)
+        .frame(width: 340)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .confirmationDialog(
             "完成这个工作流？",
             isPresented: Binding(
@@ -133,7 +137,7 @@ struct MenuBarView: View {
             .buttonStyle(.borderedProminent)
         default:
             Button(guidance.buttonTitle) { perform(guidance.action) }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
         }
     }
 
@@ -197,6 +201,15 @@ struct MenuBarView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        .padding(11)
+        .background(
+            FocusTraceTheme.mint.opacity(0.065),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(FocusTraceTheme.mint.opacity(0.12), lineWidth: 1)
         }
     }
 
@@ -289,11 +302,13 @@ private struct QuickWorkflowCreatorSheet: View {
                     )
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
                 .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(22)
         .frame(width: 440)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
     }
 }

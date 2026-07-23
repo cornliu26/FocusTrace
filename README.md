@@ -1,214 +1,181 @@
-# FocusTrace
+<p align="center">
+  <img src="./Assets/FocusTraceIcon.png" width="116" alt="FocusTrace icon">
+</p>
 
-FocusTrace 是一个完全本地运行的 macOS 菜单栏应用，用于区分并记录：
+<h1 align="center">FocusTrace</h1>
 
-- 前台应用切换；
-- 由 macOS 桌面（Space）识别的工作流切换；
-- 用户主动标记的工作流切换；
-- 专注会话中经用户确认的非必要偏离。
+<p align="center">
+  <strong>把注意力，留给主线。</strong><br>
+  为 Agent 并发时代设计的 macOS 本地专注轨迹与训练工具。
+</p>
 
-它不会读取窗口标题、浏览器地址、聊天对象、键盘内容或手机数据，也不用于诊断或治疗 ADHD。
+<p align="center">
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-111827?style=flat-square&logo=apple&logoColor=white">
+  <img alt="Swift 6" src="https://img.shields.io/badge/Swift-6-F05138?style=flat-square&logo=swift&logoColor=white">
+  <img alt="Local only" src="https://img.shields.io/badge/data-local_only-57E0C5?style=flat-square&labelColor=0B1220">
+  <a href="./LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/license-MIT-68C7FF?style=flat-square&labelColor=0B1220"></a>
+</p>
 
-本项目以 [MIT License](LICENSE) 开源。欢迎先阅读 [贡献指南](CONTRIBUTING.md)，尤其是其中的隐私边界。
+![FocusTrace overview](./Assets/README-hero.svg)
 
-## 当前功能
+FocusTrace 不把“切了多少次应用”直接解释成分心。它把工作中容易混在一起的三件事分开：前台应用切换、真正的工作流切换，以及只有你才能确认的非必要偏离。
 
-- 按自定义工作日和工作时间自动记录前台应用；
-- 将当前 macOS 桌面绑定到工作流，并在切换桌面后自动切换工作流上下文；
-- 菜单栏可只填名称后“新建工作流并绑定当前桌面”，产出和允许应用稍后补充；
-- 未绑定、识别中或冲突桌面绝不沿用旧工作流归因；
-- 工作流完成、30 秒撤销、重新打开、归档，以及重启后按稳定 Space ID 恢复绑定；
-- 记录 Space、锁屏、睡眠和唤醒标记；
-- 将 macOS `loginwindow` 识别为锁屏边界，解锁前的时间不计入应用时长；
-- 手动工作流标签，以及每个工作流自己的允许应用集合；
-- 「挂起工作流」：Agent 等待或临时切换前留下一句恢复线索，可选本地提醒；
-- 3 个工作日静默基线；
-- 专注倒计时、20 秒温和提醒和提醒后的四种处理方式；
-- 屏幕边缘“专注护栏”：连续工作流每 5 分钟给予一次即时反馈，10 分钟内出现 3/5 次稳定且未经挂起的工作流切换时分级提示；
-- 训练中离开所属工作流有 10 秒宽限，超过后暂停有效计时，返回原桌面自动恢复；
-- 5 分钟聚合的工作流/主应用/切换密度时间轴，关键事件按 15 分钟合并，原始片段可按需展开；
-- 5 次训练一轮的 5 分钟升降级规则；
-- 满足 10 个工作日和 20 次训练后启用本地针对性分析；
-- 训练计划版本、接受调整与回退；
-- JSON/CSV 导出、90 天默认保留和按日/全部删除；
-- 可选登录时启动。
-- 跨天时自动切到今日时间轴；未创建或未绑定工作流时显示明确引导。
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <h3>◎ 观察轨迹</h3>
+      <p>用应用片段与 macOS Space 工作流构成时间轴。锁屏、睡眠和未知桌面不会被错误归因。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>↗ 守住主线</h3>
+      <p>Agent 等待时保存“回来后的第一步”，再放心切换工作流，不必在脑中同时维护多个上下文。</p>
+    </td>
+    <td width="33%" valign="top">
+      <h3>✓ 每天只练一项</h3>
+      <p>先验证数据质量，再给一项有证据、有步骤、有成功标准的训练；下一工作日检查是否真的改善。</p>
+    </td>
+  </tr>
+</table>
 
-## 最简使用流程
-
-首次启动只需要给当前桌面的工作流起一个名字；记录时段沿用默认值，目标和
-允许应用都可以稍后补充。之后的日常路径是：
-
-1. 切换 macOS 桌面即切换工作流，不需要再次手动选择；
-2. 平时直接工作，只有想训练注意力时才点“开始专注”；
-3. Agent 等待时写一句“回来后的第一步”，然后切到另一个桌面；
-4. 下班后再打开“今日回顾”，不需要工作时盯着时间轴。
-
-菜单栏和主窗口始终突出同一个“当前下一步”。记录时段、允许应用、计划版本、
-导出和删除等低频设置默认不占据主流程。若某个工作流还没有允许应用，只有在
-第一次开始专注时才会出现一次工具确认，并根据该工作流最近的使用记录自动预选。
-
-## 构建与测试
+## 一分钟开始
 
 环境要求：macOS 14 或更高版本、Apple Silicon、Swift 6 Command Line Tools。
 
 ```bash
-./Scripts/test.sh
-./Scripts/build-app.sh
-./Scripts/run-space-acceptance.sh  # 可选：独立三桌面验收
+git clone https://github.com/cornliu26/FocusTrace.git
+cd FocusTrace
+./Scripts/deploy-mac.sh
 ```
 
-`test.sh` 会先编译 Swift Testing 测试目标，再运行独立的
-`FocusTraceVerification` 验证器。后者用于弥补仅安装 Command Line Tools
-时缺少 `xctest` 运行器的问题，确保检查不是只编译而没有执行。
-
-`run-space-acceptance.sh` 会启动一个独立验收窗口。
-它只创建进程内临时绑定，不读取或写入正式 FocusTrace 数据；依次绑定三个
-桌面后，工具会统计 30 次真实切换的正确率和最大识别延迟，并将结果写入
-`.build/space-acceptance-result.json`。它还会验证已有桌面隔离，以及新增、删除
-测试桌面后原绑定不移位，结果写入 `.build/space-regression.txt`。
-
-生成的应用位于：
-
-```text
-dist/FocusTrace.app
-```
-
-`dist/` 中的是构建产物；只做临时调试时可以运行：
-
-```bash
-open dist/FocusTrace.app
-```
-
-日常使用请采用下一节的一键部署入口，避免登录项或启动路径仍指向旧构建。
-
-当前系统的 Swift 编译器和 SDK 存在一个补丁版本差异。`Scripts/swiftc-compatible.sh` 会自动检测并仅在需要时增加兼容参数；Command Line Tools 更新匹配后会自动退化为普通 `swiftc`。
-
-## 一键部署到本机
-
-在 Finder 中双击根目录的 `Deploy-FocusTrace.command`，即可依次完成测试、
-Release 构建、本地签名、安装和重启。应用会安装到稳定路径：
+部署脚本会依次执行测试、Release 构建、本地签名、暂存安装、签名校验、平滑重启与失败回滚。应用安装在：
 
 ```text
 ~/Applications/FocusTrace.app
 ```
 
-也可以从终端或 Agent 运行同一套部署入口：
+已有活动数据和偏好设置会保留。Finder 用户也可以双击根目录的 `Deploy-FocusTrace.command`；它只是同一部署脚本的薄封装。
 
-```bash
-./Scripts/deploy-mac.sh
-```
+> FocusTrace 是菜单栏应用。第一次打开只需要输入一个信息：当前桌面的工作流名称。
 
-部署只替换应用包，不会删除或修改已有活动数据和偏好设置；替换失败时会恢复
-上一个应用包。需要缩短本地迭代时可加 `--skip-tests`，只安装而不启动可加
-`--no-launch`，还可通过 `--install-dir PATH` 指定安装目录。仓库内的
-`AGENTS.md` 规定了 Agent 后续修改时必须遵守的测试、部署和隐私边界。
+## 日常怎么用
 
-## Codex 每日定时回顾
+1. **一个桌面对应一个工作流。** 第一次绑定后，切换 macOS Space 就是切换工作流。
+2. **平时直接工作。** 应用切换只是轨迹，不会自动被判定成走神。
+3. **想训练时再点“开始专注”。** 必要工具切换不会让训练失败。
+4. **Agent 等待时先挂起。** 写一句回来后的第一步，然后切到另一个桌面。
+5. **下班后再看回顾。** 不需要在工作时一直盯着仪表盘。
 
-项目提供一个不需要额外 API Key 的本地报告入口：
+菜单栏与主窗口始终由同一个 `FlowGuidanceEngine` 给出当前唯一的主要下一步。
 
-```bash
-./Scripts/generate-daily-report.sh
-```
+## 核心能力
 
-它会由本地 Swift 规则引擎读取 `store.json`，并只把聚合结果写入：
+| 模块 | FocusTrace 做什么 | 刻意不做什么 |
+| --- | --- | --- |
+| 工作流识别 | 将稳定 Space 身份绑定到工作流，切桌面自动恢复上下文 | 不用窗口位置或桌面序号猜测 |
+| 应用轨迹 | 记录前台应用、起止时间、锁屏、睡眠与唤醒 | 不读取窗口标题、网页地址或输入内容 |
+| 专注训练 | 静默基线、倒计时、必要工具集合、渐进时长 | 不因合理工具切换判定失败 |
+| 专注护栏 | 5 分钟进度反馈；频繁且稳定的工作流切换才提示 | 不把原始 Space 事件直接当作分心 |
+| Agent 挂起 | 保存本地恢复线索并统计返回耗时 | 不把恢复文字写入日报 |
+| 本地分析 | 归一化每小时指标、近 7 日趋势、单项训练与次日验证 | 不使用黑盒 ADHD 评分 |
+| 数据管理 | JSON/CSV 导出、保留期、按日删除与全部清空 | 不上传云端，不建立账号 |
+
+## 分析闭环
 
 ```text
-.focustrace/reports/latest.md
-.focustrace/reports/latest.json
+检查记录质量
+      ↓
+比较每小时指标与近 7 日基线
+      ↓
+只提出一项训练
+      ↓
+记录完成情况与主观难度
+      ↓
+下一工作日验证实际发出的建议
 ```
 
-Markdown 用于人类阅读，JSON 使用带 `schemaVersion` 的稳定协议供 Codex 和
-FocusTrace 界面消费。两者都不包含逐条应用轨迹、Bundle ID、事件 ID、窗口标题、
-URL 或输入内容。
-挂起工作流的「回来后第一步」也不会进入 Markdown 日报，只会输出
-挂起次数、返回次数和平均恢复耗时。
-Codex 桌面端的本地定时任务只需执行上述脚本并读取 `latest.json` 与
-`latest.md`，不需要
-单独开发服务端或配置 OpenAI API Key。Codex 定时任务本身仍使用 Codex
-登录态和在线模型；机器需要开机，Codex 桌面应用需要运行。
+数据不足时，FocusTrace 会明确说“现在不能判断注意力”，并优先修复工作流归因或 Space 识别。正式阶段 2 计划调整仍需至少 **10 个工作日 + 20 次训练**；每个计划版本至少运行 5 次训练，且只有用户确认后才会生效。
 
-日报会先检查有效记录时长、工作流归因率和 Space 信号质量，再比较每小时
-切换率与近 7 个有效工作日基线。即使阶段 2 尚未解锁，也会给出一项可执行
-训练、成功标准和可信度；下一工作日会用实际训练结果或行为变化验证上一项
-建议。阶段 2 仍只在 10 个工作日和 20 次训练后提出正式计划调整。
+## 隐私设计
 
-建议的定时任务提示词是：执行 `./Scripts/generate-daily-report.sh`，只读取
-`.focustrace/reports/latest.json` 与 `latest.md`；先报告数据质量，再报告上一项
-训练验证、今日唯一结论、证据、可信度和下一项训练；不要读取 `store.json`，
-不要自动修改训练计划。
-
-## 数据与权限
-
-行为数据保存在：
+所有行为数据只保存在本机：
 
 ```text
 ~/Library/Application Support/FocusTrace/store.json
 ```
 
-写入采用 250ms 合并和原子替换，正常退出时强制落盘；异常退出后，未闭合片段最多恢复为 5 分钟，避免产生无限时长记录。
+FocusTrace：
 
-应用只请求本地通知权限。应用级前台切换采集不需要辅助功能、屏幕录制或输入监控权限。登录时启动只有在设置页明确开启后才注册。
+- 只保存应用名称、Bundle ID、时间、工作流标签和训练反馈；
+- 不读取窗口标题、URL、聊天对象、键盘内容或手机行为；
+- 不需要辅助功能、屏幕录制或输入监控权限；
+- 只有在你明确开启时才注册登录项；
+- 不自动修改训练计划、允许应用、通知设置或其他偏好。
 
-macOS 的公开 API 不提供稳定 Space ID。为避免新增、删除或重排桌面时绑定移位，
-当前本地版会动态读取 SkyLight 的 `(display UUID, managed Space ID/UUID)`；不读取
-窗口内容。SkyLight 是未公开系统接口，可能随 macOS 更新变化，因此读取失败时
-FocusTrace 会进入“未知”并停止归因，不会回退到窗口位置猜测。这个实现适合当前
-本地自用和 ad-hoc 签名构建，不承诺 Mac App Store 兼容性。
+写入采用 250ms 合并与原子替换。异常退出后，未闭合片段最多恢复为 5 分钟，避免生成无限时长记录。
 
-原方案选择 SwiftData，但当前纯 Command Line Tools 缺少 `SwiftDataMacros`，在不安装完整 Xcode 的前提下无法编译 `@Model`。首版因此通过独立 `FocusTraceStore` 使用 Codable 原子快照；领域模型、Core 模块和 UI 不依赖具体存储实现，安装完整 Xcode 后可迁移为 SwiftData 后端而无需重写业务规则。
+## Codex 每日回顾
 
-## 行为定义
+无需单独开发 API。运行：
 
-- 应用切换：前台 Bundle ID 变化，进入原始时间轴。
-- 工作流切换：进入另一个已绑定的 macOS 桌面；这是主要上下文边界，不自动等于分心。
-- 工作流切换：用户明确选择另一个工作流，或进入其绑定桌面。
-- 疑似分心：基线完成后，专注会话进入非允许应用并持续达到提醒阈值。
-- 确认分心：只能由用户通过提醒或每日回顾确认。
-- 挂起工作流：用户主动保存未完成工作流的恢复线索；返回时记录恢复耗时。
+```bash
+./Scripts/generate-daily-report.sh
+```
 
-短于阈值的非允许应用切换仍会出现在原始时间轴，但不会生成分心事件。
+脚本生成两个仅含聚合结果的文件：
 
-## 工作流、工具与浏览器上下文的粒度
+```text
+.focustrace/reports/latest.json
+.focustrace/reports/latest.md
+```
 
-FocusTrace 不把应用当成工作流。三个概念分开处理：
+Codex 定时任务以 `latest.json` 的 `schemaVersion` 协议为事实源，并只读取这两个文件。报告不包含原始活动行、Bundle ID、事件 ID、窗口标题、URL、输入内容或工作流恢复文字。
 
-- **工作流**按期望产出定义，例如“修复登录问题”或“写完设计文档”；启用桌面模式后由 Space 切换驱动；
-- **工具**是可复用的允许应用集合，例如 Chrome、Codex 和终端，同一个工具可以属于多个工作流；
-- **浏览器上下文**是窗口、标签组或标签页。隐私默认模式看不到这一层，因此 Chrome 内部切换不会被记为应用切换，也不会触发自动工作流切换。
+## 构建与验证
 
-创建工作流时可以复制已有工作流的工具集合，避免重复勾选。应用层高频切换只是一项描述性指标，不等于工作流切换或分心。
+```bash
+./Scripts/test.sh
+./Scripts/build-app.sh
+./Scripts/run-space-acceptance.sh  # 可选：三桌面真实切换验收
+```
 
-如果未来需要在不读取 URL、标题和页面内容的前提下区分 Chrome 上下文，推荐采用明确选择后才启用的本地浏览器扩展：只传递临时 `windowId` / `groupId` 和用户手动建立的“标签组 → FocusTrace 工作流”映射。默认模式仍保持零浏览内容采集；未分组标签页继续依靠用户手动切换工作流。相比读取标签标题或 URL，这种方案可解释、可纠正，也更符合最小权限原则。
+- `test.sh` 编译并运行 Swift Testing 与独立 `FocusTraceVerification`。
+- `build-app.sh` 生成带应用图标、本地签名的 `dist/FocusTrace.app`，但不负责日常安装。
+- `run-space-acceptance.sh` 使用进程内临时绑定验证真实 Space 切换，不读写正式 FocusTrace 数据。
 
-## 工程结构
+当前版本使用 Codable 原子快照存储，因为纯 Command Line Tools 缺少 `SwiftDataMacros`。领域模型与 UI 不依赖具体存储实现，安装完整 Xcode 后可以迁移到 SwiftData 后端。
 
-桌面驱动的工作流模型、Space 身份边界与完整生命周期见 [Docs/WORKFLOW_SPACES_DESIGN.md](Docs/WORKFLOW_SPACES_DESIGN.md)。当前版本使用显示器 UUID 与稳定 Space ID，不再以桌面序号或隐藏窗口作为绑定依据；多显示器切换按各显示器 `Current Space` 的前后差量识别，不用可能陈旧的全局 active Space 覆盖单显示器差量。
+<details>
+<summary><strong>工程结构</strong></summary>
 
-- `Sources/FocusTraceCore`：纯 Foundation 领域类型、状态机、指标、训练与分析规则、导出。
-- `Sources/FocusTraceMacSupport`：动态读取稳定 macOS Space 身份并按显示器隔离绑定；接口不可用时 fail closed。
-- `Sources/FocusTrace`：AppKit/SwiftUI 事件采集、本地存储、通知、菜单栏和界面。
-- `Sources/FocusTraceReport`：为 Codex 定时任务生成隐私收敛后的本地聚合日报。
-- `Sources/FocusTraceVerification`：在纯 Command Line Tools 环境中实际执行验收检查。
-- `Sources/FocusTraceSpaceAcceptance`：不污染正式数据的三桌面切换与新增桌面回归工具。
-- `Tests/FocusTraceCoreTests`：采集、阈值、基线、升降级、指标、阶段二门槛和导出测试。
-- `Packaging` 与 `Scripts`：无 Xcode 的 `.app` 组装、本地签名和验证。
+- `Sources/FocusTraceCore`：纯 Foundation 领域模型、状态机、指标、训练与分析规则。
+- `Sources/FocusTraceMacSupport`：稳定 Space 身份解析与按显示器隔离的绑定。
+- `Sources/FocusTrace`：AppKit/SwiftUI 采集、本地存储、通知、菜单栏与界面。
+- `Sources/FocusTraceReport`：为 Codex 生成隐私收敛后的本地聚合日报。
+- `Sources/FocusTraceVerification`：在 Command Line Tools 环境中执行验收检查。
+- `Sources/FocusTraceSpaceAcceptance`：不污染正式数据的真实桌面切换验收工具。
+- `Packaging`、`Assets` 与 `Scripts`：图标、应用包组装、签名、部署与回滚。
 
-## 手动验收建议
+桌面工作流的身份边界和生命周期见 [WORKFLOW_SPACES_DESIGN.md](./Docs/WORKFLOW_SPACES_DESIGN.md)。
 
-1. 首次启动选择包含当天的工作日和覆盖当前时间的工作时段。
-2. 新建工作流，将终端和浏览器加入允许应用。
-3. 在多个允许应用之间切换，确认时间轴有记录但没有分心提醒。
-4. 完成 3 个不同工作日的工作流记录后开始专注会话。
-5. 切到非允许应用并超过阈值，验证提醒只出现一次。
-6. 创建三个 macOS 桌面和三个工作流，在各桌面通过菜单栏绑定；往返切换 30 次，确认工作流识别无误且未绑定桌面不继承旧工作流。
-7. 绑定一个桌面后，在 Mission Control 中间新增、重排和删除其他桌面；确认原桌面仍命中原工作流，新桌面保持未绑定。
-8. 分别验证“返回工作流”“本工作流所需”“切换工作流”和“结束专注”。
-9. 锁屏后恢复，确认睡眠区间未被计入应用时间。
-10. 导出 JSON 和 CSV，确认没有窗口标题、URL 或输入内容字段。
-11. 在 Agent 等待时挂起当前工作流，留下一句恢复线索并切换；验证提醒只发送一次，点击「返回工作流」后时间轴和回顾立即更新。
+</details>
+
+<details>
+<summary><strong>关于 macOS Space 的实现边界</strong></summary>
+
+macOS 公开 API 不提供稳定 Space ID。FocusTrace 动态读取 SkyLight 的 `(display UUID, managed Space ID/UUID)`，但不读取窗口内容。SkyLight 属于未公开系统接口，可能随 macOS 更新变化；读取失败时应用会进入“未知”并停止归因，不会回退到猜测。这个实现适合本地自用与 ad-hoc 签名构建，不承诺 Mac App Store 兼容性。
+
+</details>
+
+## 参与贡献
+
+欢迎提交 issue 和 pull request。开始前请阅读 [CONTRIBUTING.md](./CONTRIBUTING.md)，尤其是其中的隐私边界。任何报告、真实活动数据或 `~/Library/Application Support/FocusTrace` 下的文件都不应进入提交。
 
 ## 医疗边界
 
-FocusTrace 只能帮助观察和训练工作习惯。应用切换频繁并不能证明存在 ADHD；如果注意力问题持续在多个场景造成明显影响，应由具备资质的专业人士进行完整评估。
+FocusTrace 是工作行为记录与专注习惯训练工具，不诊断或治疗 ADHD。应用或工作流切换频繁不能证明存在 ADHD；如果注意力问题持续在多个场景造成明显影响，应寻求具备资质的专业评估。
+
+---
+
+<p align="center">
+  <sub>Local-first · Explainable · User-controlled</sub>
+</p>

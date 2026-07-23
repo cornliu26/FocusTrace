@@ -12,6 +12,14 @@ struct FocusTrainingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                FocusTracePageHeader(
+                    eyebrow: "TODAY",
+                    title: state.currentFocus == nil ? "守住当前主线" : "正在专注",
+                    detail: state.currentFocus == nil
+                        ? "一次只推进一个工作流，需要时再开始训练。"
+                        : "保持在所属桌面；必要的工具切换不会打断训练。",
+                    systemImage: state.currentFocus == nil ? "scope" : "timer"
+                )
                 currentSessionCard
                 if !state.activeTaskParkings.isEmpty {
                     parkedTasksCard
@@ -26,6 +34,7 @@ struct FocusTrainingView: View {
             .padding(24)
             .frame(maxWidth: 820, alignment: .leading)
         }
+        .focusTraceScreen()
         .sheet(isPresented: $showingNewTask) {
             TaskEditorSheet(
                 state: state,
@@ -154,7 +163,7 @@ struct FocusTrainingView: View {
                 Button(guidance.buttonTitle) {
                     perform(guidance.action)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
                 .controlSize(.large)
             }
             if state.currentTaskID != nil {
@@ -404,12 +413,14 @@ struct FocusToolSetupSheet: View {
                 Button("确认并开始专注") {
                     state.confirmFocusToolsAndStart(selectedBundleIDs)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
                 .disabled(selectedBundleIDs.isEmpty)
             }
         }
         .padding(24)
         .frame(width: 560)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .onAppear { loadApps() }
     }
 
@@ -473,10 +484,12 @@ struct SessionReviewSheet: View {
                 Button("保存结果") {
                     state.completeSessionReview(id: review.id, outcome: outcome, difficulty: difficulty)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(FocusTracePrimaryButtonStyle())
             }
         }
         .padding(24)
         .frame(width: 500)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
     }
 }

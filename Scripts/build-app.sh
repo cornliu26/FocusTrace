@@ -11,14 +11,16 @@ BIN_DIR="$(swift build -c release --show-bin-path "${SWIFTPM_COMMON_ARGS[@]}")"
 APP_PATH="$FOCUS_TRACE_ROOT/dist/FocusTrace.app"
 CONTENTS="$APP_PATH/Contents"
 MACOS_DIR="$CONTENTS/MacOS"
+RESOURCES_DIR="$CONTENTS/Resources"
 
 if [[ -d "$APP_PATH" ]]; then
   rm -rf "$APP_PATH"
 fi
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 install -m 755 "$BIN_DIR/FocusTrace" "$MACOS_DIR/FocusTrace"
 install -m 755 "$BIN_DIR/FocusTraceReport" "$FOCUS_TRACE_ROOT/dist/FocusTraceReport"
 install -m 644 "$FOCUS_TRACE_ROOT/Packaging/Info.plist" "$CONTENTS/Info.plist"
+install -m 644 "$FOCUS_TRACE_ROOT/Packaging/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 
 codesign --force --deep --sign - --identifier com.local.FocusTrace "$APP_PATH"
 codesign --verify --deep --strict "$APP_PATH"

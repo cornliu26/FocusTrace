@@ -8,6 +8,12 @@ struct TimelineView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                FocusTracePageHeader(
+                    eyebrow: "TRACE",
+                    title: "今天发生了什么",
+                    detail: "工作流在上，应用轨迹在下；先观察，再判断。",
+                    systemImage: "timeline.selection"
+                )
                 nextStepBanner
                 HStack {
                     DatePicker(
@@ -44,6 +50,7 @@ struct TimelineView: View {
             }
             .padding(24)
         }
+        .focusTraceScreen()
     }
 
     private var nextStepBanner: some View {
@@ -63,7 +70,7 @@ struct TimelineView: View {
             Button(guidance.buttonTitle) {
                 perform(guidance.action)
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(FocusTracePrimaryButtonStyle())
         }
         .padding(14)
         .background(guidanceColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
@@ -83,7 +90,7 @@ struct TimelineView: View {
     private var guidanceColor: Color {
         switch state.flowGuidance.action {
         case .resumeCapture, .createWorkflow, .bindWorkflow, .openSchedule: return .orange
-        case .viewFocus, .startFocus: return .blue
+        case .viewFocus, .startFocus: return FocusTraceTheme.sky
         }
     }
 
@@ -543,16 +550,35 @@ struct MetricCard: View {
     let title: String
     let value: String
     let detail: String
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            Text(value).font(.title2.bold()).monospacedDigit()
-            Text(detail).font(.caption2).foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Capsule()
+                    .fill(FocusTraceTheme.accentGradient)
+                    .frame(width: 18, height: 3)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(value)
+                .font(.system(.title2, design: .rounded, weight: .bold))
+                .monospacedDigit()
+            Text(detail)
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 10))
+        .background(
+            FocusTraceTheme.elevatedFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
+        }
     }
 }
 

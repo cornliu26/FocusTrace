@@ -165,21 +165,19 @@ private struct AttentionCueOverlayView: View {
 
     private var progressRail: some View {
         ZStack(alignment: .bottom) {
-            Rectangle().fill(.secondary.opacity(0.12))
-            Rectangle()
-                .fill(Color.blue.opacity(0.85))
+            Capsule().fill(.secondary.opacity(0.1))
+            Capsule()
+                .fill(FocusTraceTheme.accentGradient)
                 .frame(height: max(4, 52 * model.progress))
         }
-        .frame(width: 3, height: 52)
+        .frame(width: 4, height: 52)
         .accessibilityLabel("当前工作流五分钟连续进度")
         .accessibilityValue("\(Int(model.progress * 100))%")
     }
 
     private var expandedCue: some View {
         HStack(spacing: 10) {
-            Rectangle()
-                .fill(accentColor)
-                .frame(width: 3)
+            FocusTraceBrandMark(size: 30)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.message)
                     .font(.callout.weight(.semibold))
@@ -191,16 +189,23 @@ private struct AttentionCueOverlayView: View {
             }
             Spacer(minLength: 8)
         }
-        .padding(.trailing, 12)
-        .frame(width: 292, height: 48)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
+        .padding(.horizontal, 10)
+        .frame(width: 286, height: 48)
+        .background(
+            .ultraThinMaterial,
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(accentColor.opacity(0.28), lineWidth: 1)
+        }
     }
 
     private var accentColor: Color {
         switch model.mode {
-        case .progress: return .blue
-        case .reward: return .green
-        case .warning: return model.isStrongWarning ? .orange : .yellow
+        case .progress: return FocusTraceTheme.sky
+        case .reward: return FocusTraceTheme.mint
+        case .warning: return model.isStrongWarning ? FocusTraceTheme.coral : FocusTraceTheme.amber
         }
     }
 }

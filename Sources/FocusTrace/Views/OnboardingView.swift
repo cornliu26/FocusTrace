@@ -19,11 +19,15 @@ struct OnboardingView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                Label("只做一件事，就可以开始", systemImage: "scope")
-                    .font(.largeTitle.bold())
-
-                Text("给当前桌面的工作流起个名字。以后切换 macOS 桌面，FocusTrace 会自动恢复对应工作流。")
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 16) {
+                    FocusTraceBrandMark(size: 64)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("只做一件事，就可以开始")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("给当前桌面的工作流起个名字。以后切换 macOS 桌面，FocusTrace 会自动恢复对应工作流。")
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 GroupBox("当前工作流") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -111,7 +115,7 @@ struct OnboardingView: View {
                             allowedBundleIDs: selectedApps
                         )
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(FocusTracePrimaryButtonStyle())
                     .controlSize(.large)
                     .disabled(
                         preferences.workdayNumbers.isEmpty
@@ -122,6 +126,8 @@ struct OnboardingView: View {
             .padding(26)
         }
         .frame(width: 690, height: 620)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
         .onAppear {
             runningApps = state.runningApps().filter { $0.bundleID != "com.apple.loginwindow" }
         }
@@ -154,11 +160,14 @@ struct QuickStartSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 5) {
-                Label("FocusTrace 平时怎么用", systemImage: "figure.mind.and.body")
-                    .font(.title2.bold())
-                Text("正常工作只需要记住一条：一个桌面对应一个工作流。")
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                FocusTraceBrandMark(size: 42)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("FocusTrace 平时怎么用")
+                        .font(.system(.title2, design: .rounded, weight: .bold))
+                    Text("正常工作只需要记住一条：一个桌面对应一个工作流。")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             guideStep(
@@ -189,7 +198,7 @@ struct QuickStartSheet: View {
                         if state.activeTasks.isEmpty { state.showTaskCreator = true }
                         else { state.showTaskSwitcher = true }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(FocusTracePrimaryButtonStyle())
                 }
                 Spacer()
                 Button("知道了") { dismiss() }
@@ -198,6 +207,8 @@ struct QuickStartSheet: View {
         }
         .padding(24)
         .frame(width: 570)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
     }
 
     private func guideStep(number: String, title: String, detail: String) -> some View {

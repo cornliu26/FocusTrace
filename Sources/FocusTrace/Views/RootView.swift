@@ -26,13 +26,40 @@ struct RootView: View {
     var body: some View {
         NavigationSplitView {
             List(AppSection.allCases, selection: $state.selectedAppSection) { section in
-                Label(section.rawValue, systemImage: section.icon)
-                    .tag(section)
+                HStack(spacing: 10) {
+                    Image(systemName: section.icon)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(
+                            state.selectedAppSection == section
+                                ? FocusTraceTheme.mint
+                                : Color.secondary
+                        )
+                        .frame(width: 26, height: 26)
+                        .background(
+                            (state.selectedAppSection == section
+                                ? FocusTraceTheme.mint.opacity(0.12)
+                                : Color.clear),
+                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        )
+                    Text(section.rawValue)
+                        .font(.system(.body, design: .rounded, weight: .medium))
+                }
+                .tag(section)
             }
-            .navigationTitle("FocusTrace")
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(FocusTraceTheme.navy.opacity(0.025))
+            .safeAreaInset(edge: .top) {
+                FocusTraceBrandLockup()
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             .safeAreaInset(edge: .bottom) {
                 captureStatus
             }
+            .navigationSplitViewColumnWidth(min: 210, ideal: 230, max: 260)
         } detail: {
             Group {
                 switch state.selectedAppSection ?? .focus {
@@ -48,6 +75,7 @@ struct RootView: View {
             }
             .navigationTitle((state.selectedAppSection ?? .focus).rawValue)
         }
+        .focusTraceVisualSystem()
         .sheet(
             isPresented: Binding(
                 get: { !state.preferences.hasCompletedOnboarding },
@@ -94,16 +122,35 @@ struct RootView: View {
     }
 
     private var captureStatus: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(state.isRecording ? Color.green : Color.secondary)
-                .frame(width: 8, height: 8)
-            Text(state.isRecording ? "工作时段记录中" : "当前未记录")
-                .font(.caption)
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(state.isRecording ? FocusTraceTheme.mint : Color.secondary)
+                    .frame(width: 8, height: 8)
+                    .shadow(
+                        color: state.isRecording ? FocusTraceTheme.mint.opacity(0.45) : .clear,
+                        radius: 4
+                    )
+                Text(state.isRecording ? "工作时段记录中" : "当前未记录")
+                    .font(.caption.weight(.semibold))
+            }
+            Text(state.currentTask?.title ?? "尚未绑定工作流")
+                .font(.caption2)
                 .foregroundStyle(.secondary)
-            Spacer()
+                .lineLimit(1)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(.bar)
+        .background(
+            FocusTraceTheme.mint.opacity(state.isRecording ? 0.08 : 0.035),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(FocusTraceTheme.mint.opacity(state.isRecording ? 0.16 : 0.07))
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+        .frame(maxWidth: .infinity)
     }
 }
