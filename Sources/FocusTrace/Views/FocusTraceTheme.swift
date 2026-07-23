@@ -173,23 +173,12 @@ struct FocusTraceDateNavigator: View {
             }
             .buttonStyle(.plain)
             .popover(isPresented: $showingCalendar, arrowEdge: .bottom) {
-                VStack(alignment: .trailing, spacing: 10) {
-                    DatePicker(
-                        "日期",
-                        selection: $selection,
-                        in: ...latestDay,
-                        displayedComponents: .date
-                    )
-                    .datePickerStyle(.graphical)
-                    .labelsHidden()
-
-                    Button("回到今天") {
-                        selection = latestDay
-                        showingCalendar = false
-                    }
-                    .disabled(calendar.isDate(selection, inSameDayAs: latestDay))
+                FocusTraceCalendarPopover(
+                    selection: $selection,
+                    latestDate: latestDay
+                ) {
+                    showingCalendar = false
                 }
-                .padding(14)
             }
 
             Divider()
@@ -249,6 +238,234 @@ struct FocusTraceDateNavigator: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(accessibilityLabel)
+    }
+}
+
+struct FocusTraceCalendarPopover: View {
+    @Binding var selection: Date
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var displayedMonth: Date
+    @State private var hoveredDay: Date?
+
+    private let latestDay: Date
+    private let dismiss: () -> Void
+    private let calendar = Calendar.current
+    private let columns = Array(
+        repeating: GridItem(.fixed(32), spacing: 7),
+        count: 7
+    )
+
+    init(
+        selection: Binding<Date>,
+        latestDate: Date,
+        dismiss: @escaping () -> Void
+    ) {
+        _selection = selection
+        let calendar = Calendar.current
+        let normalizedLatest = calendar.startOfDay(for: latestDate)
+        self.latestDay = normalizedLatest
+        self.dismiss = dismiss
+        _displayedMonth = State(
+            initialValue: Self.startOfMonth(
+                containing: selection.wrappedValue,
+                calendar: calendar
+            )
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 14) {
+            monthHeader
+            weekdayHeader
+            dayGrid
+            Divider()
+            footer
+        }
+        .padding(16)
+        .frame(width: 300)
+        .background(FocusTraceTheme.cardFill(colorScheme))
+    }
+
+    private var monthHeader: some View {
+        HStack {
+            monthButton(
+                systemImage: "chevron.left",
+                accessibilityLabel: "上个月"
+            ) {
+                moveMonth(by: -1)
+            }
+
+            Spacer()
+            Text(displayedMonth.formatted(.dateTime.year().month(.wide)))
+                .font(.system(.headline, design: .rounded, weight: .semibold))
+                .monospacedDigit()
+            Spacer()
+
+            monthButton(
+                systemImage: "chevron.right",
+                accessibilityLabel: "下个月"
+            ) {
+                moveMonth(by: 1)
+            }
+            .disabled(!canMoveToNextMonth)
+        }
+    }
+
+    private var weekdayHeader: some View {
+        LazyVGrid(columns: columns, spacing: 0) {
+            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+                Text(symbol)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 22)
+            }
+        }
+    }
+
+    private var dayGrid: some View {
+        LazyVGrid(columns: columns, spacing: 7) {
+            ForEach(Array(monthCells.enumerated()), id: \.offset) { _, date in
+                if let date {
+                    dayButton(date)
+                } else {
+                    Color.clear
+                        .frame(width: 32, height: 32)
+                }
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Text(selection.formatted(date: .long, time: .omitted))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            Spacer()
+            Button("今天") {
+                selection = latestDay
+                displayedMonth = Self.startOfMonth(
+                    containing: latestDay,
+                    calendar: calendar
+                )
+                dismiss()
+            }
+            .buttonStyle(.borderless)
+            .disabled(calendar.isDate(selection, inSameDayAs: latestDay))
+        }
+    }
+
+    private var weekdaySymbols: [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let offset = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
+        return Array(symbols[offset...] + symbols[..<offset])
+    }
+
+    private var monthCells: [Date?] {
+        guard let dayRange = calendar.range(of: .day, in: .month, for: displayedMonth),
+              let weekday = calendar.dateComponents([.weekday], from: displayedMonth).weekday else {
+            return Array(repeating: nil, count: 42)
+        }
+
+        let leading = (weekday - calendar.firstWeekday + 7) % 7
+        var cells = Array<Date?>(repeating: nil, count: leading)
+        cells.append(
+            contentsOf: dayRange.compactMap { day in
+                calendar.date(byAdding: .day, value: day - 1, to: displayedMonth)
+            }
+        )
+        cells.append(contentsOf: Array(repeating: nil, count: max(0, 42 - cells.count)))
+        return Array(cells.prefix(42))
+    }
+
+    private var latestMonth: Date {
+        Self.startOfMonth(containing: latestDay, calendar: calendar)
+    }
+
+    private var canMoveToNextMonth: Bool {
+        displayedMonth < latestMonth
+    }
+
+    private func dayButton(_ date: Date) -> some View {
+        let isSelected = calendar.isDate(date, inSameDayAs: selection)
+        let isToday = calendar.isDate(date, inSameDayAs: latestDay)
+        let isUnavailable = date > latestDay
+        let isHovered = hoveredDay.map { calendar.isDate($0, inSameDayAs: date) } ?? false
+
+        return Button {
+            selection = calendar.startOfDay(for: date)
+            dismiss()
+        } label: {
+            ZStack {
+                if isSelected {
+                    Circle()
+                        .fill(FocusTraceTheme.accentGradient)
+                } else if isHovered && !isUnavailable {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.12))
+                }
+
+                if isToday && !isSelected {
+                    Circle()
+                        .stroke(FocusTraceTheme.mint.opacity(0.85), lineWidth: 1.5)
+                }
+
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.callout.weight(isSelected || isToday ? .semibold : .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(
+                        isUnavailable
+                            ? Color.secondary.opacity(0.35)
+                            : (isSelected ? FocusTraceTheme.navy : Color.primary)
+                    )
+            }
+            .frame(width: 32, height: 32)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isUnavailable)
+        .onHover { hovering in
+            hoveredDay = hovering ? date : nil
+        }
+        .accessibilityLabel(date.formatted(date: .long, time: .omitted))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    private func monthButton(
+        systemImage: String,
+        accessibilityLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.caption.weight(.semibold))
+                .frame(width: 28, height: 28)
+                .background(
+                    Color.secondary.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private func moveMonth(by offset: Int) {
+        guard let month = calendar.date(byAdding: .month, value: offset, to: displayedMonth) else {
+            return
+        }
+        displayedMonth = min(
+            Self.startOfMonth(containing: month, calendar: calendar),
+            latestMonth
+        )
+    }
+
+    private static func startOfMonth(
+        containing date: Date,
+        calendar: Calendar
+    ) -> Date {
+        let components = calendar.dateComponents([.year, .month], from: date)
+        return calendar.date(from: components) ?? calendar.startOfDay(for: date)
     }
 }
 
