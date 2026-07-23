@@ -116,11 +116,18 @@ final class WorkspaceMonitor: NSObject {
 
     static func runningApps() -> [AppIdentity] {
         var seen = Set<String>()
-        return NSWorkspace.shared.runningApplications
-            .filter { $0.activationPolicy == .regular }
-            .compactMap(identity(for:))
-            .filter { seen.insert($0.bundleID).inserted }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        var identities: [AppIdentity] = []
+        for app in NSWorkspace.shared.runningApplications
+        where app.activationPolicy == .regular {
+            guard let identity = identity(for: app),
+                  seen.insert(identity.bundleID).inserted else {
+                continue
+            }
+            identities.append(identity)
+        }
+        return identities.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 
     private static func identity(for app: NSRunningApplication?) -> AppIdentity? {
