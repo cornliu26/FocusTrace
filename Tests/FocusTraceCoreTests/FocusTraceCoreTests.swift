@@ -162,6 +162,58 @@ func selectedDateFollowsMidnightOnlyWhenViewingToday() {
 }
 
 @Test
+func optimizedDailyUXContractRemainsStable() {
+    #expect(
+        FocusTraceUXContract.dateSelectionPresentation
+            == .graphicalCalendarPopover
+    )
+    #expect(FocusTraceUXContract.menuBarWidth == 304)
+    #expect(FocusTraceUXContract.onboardingRequiredInputs == ["workflowName"])
+    #expect(FocusTraceUXContract.primaryDailyActionCount == 1)
+}
+
+@Test
+func dateNavigationNormalizesDaysAndNeverMovesIntoTheFuture() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let latest = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 18,
+        minute: 30
+    ))!
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: latest)!
+
+    #expect(FocusTraceDateNavigation.canMoveForward(
+        selection: yesterday,
+        latestDate: latest,
+        calendar: calendar
+    ))
+
+    let movedToToday = FocusTraceDateNavigation.movedSelection(
+        yesterday,
+        byDays: 1,
+        latestDate: latest,
+        calendar: calendar
+    )
+    #expect(movedToToday == calendar.startOfDay(for: latest))
+    #expect(!FocusTraceDateNavigation.canMoveForward(
+        selection: movedToToday,
+        latestDate: latest,
+        calendar: calendar
+    ))
+
+    let capped = FocusTraceDateNavigation.movedSelection(
+        latest,
+        byDays: 10,
+        latestDate: latest,
+        calendar: calendar
+    )
+    #expect(capped == calendar.startOfDay(for: latest))
+}
+
+@Test
 func distractionGateRequiresAllConditions() {
     #expect(!DistractionGate.shouldTrigger(
         duration: 19.9,

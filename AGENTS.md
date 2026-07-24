@@ -8,6 +8,7 @@
 - The Finder entry point is `Deploy-FocusTrace.command`; keep it as a thin wrapper around `Scripts/deploy-mac.sh`.
 - A deployment must preserve the user's application data and preferences. Only replace the exact `FocusTrace.app` bundle in the selected installation directory.
 - Keep the staged install, signature verification, graceful restart, and rollback behavior working when changing deployment scripts.
+- Preserve published GitHub releases and tags. Do not delete historical releases unless the user explicitly requests a specific deletion.
 
 ## Privacy boundary
 
@@ -24,3 +25,4 @@
 - The menu bar and main window must expose one shared primary next action through `FlowGuidanceEngine`.
 - Keep schedule tuning, expected outcomes, allowed applications, plan history, exports, and deletion controls out of the primary daily path.
 - In Space workflow mode, switching desktops is the workflow switch. Do not ask the user to select a destination workflow when parking work.
+- Treat shipped interaction forms as compatibility contracts. In particular, keep date selection as a graphical calendar popover, keep the menu-bar panel compact, and update explicit UX regression tests before intentionally changing an established interaction.

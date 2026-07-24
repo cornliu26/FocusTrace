@@ -226,6 +226,76 @@ suite.run("流程引导始终只给出当前下一步") {
     try expect(outsideSchedule.action == .openSchedule, "工作时段外应只引导调整记录时段")
 }
 
+suite.run("已优化的日常交互契约保持稳定") {
+    try expect(
+        FocusTraceUXContract.dateSelectionPresentation == .graphicalCalendarPopover,
+        "日期选择必须保持图形化日历弹层，不能退化为日期列表"
+    )
+    try expect(
+        FocusTraceUXContract.menuBarWidth == 304,
+        "状态栏面板应保持紧凑宽度"
+    )
+    try expect(
+        FocusTraceUXContract.onboardingRequiredInputs == ["workflowName"],
+        "首次使用只能要求一个工作流名称"
+    )
+    try expect(
+        FocusTraceUXContract.primaryDailyActionCount == 1,
+        "每日主路径只能暴露一个主要下一步"
+    )
+}
+
+suite.run("日期导航按整日移动且不会越过今天") {
+    let calendar = utcCalendar()
+    let latest = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 18,
+        minute: 30
+    ))!
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: latest)!
+    try expect(
+        FocusTraceDateNavigation.canMoveForward(
+            selection: yesterday,
+            latestDate: latest,
+            calendar: calendar
+        ),
+        "昨天应允许前进到今天"
+    )
+
+    let today = FocusTraceDateNavigation.movedSelection(
+        yesterday,
+        byDays: 1,
+        latestDate: latest,
+        calendar: calendar
+    )
+    try expect(
+        today == calendar.startOfDay(for: latest),
+        "日期导航应归一化到当天零点"
+    )
+    try expect(
+        !FocusTraceDateNavigation.canMoveForward(
+            selection: today,
+            latestDate: latest,
+            calendar: calendar
+        ),
+        "今天不应允许继续向未来移动"
+    )
+
+    let capped = FocusTraceDateNavigation.movedSelection(
+        latest,
+        byDays: 10,
+        latestDate: latest,
+        calendar: calendar
+    )
+    try expect(
+        capped == calendar.startOfDay(for: latest),
+        "任何向未来的偏移都必须封顶在今天"
+    )
+}
+
 suite.run("首次专注工具建议只使用当前工作流的真实应用") {
     let taskID = UUID()
     let otherTaskID = UUID()

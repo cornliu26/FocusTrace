@@ -34,6 +34,9 @@ struct OnboardingView: View {
                         TextField("例如：完成登录问题修复", text: $taskTitle)
                             .textFieldStyle(.roundedBorder)
                             .controlSize(.large)
+                            .accessibilityIdentifier(
+                                FocusTraceUXContract.workflowNameInputIdentifier
+                            )
                         Text("现在只填名称即可；创建后会自动绑定当前桌面并开始记录。")
                             .font(.caption)
                             .foregroundStyle(.secondary)

@@ -33,7 +33,7 @@ struct MenuBarView: View {
             footer
         }
         .padding(12)
-        .frame(width: 304)
+        .frame(width: CGFloat(FocusTraceUXContract.menuBarWidth))
         .background(Color(nsColor: .windowBackgroundColor).opacity(0.96))
         .focusTraceVisualSystem()
         .confirmationDialog(
