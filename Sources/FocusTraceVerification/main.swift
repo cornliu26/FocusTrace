@@ -243,6 +243,46 @@ suite.run("已优化的日常交互契约保持稳定") {
         FocusTraceUXContract.primaryDailyActionCount == 1,
         "每日主路径只能暴露一个主要下一步"
     )
+    try expect(
+        FocusTraceUXContract.sidebarIconCanvasSize == 18
+            && FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath",
+        "侧栏图标尺寸和时间轴图标必须保持统一"
+    )
+    try expect(
+        FocusTraceUXContract.timelinePaletteName == "verdant-v1",
+        "时间轴必须保持统一的绿色主题色板"
+    )
+    try expect(
+        StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6,
+        "固定色板映射必须落在合法范围"
+    )
+}
+
+suite.run("需求先进入收件箱且安排时不自动开始") {
+    guard let captured = RequirementEngine.captured(
+        title: "  张三口头说：补上失败告警  ",
+        source: "  周会  "
+    ) else {
+        throw VerificationFailure(message: "有效需求应能被收下")
+    }
+    try expect(captured.title == "张三口头说：补上失败告警", "需求文本应清理空白")
+    try expect(captured.source == "周会", "来源应清理空白")
+    try expect(captured.status == .inbox, "新需求必须先进入待整理")
+    try expect(captured.priority == .unplanned, "新需求不能擅自决定优先级")
+    try expect(captured.workflowID == nil, "新需求不能自动绑定工作流")
+
+    let workflowID = UUID()
+    let attached = RequirementEngine.attached(captured, to: workflowID)
+    try expect(attached.workflowID == workflowID, "安排后应关联目标工作流")
+    try expect(attached.status == .planned, "安排后应进入已计划状态")
+    try expect(attached.status != .active, "安排需求不能自动开始或切换上下文")
+    try expect(
+        RequirementEngine.suggestedWorkflowTitle(
+            from: "修复训练失败后的告警。补充对应文档",
+            maximumLength: 20
+        ) == "修复训练失败后的告警",
+        "新工作流建议名称应提取第一句"
+    )
 }
 
 suite.run("日期导航按整日移动且不会越过今天") {
@@ -293,6 +333,61 @@ suite.run("日期导航按整日移动且不会越过今天") {
     try expect(
         capped == calendar.startOfDay(for: latest),
         "任何向未来的偏移都必须封顶在今天"
+    )
+}
+
+suite.run("大数据时间轴单次聚合且按分钟刷新") {
+    let calendar = utcCalendar()
+    let start = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 9
+    ))!
+    let apps = (0..<8).map {
+        AppIdentity(bundleID: "app.\($0)", name: "App \($0)")
+    }
+    let activities = (0..<2_000).map { index in
+        let began = start.addingTimeInterval(Double(index * 15))
+        return ActivityRecord(
+            app: apps[index % apps.count],
+            startedAt: began,
+            endedAt: began.addingTimeInterval(15),
+            taskID: nil,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let markers = (0..<300).map { index in
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(Double(index * 60)),
+            kind: index.isMultiple(of: 3) ? .activeSpaceChanged : .taskChanged
+        )
+    }
+    let range = DateInterval(start: start, duration: 12 * 60 * 60)
+    let measuredAt = Date()
+    let snapshot = TimelinePresentationEngine.snapshot(
+        activities: activities,
+        taskIntervals: [],
+        interruptions: [],
+        markers: markers,
+        taskParkings: [],
+        range: range,
+        now: range.end
+    )
+    let elapsed = Date().timeIntervalSince(measuredAt)
+    try expect(snapshot.buckets.count == 144, "十二小时应生成 144 个五分钟桶")
+    try expect(!snapshot.eventBuckets.isEmpty, "关键事件应完成聚合")
+    try expect(snapshot.summary.appSwitchCount == 1_999, "大量应用切换统计不应丢失")
+    try expect(elapsed < 1.0, "2000 条片段的呈现聚合应在一秒内完成")
+
+    let firstTick = start.addingTimeInterval(12.1)
+    let secondTick = start.addingTimeInterval(58.9)
+    try expect(
+        TimelinePresentationEngine.renderMinute(for: firstTick, calendar: calendar)
+            == TimelinePresentationEngine.renderMinute(for: secondTick, calendar: calendar),
+        "同一分钟的秒级计时不应触发时间轴重算"
     )
 }
 

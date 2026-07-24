@@ -3,9 +3,11 @@ import FocusTraceCore
 
 struct TimelineView: View {
     @ObservedObject var state: ApplicationState
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showRawActivities = false
 
     var body: some View {
+        let snapshot = state.selectedTimelineSnapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 nextStepBanner
@@ -24,17 +26,25 @@ struct TimelineView: View {
                 }
 
                 TimelineChart(
-                    segments: state.selectedActivities,
-                    taskIntervals: state.selectedTaskIntervals,
-                    markers: state.selectedMarkers,
-                    tasks: state.tasks,
-                    range: state.preferences.workRange(for: state.selectedDate),
-                    now: state.now
+                    snapshotID: snapshot.id,
+                    taskIntervals: snapshot.taskIntervals,
+                    taskNames: snapshot.taskNames,
+                    buckets: snapshot.presentation.buckets,
+                    eventBuckets: snapshot.presentation.eventBuckets,
+                    range: snapshot.range,
+                    now: snapshot.renderNow,
+                    currentTaskID: state.currentTaskID,
+                    colorScheme: colorScheme
                 )
+                .equatable()
                 .frame(height: 310)
 
-                summaryGrid
-                rawActivityList
+                summaryGrid(snapshot.presentation.summary)
+                rawActivityList(
+                    activities: snapshot.activities,
+                    taskNames: snapshot.taskNames,
+                    renderNow: snapshot.renderNow
+                )
             }
             .focusTracePageContent()
         }
@@ -100,9 +110,8 @@ struct TimelineView: View {
         }
     }
 
-    private var summaryGrid: some View {
-        let summary = state.selectedSummary
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
+    private func summaryGrid(_ summary: DailySummary) -> some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
             MetricCard(title: "应用切换", value: "\(summary.appSwitchCount)", detail: "前台应用变化")
             MetricCard(
                 title: "工作流 / 手动切换",
@@ -118,10 +127,14 @@ struct TimelineView: View {
         }
     }
 
-    private var rawActivityList: some View {
+    private func rawActivityList(
+        activities: [ActivitySegmentModel],
+        taskNames: [UUID: String],
+        renderNow: Date
+    ) -> some View {
         GroupBox {
             DisclosureGroup(isExpanded: $showRawActivities) {
-                if state.selectedActivities.isEmpty {
+                if activities.isEmpty {
                     ContentUnavailableView(
                         "当天没有记录",
                         systemImage: "timeline.selection",
@@ -129,25 +142,27 @@ struct TimelineView: View {
                     )
                     .frame(height: 150)
                 } else {
-                    Table(state.selectedActivities) {
+                    Table(activities) {
                         TableColumn("开始") { item in
                             Text(item.startedAt, style: .time).monospacedDigit()
                         }
                         .width(70)
                         TableColumn("时长") { item in
-                            Text(durationText((item.endedAt ?? state.now).timeIntervalSince(item.startedAt)))
+                            Text(durationText((item.endedAt ?? renderNow).timeIntervalSince(item.startedAt)))
                                 .monospacedDigit()
                         }
                         .width(70)
                         TableColumn("应用") { item in Text(item.appName) }
-                        TableColumn("工作流") { item in Text(state.taskName(for: item.taskID)) }
+                        TableColumn("工作流") { item in
+                            Text(item.taskID.flatMap { taskNames[$0] } ?? "未标注")
+                        }
                         TableColumn("分类") { item in ClassificationBadge(classification: item.classification) }
                     }
                     .frame(minHeight: 250)
                 }
             } label: {
                 HStack {
-                    Label("原始应用片段（\(state.selectedActivities.count)）", systemImage: "list.bullet.rectangle")
+                    Label("原始应用片段（\(activities.count)）", systemImage: "list.bullet.rectangle")
                         .font(.headline)
                     Spacer()
                     Text(showRawActivities ? "收起明细" : "需要核对时再展开")
@@ -166,25 +181,18 @@ struct TimelineView: View {
     }
 }
 
-struct TimelineChart: View {
-    let segments: [ActivitySegmentModel]
+struct TimelineChart: View, Equatable {
+    let snapshotID: UInt64
     let taskIntervals: [TaskIntervalModel]
-    let markers: [TimelineMarkerModel]
-    let tasks: [FocusTaskModel]
+    let taskNames: [UUID: String]
+    let buckets: [TimelineBucket]
+    let eventBuckets: [TimelineEventBucket]
     let range: DateInterval
     let now: Date
+    let currentTaskID: UUID?
+    let colorScheme: ColorScheme
     private let bucketMinutes = 5
     @State private var showSwitchingScale = false
-
-    private var buckets: [TimelineBucket] {
-        TimelineAggregationEngine.buckets(
-            activities: segments.map(\.record),
-            markers: markers.map(\.record),
-            range: range,
-            bucketMinutes: bucketMinutes,
-            now: now
-        )
-    }
 
     private var occupiedBuckets: [TimelineBucket] {
         buckets.filter { $0.activeSeconds > 0 }
@@ -199,16 +207,14 @@ struct TimelineChart: View {
         FragmentationLevel.classify(switchCount: Int(averageSwitches.rounded()), bucketMinutes: bucketMinutes)
     }
 
-    private var eventBuckets: [TimelineEventBucket] {
-        TimelineEventAggregationEngine.buckets(
-            markers: markers.map(\.record),
-            range: range,
-            bucketMinutes: 15
-        )
-    }
-
     private var spaceSwitchCount: Int {
         buckets.reduce(0) { $0 + $1.spaceSwitchCount }
+    }
+
+    nonisolated static func == (left: TimelineChart, right: TimelineChart) -> Bool {
+        left.snapshotID == right.snapshotID
+            && left.currentTaskID == right.currentTaskID
+            && left.colorScheme == right.colorScheme
     }
 
     var body: some View {
@@ -254,7 +260,16 @@ struct TimelineChart: View {
                         let frame = frameFor(start: interval.startedAt, end: interval.endedAt ?? now, width: width)
                         if frame.width > 0 {
                             RoundedRectangle(cornerRadius: 4)
-                                .fill(taskColor(interval.taskID).opacity(0.75))
+                                .fill(workflowColor(interval.taskID).opacity(0.78))
+                                .overlay {
+                                    if interval.taskID == currentTaskID {
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .stroke(
+                                                VerdantTimelinePalette.currentWorkflowStroke,
+                                                lineWidth: 1.5
+                                            )
+                                    }
+                                }
                                 .frame(width: frame.width, height: 25)
                                 .offset(x: frame.offset, y: 5)
                                 .help("\(taskName(interval.taskID)) · \(duration(interval.startedAt, interval.endedAt ?? now))")
@@ -269,7 +284,7 @@ struct TimelineChart: View {
                         let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
                         if let app = bucket.dominantApp, frame.width > 0 {
                             RoundedRectangle(cornerRadius: 2.5)
-                                .fill(stableColor(app.bundleID).opacity(0.88))
+                                .fill(applicationColor(app.bundleID).opacity(0.86))
                                 .frame(width: max(1, frame.width - 1), height: 25)
                                 .offset(x: frame.offset + 0.5, y: 5)
                                 .help("\(timeRange(bucket.start, bucket.end)) · \(app.name) · 活跃 \(duration(bucket.activeSeconds)) · \(bucket.uniqueAppCount) 个应用")
@@ -325,10 +340,10 @@ struct TimelineChart: View {
                 hourLabels
             }
             HStack(spacing: 12) {
-                legend("较少 0–2", .green)
-                legend("适中 3–5", .blue)
-                legend("密集 6–10", .orange)
-                legend("很密集 11+", .red)
+                legend("较少 0–2", fragmentationColor(.quiet))
+                legend("适中 3–5", fragmentationColor(.steady))
+                legend("密集 6–10", fragmentationColor(.fragmented))
+                legend("很密集 11+", fragmentationColor(.intense))
                 Text("关键事件按 15 分钟合并")
                 Spacer()
             }
@@ -336,13 +351,21 @@ struct TimelineChart: View {
             .foregroundStyle(.secondary)
         }
         .padding(14)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            VerdantTimelinePalette.panelFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(VerdantTimelinePalette.panelBorder(colorScheme), lineWidth: 1)
+        }
     }
 
     private func track<Content: View>(height: CGFloat, @ViewBuilder content: @escaping (CGFloat) -> Content) -> some View {
         GeometryReader { geometry in
             ZStack(alignment: .topLeading) {
-                RoundedRectangle(cornerRadius: 5).fill(.background)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(VerdantTimelinePalette.trackFill(colorScheme))
                 ForEach(0...8, id: \.self) { index in
                     Rectangle()
                         .fill(.separator.opacity(index == 0 || index == 8 ? 0 : 0.18))
@@ -381,18 +404,21 @@ struct TimelineChart: View {
     }
 
     private func taskName(_ id: UUID) -> String {
-        tasks.first(where: { $0.id == id })?.title ?? "已删除工作流"
+        taskNames[id] ?? "已删除工作流"
     }
 
-    private func taskColor(_ id: UUID) -> Color { stableColor(id.uuidString) }
+    private func workflowColor(_ id: UUID) -> Color {
+        let palette = VerdantTimelinePalette.workflows
+        return palette[
+            StablePaletteAssignment.index(for: id.uuidString, count: palette.count)
+        ]
+    }
 
-    private func stableColor(_ value: String) -> Color {
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return Color(hue: Double(hash % 360) / 360, saturation: 0.48, brightness: 0.86)
+    private func applicationColor(_ bundleID: String) -> Color {
+        let palette = VerdantTimelinePalette.applications
+        return palette[
+            StablePaletteAssignment.index(for: bundleID, count: palette.count)
+        ]
     }
 
     private func duration(_ start: Date, _ end: Date) -> String {
@@ -405,9 +431,7 @@ struct TimelineChart: View {
     }
 
     private func timeRange(_ start: Date, _ end: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        return "\(formatter.string(from: start))–\(formatter.string(from: end))"
+        "\(start.formatted(Self.timeStyle))–\(end.formatted(Self.timeStyle))"
     }
 
     private func switchingIntensityText(_ level: FragmentationLevel) -> String {
@@ -421,10 +445,10 @@ struct TimelineChart: View {
 
     private func fragmentationColor(_ level: FragmentationLevel) -> Color {
         switch level {
-        case .quiet: return .green
-        case .steady: return .blue
-        case .fragmented: return .orange
-        case .intense: return .red
+        case .quiet: return VerdantTimelinePalette.quiet
+        case .steady: return VerdantTimelinePalette.steady
+        case .fragmented: return VerdantTimelinePalette.fragmented
+        case .intense: return VerdantTimelinePalette.intense
         }
     }
 
@@ -494,6 +518,49 @@ struct TimelineChart: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(text)
         }
+    }
+
+    private static let timeStyle = Date.FormatStyle.dateTime.hour().minute()
+}
+
+private enum VerdantTimelinePalette {
+    static let workflows: [Color] = [
+        Color(red: 0.26, green: 0.69, blue: 0.54),
+        Color(red: 0.36, green: 0.76, blue: 0.62),
+        Color(red: 0.28, green: 0.66, blue: 0.61),
+        Color(red: 0.48, green: 0.72, blue: 0.55),
+        Color(red: 0.31, green: 0.72, blue: 0.68),
+        Color(red: 0.43, green: 0.67, blue: 0.52)
+    ]
+
+    static let applications: [Color] = [
+        Color(red: 0.37, green: 0.78, blue: 0.64),
+        Color(red: 0.35, green: 0.75, blue: 0.72),
+        Color(red: 0.40, green: 0.68, blue: 0.78),
+        Color(red: 0.48, green: 0.61, blue: 0.78),
+        Color(red: 0.56, green: 0.72, blue: 0.60),
+        Color(red: 0.49, green: 0.68, blue: 0.67)
+    ]
+
+    static let quiet = Color(red: 0.55, green: 0.82, blue: 0.64)
+    static let steady = Color(red: 0.31, green: 0.75, blue: 0.58)
+    static let fragmented = Color(red: 0.16, green: 0.62, blue: 0.51)
+    static let intense = Color(red: 0.08, green: 0.43, blue: 0.36)
+    static let currentWorkflowStroke = Color(red: 0.78, green: 0.98, blue: 0.90)
+    static func trackFill(_ scheme: ColorScheme) -> Color {
+        scheme == .dark ? Color.white.opacity(0.075) : Color.white.opacity(0.82)
+    }
+
+    static func panelFill(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color.white.opacity(0.045)
+            : Color(red: 0.91, green: 0.96, blue: 0.94).opacity(0.72)
+    }
+
+    static func panelBorder(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color.white.opacity(0.08)
+            : Color(red: 0.36, green: 0.72, blue: 0.60).opacity(0.16)
     }
 }
 

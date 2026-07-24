@@ -193,3 +193,62 @@ public enum TimelineEventAggregationEngine {
         }
     }
 }
+
+public struct TimelinePresentationSnapshot: Equatable, Sendable {
+    public let summary: DailySummary
+    public let buckets: [TimelineBucket]
+    public let eventBuckets: [TimelineEventBucket]
+
+    public init(
+        summary: DailySummary,
+        buckets: [TimelineBucket],
+        eventBuckets: [TimelineEventBucket]
+    ) {
+        self.summary = summary
+        self.buckets = buckets
+        self.eventBuckets = eventBuckets
+    }
+}
+
+public enum TimelinePresentationEngine {
+    public static func renderMinute(
+        for date: Date,
+        calendar: Calendar = .current
+    ) -> Date {
+        calendar.dateInterval(of: .minute, for: date)?.start ?? date
+    }
+
+    public static func snapshot(
+        activities: [ActivityRecord],
+        taskIntervals: [TaskIntervalRecord],
+        interruptions: [InterruptionRecord],
+        markers: [TimelineMarkerRecord],
+        taskParkings: [TaskParkingRecord],
+        range: DateInterval,
+        now: Date,
+        activityBucketMinutes: Int = 5,
+        eventBucketMinutes: Int = 15
+    ) -> TimelinePresentationSnapshot {
+        TimelinePresentationSnapshot(
+            summary: MetricsEngine.dailySummary(
+                activities: activities,
+                taskIntervals: taskIntervals,
+                interruptions: interruptions,
+                taskParkings: taskParkings,
+                now: now
+            ),
+            buckets: TimelineAggregationEngine.buckets(
+                activities: activities,
+                markers: markers,
+                range: range,
+                bucketMinutes: activityBucketMinutes,
+                now: now
+            ),
+            eventBuckets: TimelineEventAggregationEngine.buckets(
+                markers: markers,
+                range: range,
+                bucketMinutes: eventBucketMinutes
+            )
+        )
+    }
+}

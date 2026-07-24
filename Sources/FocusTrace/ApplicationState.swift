@@ -32,6 +32,29 @@ struct ResumedWorkflowCheckpoint: Identifiable, Equatable {
     let resumedAt: Date
 }
 
+struct TimelineViewSnapshot {
+    let id: UInt64
+    let renderNow: Date
+    let range: DateInterval
+    let activities: [ActivitySegmentModel]
+    let taskIntervals: [TaskIntervalModel]
+    let markers: [TimelineMarkerModel]
+    let taskNames: [UUID: String]
+    let presentation: TimelinePresentationSnapshot
+}
+
+private struct TimelineViewCacheKey: Equatable {
+    let selectedDay: Date
+    let range: DateInterval
+    let renderMinute: Date
+    let dataRevision: UInt64
+}
+
+private struct TimelineViewCache {
+    let key: TimelineViewCacheKey
+    let snapshot: TimelineViewSnapshot
+}
+
 @MainActor
 final class ApplicationState: ObservableObject {
     let store: FocusTraceStore
@@ -46,6 +69,7 @@ final class ApplicationState: ObservableObject {
     @Published private(set) var markers: [TimelineMarkerModel] = []
     @Published private(set) var taskParkings: [TaskParkingModel] = []
     @Published private(set) var workflowSpaceBindings: [WorkflowSpaceBindingModel] = []
+    @Published private(set) var requirements: [RequirementItemModel] = []
     @Published private(set) var spaceResolution: WorkflowSpaceResolution = .unknown
 
     @Published var selectedDate = Calendar.current.startOfDay(for: Date())
@@ -77,6 +101,9 @@ final class ApplicationState: ObservableObject {
     private var spaceReconciliationTask: Task<Void, Never>?
     private var attentionCueTask: Task<Void, Never>?
     private var workflowUndoTask: Task<Void, Never>?
+    private var timelineDataRevision: UInt64 = 0
+    private var timelineSnapshotSequence: UInt64 = 0
+    private var timelineViewCache: TimelineViewCache?
     private var lastAllowedBundleID: String?
     private var hasStarted = false
 
@@ -109,6 +136,24 @@ final class ApplicationState: ObservableObject {
 
     var activeTasks: [FocusTaskModel] {
         tasks.filter { $0.workflowLifecycle == .open }
+    }
+
+    var orderedRequirements: [RequirementItemModel] {
+        let byID = Dictionary(uniqueKeysWithValues: requirements.map { ($0.id, $0) })
+        return RequirementEngine.ordered(requirements.map(\.record)).compactMap {
+            byID[$0.id]
+        }
+    }
+
+    var untriagedRequirementCount: Int {
+        requirements.filter {
+            $0.status == .inbox
+                || ($0.status == .planned && $0.priority == .unplanned)
+        }.count
+    }
+
+    var activeRequirement: RequirementItemModel? {
+        requirements.first { $0.status == .active }
     }
 
     var completedWorkflows: [FocusTaskModel] {
@@ -289,6 +334,62 @@ final class ApplicationState: ObservableObject {
         )
     }
 
+    var selectedTimelineSnapshot: TimelineViewSnapshot {
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: selectedDate)
+        let range = preferences.workRange(for: selectedDate)
+        let renderMinute = TimelinePresentationEngine.renderMinute(
+            for: now,
+            calendar: calendar
+        )
+        let key = TimelineViewCacheKey(
+            selectedDay: selectedDay,
+            range: range,
+            renderMinute: renderMinute,
+            dataRevision: timelineDataRevision
+        )
+        if let timelineViewCache, timelineViewCache.key == key {
+            return timelineViewCache.snapshot
+        }
+
+        let interval = dayInterval(for: selectedDate)
+        let selectedActivities = activities.filter { item in
+            let end = item.endedAt ?? renderMinute
+            return item.startedAt < interval.end && end >= interval.start
+        }
+        let selectedTaskIntervals = taskIntervals.filter { item in
+            let end = item.endedAt ?? renderMinute
+            return item.startedAt < interval.end && end >= interval.start
+        }
+        let selectedInterruptions = interruptions.filter {
+            interval.contains($0.detectedAt)
+        }
+        let selectedMarkers = markers.filter { interval.contains($0.date) }
+        let selectedParkings = taskParkings.filter { interval.contains($0.parkedAt) }
+
+        timelineSnapshotSequence &+= 1
+        let snapshot = TimelineViewSnapshot(
+            id: timelineSnapshotSequence,
+            renderNow: renderMinute,
+            range: range,
+            activities: selectedActivities,
+            taskIntervals: selectedTaskIntervals,
+            markers: selectedMarkers,
+            taskNames: Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.title) }),
+            presentation: TimelinePresentationEngine.snapshot(
+                activities: selectedActivities.map(\.record),
+                taskIntervals: selectedTaskIntervals.map(\.record),
+                interruptions: selectedInterruptions.map(\.record),
+                markers: selectedMarkers.map(\.record),
+                taskParkings: selectedParkings.map(\.record),
+                range: range,
+                now: renderMinute
+            )
+        )
+        timelineViewCache = TimelineViewCache(key: key, snapshot: snapshot)
+        return snapshot
+    }
+
     var selectedCoachingAnalysis: DailyCoachingAnalysis {
         DailyCoachEngine.analyze(
             snapshot: FocusTraceLocalSnapshot(
@@ -427,6 +528,135 @@ final class ApplicationState: ObservableObject {
         tasks.append(task)
         saveOrReport()
         switchTask(to: task.id)
+    }
+
+    @discardableResult
+    private func createInactiveWorkflow(
+        title: String,
+        expectedOutcome: String = "",
+        allowedBundleIDs: Set<String> = []
+    ) -> FocusTaskModel? {
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanTitle.isEmpty else { return nil }
+        let workflow = FocusTaskModel(
+            title: cleanTitle,
+            expectedOutcome: expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines),
+            allowedBundleIDs: Array(allowedBundleIDs).sorted()
+        )
+        store.insert(workflow)
+        tasks.append(workflow)
+        saveOrReport()
+        return workflow
+    }
+
+    @discardableResult
+    func captureRequirement(title: String, source: String = "") -> Bool {
+        guard let record = RequirementEngine.captured(title: title, source: source) else {
+            return false
+        }
+        let requirement = RequirementItemModel(
+            id: record.id,
+            title: record.title,
+            source: record.source,
+            capturedAt: record.capturedAt
+        )
+        store.insert(requirement)
+        requirements.append(requirement)
+        saveOrReport()
+        return true
+    }
+
+    func updateRequirement(
+        id: UUID,
+        title: String,
+        source: String,
+        priority: RequirementPriority
+    ) {
+        guard let requirement = requirements.first(where: { $0.id == id }),
+              let clean = RequirementEngine.captured(title: title, source: source)
+        else { return }
+        requirement.title = clean.title
+        requirement.source = clean.source
+        requirement.priority = priority
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    func setRequirementPriority(_ id: UUID, priority: RequirementPriority) {
+        guard let requirement = requirements.first(where: { $0.id == id }) else { return }
+        requirement.priority = priority
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    func attachRequirement(_ id: UUID, to workflowID: UUID) {
+        guard let requirement = requirements.first(where: { $0.id == id }),
+              activeTasks.contains(where: { $0.id == workflowID })
+        else { return }
+        requirement.workflowID = workflowID
+        if requirement.status == .inbox {
+            requirement.status = .planned
+        }
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    @discardableResult
+    func convertRequirementToWorkflow(_ id: UUID, workflowTitle: String) -> UUID? {
+        guard let requirement = requirements.first(where: { $0.id == id }),
+              let workflow = createInactiveWorkflow(title: workflowTitle)
+        else { return nil }
+        requirement.workflowID = workflow.id
+        requirement.status = .planned
+        saveOrReport()
+        objectWillChange.send()
+        return workflow.id
+    }
+
+    func startRequirement(_ id: UUID) {
+        guard let requirement = requirements.first(where: { $0.id == id }),
+              let workflowID = requirement.workflowID,
+              activeTasks.contains(where: { $0.id == workflowID })
+        else {
+            errorMessage = "请先把这个需求安排到一个进行中的工作流。"
+            return
+        }
+
+        if isSpaceWorkflowModeEnabled {
+            if let currentSpaceWorkflowID, currentSpaceWorkflowID != workflowID {
+                errorMessage = "当前桌面已绑定到“\(taskName(for: currentSpaceWorkflowID))”。请切到目标工作流的桌面，或先解除当前桌面绑定。"
+                return
+            }
+            if currentSpaceWorkflowID == nil {
+                bindCurrentSpace(to: workflowID)
+                guard currentSpaceWorkflowID == workflowID else { return }
+            }
+        } else {
+            switchTask(to: workflowID)
+        }
+
+        for item in requirements where item.status == .active && item.id != id {
+            item.status = .planned
+        }
+        requirement.status = .active
+        selectedAppSection = .focus
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    func completeRequirement(_ id: UUID) {
+        guard let requirement = requirements.first(where: { $0.id == id }) else { return }
+        requirement.status = .completed
+        requirement.completedAt = Date()
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    func archiveRequirement(_ id: UUID) {
+        guard let requirement = requirements.first(where: { $0.id == id }) else { return }
+        requirement.status = .archived
+        saveOrReport()
+        objectWillChange.send()
     }
 
     func createWorkflowAndBindCurrentSpace(
@@ -1864,14 +2094,22 @@ final class ApplicationState: ObservableObject {
         markers = store.markers.sorted { $0.date < $1.date }
         taskParkings = store.taskParkings.sorted { $0.parkedAt < $1.parkedAt }
         workflowSpaceBindings = store.workflowSpaceBindings.sorted { $0.boundAt < $1.boundAt }
+        requirements = store.requirements.sorted { $0.capturedAt < $1.capturedAt }
+        invalidateTimelinePresentation()
     }
 
     private func saveOrReport() {
+        invalidateTimelinePresentation()
         do {
             try store.save()
         } catch {
             errorMessage = "保存本地数据失败：\(error.localizedDescription)"
         }
+    }
+
+    private func invalidateTimelinePresentation() {
+        timelineDataRevision &+= 1
+        timelineViewCache = nil
     }
 
     private func dayInterval(for date: Date) -> DateInterval {

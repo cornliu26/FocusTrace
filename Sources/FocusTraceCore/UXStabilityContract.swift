@@ -13,6 +13,21 @@ public enum FocusTraceUXContract {
     public static let workflowNameInputIdentifier = "workflowName"
     public static let onboardingRequiredInputs = [workflowNameInputIdentifier]
     public static let primaryDailyActionCount = 1
+    public static let sidebarIconCanvasSize = 18.0
+    public static let sidebarTimelineIcon = "clock.arrow.circlepath"
+    public static let timelinePaletteName = "verdant-v1"
+}
+
+public enum StablePaletteAssignment {
+    public static func index(for value: String, count: Int) -> Int {
+        guard count > 0 else { return 0 }
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return Int(hash % UInt64(count))
+    }
 }
 
 public enum FocusTraceDateNavigation {

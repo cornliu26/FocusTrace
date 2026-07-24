@@ -8,6 +8,7 @@ struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var workflowToComplete: FocusTaskModel?
     @State private var showingQuickWorkflowCreator = false
+    @State private var showingRequirementCapture = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -17,6 +18,7 @@ struct MenuBarView: View {
             } else {
                 primaryAction
             }
+            quickRequirementCapture
             if let checkpoint = state.resumedWorkflowCheckpoint {
                 checkpointStrip(checkpoint)
             } else if state.currentTaskID != nil {
@@ -57,6 +59,9 @@ struct MenuBarView: View {
         .sheet(isPresented: $showingQuickWorkflowCreator) {
             QuickWorkflowCreatorSheet(state: state)
         }
+        .sheet(isPresented: $showingRequirementCapture) {
+            QuickRequirementCaptureSheet(state: state)
+        }
         .onAppear {
             state.start()
             state.refreshSpaceContextForMenuPresentation()
@@ -66,6 +71,29 @@ struct MenuBarView: View {
                 )
             }
         }
+    }
+
+    private var quickRequirementCapture: some View {
+        Button {
+            showingRequirementCapture = true
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "plus.circle")
+                    .foregroundStyle(FocusTraceTheme.mint)
+                Text("收下一个需求")
+                Spacer()
+                if state.untriagedRequirementCount > 0 {
+                    Text("\(state.untriagedRequirementCount) 待整理")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption.weight(.medium))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("先记下来，不切换或绑定当前工作流")
     }
 
     private var header: some View {
@@ -273,7 +301,12 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 13) {
+        HStack(spacing: 11) {
+            Button {
+                openMain(.inbox)
+            } label: {
+                Label("需求", systemImage: "tray")
+            }
             Button {
                 openMain(.review)
             } label: {

@@ -331,6 +331,50 @@ final class WorkflowSpaceBindingModel: Codable, Identifiable {
     }
 }
 
+final class RequirementItemModel: Codable, Identifiable {
+    var id: UUID
+    var title: String
+    var source: String
+    var capturedAt: Date
+    var dueDate: Date?
+    var priorityRaw: String
+    var statusRaw: String
+    var workflowID: UUID?
+    var completedAt: Date?
+
+    init(
+        id: UUID = UUID(),
+        title: String,
+        source: String = "",
+        capturedAt: Date = Date(),
+        dueDate: Date? = nil,
+        priority: RequirementPriority = .unplanned,
+        status: RequirementStatus = .inbox,
+        workflowID: UUID? = nil,
+        completedAt: Date? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.source = source
+        self.capturedAt = capturedAt
+        self.dueDate = dueDate
+        self.priorityRaw = priority.rawValue
+        self.statusRaw = status.rawValue
+        self.workflowID = workflowID
+        self.completedAt = completedAt
+    }
+
+    var priority: RequirementPriority {
+        get { RequirementPriority(rawValue: priorityRaw) ?? .unplanned }
+        set { priorityRaw = newValue.rawValue }
+    }
+
+    var status: RequirementStatus {
+        get { RequirementStatus(rawValue: statusRaw) ?? .inbox }
+        set { statusRaw = newValue.rawValue }
+    }
+}
+
 @MainActor
 final class FocusTraceStore {
     private struct Snapshot: Codable {
@@ -343,6 +387,7 @@ final class FocusTraceStore {
         var markers: [TimelineMarkerModel]
         var taskParkings: [TaskParkingModel]
         var workflowSpaceBindings: [WorkflowSpaceBindingModel]
+        var requirements: [RequirementItemModel]
 
         init(
             tasks: [FocusTaskModel],
@@ -353,7 +398,8 @@ final class FocusTraceStore {
             trainingPlans: [TrainingPlanModel],
             markers: [TimelineMarkerModel],
             taskParkings: [TaskParkingModel],
-            workflowSpaceBindings: [WorkflowSpaceBindingModel]
+            workflowSpaceBindings: [WorkflowSpaceBindingModel],
+            requirements: [RequirementItemModel]
         ) {
             self.tasks = tasks
             self.taskIntervals = taskIntervals
@@ -364,6 +410,7 @@ final class FocusTraceStore {
             self.markers = markers
             self.taskParkings = taskParkings
             self.workflowSpaceBindings = workflowSpaceBindings
+            self.requirements = requirements
         }
 
         init(from decoder: Decoder) throws {
@@ -380,6 +427,10 @@ final class FocusTraceStore {
                 [WorkflowSpaceBindingModel].self,
                 forKey: .workflowSpaceBindings
             ) ?? []
+            requirements = try container.decodeIfPresent(
+                [RequirementItemModel].self,
+                forKey: .requirements
+            ) ?? []
         }
     }
 
@@ -392,6 +443,7 @@ final class FocusTraceStore {
     private(set) var markers: [TimelineMarkerModel] = []
     private(set) var taskParkings: [TaskParkingModel] = []
     private(set) var workflowSpaceBindings: [WorkflowSpaceBindingModel] = []
+    private(set) var requirements: [RequirementItemModel] = []
     private(set) var loadWarning: String?
 
     private let fileURL: URL?
@@ -421,6 +473,7 @@ final class FocusTraceStore {
             markers = snapshot.markers
             taskParkings = snapshot.taskParkings
             workflowSpaceBindings = snapshot.workflowSpaceBindings
+            requirements = snapshot.requirements
         } catch {
             let backup = directory.appendingPathComponent("store-corrupt-\(Int(Date().timeIntervalSince1970)).json")
             try? FileManager.default.copyItem(at: url, to: backup)
@@ -455,6 +508,7 @@ final class FocusTraceStore {
     func insert(_ value: TimelineMarkerModel) { markers.append(value) }
     func insert(_ value: TaskParkingModel) { taskParkings.append(value) }
     func insert(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.append(value) }
+    func insert(_ value: RequirementItemModel) { requirements.append(value) }
 
     func delete(_ value: FocusTaskModel) { tasks.removeAll { $0.id == value.id } }
     func delete(_ value: TaskIntervalModel) { taskIntervals.removeAll { $0.id == value.id } }
@@ -465,6 +519,7 @@ final class FocusTraceStore {
     func delete(_ value: TimelineMarkerModel) { markers.removeAll { $0.id == value.id } }
     func delete(_ value: TaskParkingModel) { taskParkings.removeAll { $0.id == value.id } }
     func delete(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.removeAll { $0.id == value.id } }
+    func delete(_ value: RequirementItemModel) { requirements.removeAll { $0.id == value.id } }
 
     private func encodedSnapshot() throws -> Data {
         let snapshot = Snapshot(
@@ -476,7 +531,8 @@ final class FocusTraceStore {
             trainingPlans: trainingPlans,
             markers: markers,
             taskParkings: taskParkings,
-            workflowSpaceBindings: workflowSpaceBindings
+            workflowSpaceBindings: workflowSpaceBindings,
+            requirements: requirements
         )
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -604,6 +660,22 @@ extension WorkflowSpaceBindingModel {
             state: state,
             boundAt: boundAt,
             lastVerifiedAt: lastVerifiedAt
+        )
+    }
+}
+
+extension RequirementItemModel {
+    var record: RequirementRecord {
+        RequirementRecord(
+            id: id,
+            title: title,
+            source: source,
+            capturedAt: capturedAt,
+            dueDate: dueDate,
+            priority: priority,
+            status: status,
+            workflowID: workflowID,
+            completedAt: completedAt
         )
     }
 }

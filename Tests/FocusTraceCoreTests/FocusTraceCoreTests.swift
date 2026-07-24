@@ -170,6 +170,35 @@ func optimizedDailyUXContractRemainsStable() {
     #expect(FocusTraceUXContract.menuBarWidth == 304)
     #expect(FocusTraceUXContract.onboardingRequiredInputs == ["workflowName"])
     #expect(FocusTraceUXContract.primaryDailyActionCount == 1)
+    #expect(FocusTraceUXContract.sidebarIconCanvasSize == 18)
+    #expect(FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath")
+    #expect(FocusTraceUXContract.timelinePaletteName == "verdant-v1")
+    #expect(StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6)
+}
+
+@Test
+func requirementCaptureStaysInInboxUntilExplicitlyPlanned() throws {
+    let captured = try #require(RequirementEngine.captured(
+        title: "  张三口头说：补上失败告警  ",
+        source: "  周会  "
+    ))
+    #expect(captured.title == "张三口头说：补上失败告警")
+    #expect(captured.source == "周会")
+    #expect(captured.status == .inbox)
+    #expect(captured.priority == .unplanned)
+    #expect(captured.workflowID == nil)
+
+    let workflowID = UUID()
+    let attached = RequirementEngine.attached(captured, to: workflowID)
+    #expect(attached.workflowID == workflowID)
+    #expect(attached.status == .planned)
+    #expect(attached.status != .active)
+    #expect(
+        RequirementEngine.suggestedWorkflowTitle(
+            from: "修复训练失败后的告警。补充对应文档",
+            maximumLength: 20
+        ) == "修复训练失败后的告警"
+    )
 }
 
 @Test
@@ -211,6 +240,62 @@ func dateNavigationNormalizesDaysAndNeverMovesIntoTheFuture() {
         calendar: calendar
     )
     #expect(capped == calendar.startOfDay(for: latest))
+}
+
+@Test
+func timelinePresentationUsesMinuteRefreshAndHandlesLargeDaysQuickly() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let start = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 9
+    ))!
+    let apps = (0..<8).map {
+        AppIdentity(bundleID: "app.\($0)", name: "App \($0)")
+    }
+    let activities = (0..<2_000).map { index in
+        let began = start.addingTimeInterval(Double(index * 15))
+        return ActivityRecord(
+            app: apps[index % apps.count],
+            startedAt: began,
+            endedAt: began.addingTimeInterval(15),
+            taskID: nil,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let markers = (0..<300).map { index in
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(Double(index * 60)),
+            kind: index.isMultiple(of: 3) ? .activeSpaceChanged : .taskChanged
+        )
+    }
+    let range = DateInterval(start: start, duration: 12 * 60 * 60)
+    let measuredAt = Date()
+    let snapshot = TimelinePresentationEngine.snapshot(
+        activities: activities,
+        taskIntervals: [],
+        interruptions: [],
+        markers: markers,
+        taskParkings: [],
+        range: range,
+        now: range.end
+    )
+    let elapsed = Date().timeIntervalSince(measuredAt)
+
+    #expect(snapshot.buckets.count == 144)
+    #expect(!snapshot.eventBuckets.isEmpty)
+    #expect(snapshot.summary.appSwitchCount == 1_999)
+    #expect(elapsed < 1.0)
+
+    let firstTick = start.addingTimeInterval(12.1)
+    let secondTick = start.addingTimeInterval(58.9)
+    #expect(
+        TimelinePresentationEngine.renderMinute(for: firstTick, calendar: calendar)
+            == TimelinePresentationEngine.renderMinute(for: secondTick, calendar: calendar)
+    )
 }
 
 @Test

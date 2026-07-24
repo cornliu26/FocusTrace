@@ -4,6 +4,7 @@ import FocusTraceCore
 
 enum AppSection: String, CaseIterable, Identifiable {
     case timeline = "时间轴"
+    case inbox = "需求箱"
     case focus = "专注训练"
     case review = "回顾分析"
     case settings = "设置与数据"
@@ -12,7 +13,8 @@ enum AppSection: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
-        case .timeline: return "timeline.selection"
+        case .timeline: return FocusTraceUXContract.sidebarTimelineIcon
+        case .inbox: return "tray.full"
         case .focus: return "scope"
         case .review: return "chart.xyaxis.line"
         case .settings: return "gearshape"
@@ -50,6 +52,8 @@ struct RootView: View {
                 switch state.selectedAppSection ?? .focus {
                 case .timeline:
                     TimelineView(state: state)
+                case .inbox:
+                    RequirementsView(state: state)
                 case .focus:
                     FocusTrainingView(state: state)
                 case .review:
@@ -113,9 +117,15 @@ struct RootView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: section.icon)
-                    .font(.system(size: 14, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .symbolRenderingMode(.monochrome)
                     .foregroundStyle(isSelected ? FocusTraceTheme.mint : Color.secondary)
-                    .frame(width: 24)
+                    .frame(
+                        width: CGFloat(FocusTraceUXContract.sidebarIconCanvasSize),
+                        height: CGFloat(FocusTraceUXContract.sidebarIconCanvasSize)
+                    )
+                    .frame(width: 24, height: 24)
                 Text(section.rawValue)
                     .font(.system(.body, design: .rounded, weight: .medium))
                     .foregroundStyle(.primary)

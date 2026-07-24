@@ -26,3 +26,5 @@
 - Keep schedule tuning, expected outcomes, allowed applications, plan history, exports, and deletion controls out of the primary daily path.
 - In Space workflow mode, switching desktops is the workflow switch. Do not ask the user to select a destination workflow when parking work.
 - Treat shipped interaction forms as compatibility contracts. In particular, keep date selection as a graphical calendar popover, keep the menu-bar panel compact, and update explicit UX regression tests before intentionally changing an established interaction.
+- Capturing a requirement must never switch or bind a workflow. Requirements enter the inbox first; only the explicit “开始处理” action may activate or bind their assigned workflow.
+- Keep timeline colors on the curated verdant palette and keep expensive timeline presentation work cached at minute/data-change granularity rather than recomputing on every focus-clock tick.
