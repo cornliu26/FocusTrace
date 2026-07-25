@@ -1,16 +1,5 @@
 <p align="center">
-  <img src="./Assets/FocusTraceIcon.png" width="104" alt="FocusTrace">
-</p>
-
-<h1 align="center">FocusTrace</h1>
-
-<p align="center">
-  <strong>看清切换，不丢上下文，用证据一点点改善注意力。</strong>
-</p>
-
-<p align="center">
-  一款本地运行的 macOS 专注记录与训练工具。<br>
-  为 Agent 与多任务并发的工作方式而设计，不诊断 ADHD，也不监控工作内容。
+  <img src="./Docs/Media/Posters/focustrace-product-github.png" alt="FocusTrace：看清切换，不丢上下文">
 </p>
 
 <p align="center">
@@ -71,6 +60,10 @@ cd FocusTrace
 > 突然收到一个新需求时，先在菜单栏点“收下一个需求”。它不会打断或切换当前工作流。
 
 ## 重要特性
+
+<p align="center">
+  <img src="./Docs/Media/Posters/focustrace-features-github.png" alt="FocusTrace 核心能力：看见碎片、接住需求、用证据改进">
+</p>
 
 | 日常最痛的事 | FocusTrace 怎样处理 |
 | --- | --- |
