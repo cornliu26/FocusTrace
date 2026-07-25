@@ -580,7 +580,7 @@ final class ApplicationState: ObservableObject {
             requirement.record,
             dueDate: dueDate,
             importance: importance,
-            workflowID: workflowID,
+            workflowID: workflowID
         )
         requirement.dueDate = planned.dueDate
         requirement.importance = planned.importance
