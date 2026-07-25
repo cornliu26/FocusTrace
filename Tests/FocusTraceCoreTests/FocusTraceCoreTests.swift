@@ -307,8 +307,11 @@ func calendarLayoutIsPreparedBeforePresentationAndRemainsBounded() {
     #expect(selectedLayout.weekdaySymbols.count == 7)
     #expect(selectedLayout.cells.count.isMultiple(of: 7))
     #expect(datedCells.count == 31)
-    #expect(selectedLayout.cells.compactMap(\.dayText).first == "1")
-    #expect(selectedLayout.cells.compactMap(\.dayText).last == "31")
+    let dayTexts = selectedLayout.cells
+        .filter { $0.date != nil }
+        .map(\.dayText)
+    #expect(dayTexts.first == "1")
+    #expect(dayTexts.last == "31")
 
     let capped = FocusTraceCalendarLayoutEngine.movedMonth(
         from: selected,
@@ -1752,7 +1755,8 @@ func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
     #expect(instructions.contains("Read only `Reports/latest.json` and `Reports/latest.md`"))
     #expect(instructions.contains("Never read or expose FocusTrace `store.json`"))
     #expect(instructions.contains("evidence"))
-    #expect(instructions.contains("at most one training"))
+    #expect(instructions.contains("Select exactly one problem"))
+    #expect(instructions.contains("second recommendation"))
     #expect(script.contains("FocusTraceReport"))
     #expect(script.contains("Application Support/FocusTrace/CodexBridge"))
     #expect(script.contains("$BRIDGE_DIR/bridge.json"))

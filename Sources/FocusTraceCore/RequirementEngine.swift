@@ -136,15 +136,26 @@ public enum RequirementEngine {
         at date: Date,
         calendar: Calendar = .current
     ) -> [RequirementRecord] {
-        requirements.sorted { left, right in
-            let leftRank = orderingRank(left, at: date, calendar: calendar)
-            let rightRank = orderingRank(right, at: date, calendar: calendar)
-            if leftRank != rightRank { return leftRank < rightRank }
+        let today = calendar.startOfDay(for: date)
+        return requirements.map { requirement in
+            let dueDay = requirement.dueDate.map {
+                calendar.startOfDay(for: $0)
+            }
+            return RequirementOrderingEntry(
+                requirement: requirement,
+                rank: orderingRank(
+                    requirement,
+                    dueDay: dueDay,
+                    today: today
+                ),
+                dueDay: dueDay,
+                importance: importanceRank(requirement.importance)
+            )
+        }.sorted { left, right in
+            if left.rank != right.rank { return left.rank < right.rank }
 
-            let leftDueDay = left.dueDate.map { calendar.startOfDay(for: $0) }
-            let rightDueDay = right.dueDate.map { calendar.startOfDay(for: $0) }
-            if leftDueDay != rightDueDay {
-                switch (leftDueDay, rightDueDay) {
+            if left.dueDay != right.dueDay {
+                switch (left.dueDay, right.dueDay) {
                 case let (leftDate?, rightDate?):
                     return leftDate < rightDate
                 case (_?, nil):
@@ -156,13 +167,11 @@ public enum RequirementEngine {
                 }
             }
 
-            let leftImportance = importanceRank(left.importance)
-            let rightImportance = importanceRank(right.importance)
-            if leftImportance != rightImportance {
-                return leftImportance < rightImportance
+            if left.importance != right.importance {
+                return left.importance < right.importance
             }
-            return left.capturedAt < right.capturedAt
-        }
+            return left.requirement.capturedAt < right.requirement.capturedAt
+        }.map(\.requirement)
     }
 
     public static func planned(
@@ -276,20 +285,18 @@ public enum RequirementEngine {
 
     private static func orderingRank(
         _ requirement: RequirementRecord,
-        at date: Date,
-        calendar: Calendar
+        dueDay: Date?,
+        today: Date
     ) -> Int {
-        if let section = queueSection(for: requirement, at: date, calendar: calendar) {
-            switch section {
-            case .active: return 0
-            case .overdue: return 1
-            case .dueToday: return 2
-            case .upcoming: return 3
-            case .unscheduled: return 4
-            case .needsPlanning: return 5
-            }
+        if requirement.status == .active { return 0 }
+        if [RequirementStatus.completed, .archived].contains(requirement.status) {
+            return statusRank(requirement.status)
         }
-        return statusRank(requirement.status)
+        if needsPlanning(requirement) { return 5 }
+        guard let dueDay else { return 4 }
+        if dueDay < today { return 1 }
+        if dueDay == today { return 2 }
+        return 3
     }
 
     private static func statusRank(_ status: RequirementStatus) -> Int {
@@ -307,5 +314,12 @@ public enum RequirementEngine {
         case .normal: return 1
         case .low: return 2
         }
+    }
+
+    private struct RequirementOrderingEntry {
+        let requirement: RequirementRecord
+        let rank: Int
+        let dueDay: Date?
+        let importance: Int
     }
 }
