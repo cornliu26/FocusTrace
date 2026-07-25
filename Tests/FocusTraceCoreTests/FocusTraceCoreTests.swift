@@ -167,6 +167,9 @@ func optimizedDailyUXContractRemainsStable() {
         FocusTraceUXContract.dateSelectionPresentation
             == .graphicalCalendarPopover
     )
+    #expect(!FocusTraceUXContract.calendarPopoverAnimationsEnabled)
+    #expect(FocusTraceUXContract.calendarRefreshGranularity == .day)
+    #expect(FocusTraceUXContract.calendarPrewarmMonthOffsets == [-1, 0, 1])
     #expect(FocusTraceUXContract.menuBarWidth == 304)
     #expect(FocusTraceUXContract.onboardingRequiredInputs == ["workflowName"])
     #expect(FocusTraceUXContract.primaryDailyActionCount == 1)
@@ -174,6 +177,81 @@ func optimizedDailyUXContractRemainsStable() {
     #expect(FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath")
     #expect(FocusTraceUXContract.timelinePaletteName == "verdant-v1")
     #expect(StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6)
+}
+
+@Test
+func calendarLayoutIsPreparedBeforePresentationAndRemainsBounded() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let selected = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 18
+    ))!
+    let locale = Locale(identifier: "zh_CN")
+
+    let measuredAt = Date()
+    let layouts = (-18...18).compactMap { offset -> FocusTraceCalendarMonthLayout? in
+        guard let month = calendar.date(
+            byAdding: .month,
+            value: offset,
+            to: selected
+        ) else {
+            return nil
+        }
+        return FocusTraceCalendarLayoutEngine.layout(
+            containing: month,
+            calendar: calendar,
+            locale: locale
+        )
+    }
+    let elapsed = Date().timeIntervalSince(measuredAt)
+    let selectedLayout = FocusTraceCalendarLayoutEngine.layout(
+        containing: selected,
+        calendar: calendar,
+        locale: locale
+    )
+    let datedCells = selectedLayout.cells.compactMap(\.date)
+
+    #expect(layouts.count == 37)
+    #expect(elapsed < 1.0)
+    #expect(selectedLayout.weekdaySymbols.count == 7)
+    #expect(selectedLayout.cells.count.isMultiple(of: 7))
+    #expect(datedCells.count == 31)
+    #expect(selectedLayout.cells.compactMap(\.dayText).first == "1")
+    #expect(selectedLayout.cells.compactMap(\.dayText).last == "31")
+
+    let capped = FocusTraceCalendarLayoutEngine.movedMonth(
+        from: selected,
+        by: 1,
+        latestDate: selected,
+        calendar: calendar
+    )
+    #expect(capped == FocusTraceCalendarLayoutEngine.startOfMonth(
+        containing: selected,
+        calendar: calendar
+    ))
+}
+
+@Test
+func calendarPopoverAnchorPressesAlternateExactlyOnce() {
+    let opened = FocusTraceCalendarPopoverState.next(
+        isPresented: false,
+        event: .anchorPressed
+    )
+    let closed = FocusTraceCalendarPopoverState.next(
+        isPresented: opened,
+        event: .anchorPressed
+    )
+    let remainsClosed = FocusTraceCalendarPopoverState.next(
+        isPresented: closed,
+        event: .dismissRequested
+    )
+
+    #expect(opened)
+    #expect(!closed)
+    #expect(!remainsClosed)
 }
 
 @Test

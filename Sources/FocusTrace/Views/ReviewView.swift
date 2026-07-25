@@ -32,7 +32,11 @@ struct ReviewView: View {
 
     private var reviewHeader: some View {
         HStack(alignment: .center, spacing: 16) {
-            FocusTraceDateNavigator(selection: $state.selectedDate)
+            FocusTraceDateNavigator(
+                selection: $state.selectedDate,
+                latestDate: state.now
+            )
+            .equatable()
             VStack(alignment: .leading, spacing: 3) {
                 Text("先看结论，再决定是否展开数据")
                     .font(.headline)

@@ -232,6 +232,12 @@ suite.run("已优化的日常交互契约保持稳定") {
         "日期选择必须保持图形化日历弹层，不能退化为日期列表"
     )
     try expect(
+        !FocusTraceUXContract.calendarPopoverAnimationsEnabled
+            && FocusTraceUXContract.calendarRefreshGranularity == .day
+            && FocusTraceUXContract.calendarPrewarmMonthOffsets == [-1, 0, 1],
+        "日历必须关闭展开动画、按天隔离刷新并预热相邻月份"
+    )
+    try expect(
         FocusTraceUXContract.menuBarWidth == 304,
         "状态栏面板应保持紧凑宽度"
     )
@@ -256,6 +262,81 @@ suite.run("已优化的日常交互契约保持稳定") {
         StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6,
         "固定色板映射必须落在合法范围"
     )
+}
+
+suite.run("日历月份在点击前预生成且计算耗时稳定") {
+    let calendar = utcCalendar()
+    let selected = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 18
+    ))!
+    let locale = Locale(identifier: "zh_CN")
+    let measuredAt = Date()
+    let layouts = (-18...18).compactMap { offset -> FocusTraceCalendarMonthLayout? in
+        guard let month = calendar.date(
+            byAdding: .month,
+            value: offset,
+            to: selected
+        ) else {
+            return nil
+        }
+        return FocusTraceCalendarLayoutEngine.layout(
+            containing: month,
+            calendar: calendar,
+            locale: locale
+        )
+    }
+    let elapsed = Date().timeIntervalSince(measuredAt)
+    let selectedLayout = FocusTraceCalendarLayoutEngine.layout(
+        containing: selected,
+        calendar: calendar,
+        locale: locale
+    )
+    try expect(layouts.count == 37, "月份布局批量生成不应遗漏")
+    try expect(elapsed < 1.0, "37 个月份布局应在一秒内完成")
+    try expect(selectedLayout.weekdaySymbols.count == 7, "星期栏必须保持七列")
+    try expect(
+        selectedLayout.cells.count.isMultiple(of: 7),
+        "日期单元格必须按整周排布"
+    )
+    try expect(
+        selectedLayout.cells.compactMap(\.date).count == 31,
+        "2026 年 7 月必须包含 31 个有效日期"
+    )
+    let capped = FocusTraceCalendarLayoutEngine.movedMonth(
+        from: selected,
+        by: 1,
+        latestDate: selected,
+        calendar: calendar
+    )
+    try expect(
+        capped == FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: selected,
+            calendar: calendar
+        ),
+        "日历月份不能进入未来"
+    )
+}
+
+suite.run("日历锚点连续点击只执行一次开关") {
+    let opened = FocusTraceCalendarPopoverState.next(
+        isPresented: false,
+        event: .anchorPressed
+    )
+    let closed = FocusTraceCalendarPopoverState.next(
+        isPresented: opened,
+        event: .anchorPressed
+    )
+    let remainsClosed = FocusTraceCalendarPopoverState.next(
+        isPresented: closed,
+        event: .dismissRequested
+    )
+    try expect(opened, "第一次点击必须打开日历")
+    try expect(!closed, "第二次点击必须关闭日历，不能再次弹出")
+    try expect(!remainsClosed, "关闭请求不能反向打开日历")
 }
 
 suite.run("需求先进入收件箱且安排时不自动开始") {
@@ -1427,6 +1508,30 @@ suite.run("JSON 导出可往返") {
     let decoded = try decoder.decode(ExportBundle.self, from: data)
     try expect(decoded.tasks.first?.title == "Task", "JSON 往返失败")
     try expect(decoded.taskParkings.isEmpty, "空停车数组往返失败")
+}
+
+suite.run("README 首页保持面向用户且技术细节折叠") {
+    let readmeURL = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    ).appendingPathComponent("README.md")
+    let readme = try String(contentsOf: readmeURL, encoding: .utf8)
+    for heading in ["## 安装", "## 30 秒上手", "## 重要特性", "## 高级特性"] {
+        try expect(readme.contains(heading), "README 缺少用户入口：\(heading)")
+    }
+    try expect(
+        readme.components(separatedBy: "<details>").count >= 4,
+        "技术与进阶说明应折叠，避免压过用户主路径"
+    )
+    try expect(
+        !readme.contains("## 发布与自动更新"),
+        "README 用户首页不应展开发布和更新实现"
+    )
+    try expect(
+        readme.range(of: "## 安装")!.lowerBound
+            < readme.range(of: "## 高级特性")!.lowerBound,
+        "README 必须先讲安装与上手，再讲高级能力"
+    )
 }
 
 suite.run("更新清单按语义版本和构建号判断") {

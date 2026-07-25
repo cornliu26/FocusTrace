@@ -12,7 +12,11 @@ struct TimelineView: View {
             VStack(alignment: .leading, spacing: 18) {
                 nextStepBanner
                 HStack {
-                    FocusTraceDateNavigator(selection: $state.selectedDate)
+                    FocusTraceDateNavigator(
+                        selection: $state.selectedDate,
+                        latestDate: state.now
+                    )
+                    .equatable()
                     Button {
                         state.showQuickStart = true
                     } label: {

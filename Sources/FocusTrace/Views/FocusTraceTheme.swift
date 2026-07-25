@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import FocusTraceCore
 import FocusTraceMacSupport
@@ -158,13 +159,45 @@ struct FocusTraceBrandLockup: View {
     }
 }
 
-struct FocusTraceDateNavigator: View {
+struct FocusTraceDateNavigator: View, Equatable {
     @Binding var selection: Date
-    var latestDate = Date()
+    let latestDate: Date
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var showingCalendar = false
     private let calendar = Calendar.current
+    private let selectedDayIdentity: Date
+    private let latestDayIdentity: Date
+    private let initialCalendarLayout: FocusTraceCalendarMonthLayout
+
+    init(
+        selection: Binding<Date>,
+        latestDate: Date = Date()
+    ) {
+        _selection = selection
+        self.latestDate = latestDate
+        let calendar = Calendar.current
+        selectedDayIdentity = calendar.dateInterval(
+            of: FocusTraceUXContract.calendarRefreshGranularity,
+            for: selection.wrappedValue
+        )?.start ?? calendar.startOfDay(for: selection.wrappedValue)
+        latestDayIdentity = calendar.dateInterval(
+            of: FocusTraceUXContract.calendarRefreshGranularity,
+            for: latestDate
+        )?.start ?? calendar.startOfDay(for: latestDate)
+        initialCalendarLayout = FocusTraceCalendarLayoutCache.preparedLayout(
+            containing: selectedDayIdentity,
+            calendar: calendar
+        )
+    }
+
+    nonisolated static func == (
+        left: FocusTraceDateNavigator,
+        right: FocusTraceDateNavigator
+    ) -> Bool {
+        left.selectedDayIdentity == right.selectedDayIdentity
+            && left.latestDayIdentity == right.latestDayIdentity
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -176,7 +209,15 @@ struct FocusTraceDateNavigator: View {
                 .frame(height: 18)
 
             Button {
-                showingCalendar.toggle()
+                var transaction = Transaction(animation: nil)
+                transaction.disablesAnimations =
+                    !FocusTraceUXContract.calendarPopoverAnimationsEnabled
+                withTransaction(transaction) {
+                    showingCalendar = FocusTraceCalendarPopoverState.next(
+                        isPresented: showingCalendar,
+                        event: .anchorPressed
+                    )
+                }
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "calendar")
@@ -193,12 +234,15 @@ struct FocusTraceDateNavigator: View {
             .accessibilityLabel("选择日期")
             .accessibilityValue(dateLabel)
             .accessibilityIdentifier(FocusTraceUXContract.dateSelectionPresentation.rawValue)
-            .popover(isPresented: $showingCalendar, arrowEdge: .bottom) {
-                FocusTraceCalendarPopover(
-                    selection: $selection,
-                    latestDate: latestDay
-                ) {
-                    showingCalendar = false
+            .background {
+                FocusTraceInstantPopover(isPresented: $showingCalendar) {
+                    FocusTraceCalendarPopover(
+                        selection: $selection,
+                        latestDate: latestDay,
+                        initialLayout: initialCalendarLayout
+                    ) {
+                        showingCalendar = false
+                    }
                 }
             }
 
@@ -276,15 +320,20 @@ struct FocusTraceCalendarPopover: View {
     @Binding var selection: Date
 
     @Environment(\.colorScheme) private var colorScheme
-    @State private var displayedMonth: Date
+    @State private var layout: FocusTraceCalendarMonthLayout
 
     private let latestDay: Date
     private let dismiss: () -> Void
     private let calendar = Calendar.current
+    private let columns = Array(
+        repeating: GridItem(.fixed(24), spacing: 5),
+        count: 7
+    )
 
     init(
         selection: Binding<Date>,
         latestDate: Date,
+        initialLayout: FocusTraceCalendarMonthLayout,
         dismiss: @escaping () -> Void
     ) {
         _selection = selection
@@ -292,12 +341,7 @@ struct FocusTraceCalendarPopover: View {
         let normalizedLatest = calendar.startOfDay(for: latestDate)
         self.latestDay = normalizedLatest
         self.dismiss = dismiss
-        _displayedMonth = State(
-            initialValue: Self.startOfMonth(
-                containing: selection.wrappedValue,
-                calendar: calendar
-            )
-        )
+        _layout = State(initialValue: initialLayout)
     }
 
     var body: some View {
@@ -310,7 +354,14 @@ struct FocusTraceCalendarPopover: View {
         }
         .padding(12)
         .frame(width: 238)
-        .background(FocusTraceTheme.cardFill(colorScheme))
+        .background(
+            FocusTraceTheme.cardFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+        )
+        .transaction { transaction in
+            transaction.disablesAnimations =
+                !FocusTraceUXContract.calendarPopoverAnimationsEnabled
+        }
     }
 
     private var monthHeader: some View {
@@ -323,7 +374,7 @@ struct FocusTraceCalendarPopover: View {
             }
 
             Spacer()
-            Text(displayedMonth.formatted(.dateTime.year().month(.wide)))
+            Text(layout.title)
                 .font(.system(.subheadline, design: .rounded, weight: .semibold))
                 .monospacedDigit()
             Spacer()
@@ -340,7 +391,7 @@ struct FocusTraceCalendarPopover: View {
 
     private var weekdayHeader: some View {
         HStack(spacing: 5) {
-            ForEach(Array(weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
+            ForEach(Array(layout.weekdaySymbols.enumerated()), id: \.offset) { _, symbol in
                 Text(symbol)
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -350,17 +401,14 @@ struct FocusTraceCalendarPopover: View {
     }
 
     private var dayGrid: some View {
-        VStack(spacing: 5) {
-            ForEach(Array(monthRows.enumerated()), id: \.offset) { _, row in
-                HStack(spacing: 5) {
-                    ForEach(Array(row.enumerated()), id: \.offset) { _, date in
-                        if let date {
-                            dayButton(date)
-                        } else {
-                            Color.clear
-                                .frame(width: 24, height: 24)
-                        }
-                    }
+        LazyVGrid(columns: columns, spacing: 5) {
+            ForEach(layout.cells) { cell in
+                if let date = cell.date {
+                    dayButton(cell, date: date)
+                } else {
+                    Color.clear
+                        .frame(width: 24, height: 24)
+                        .accessibilityHidden(true)
                 }
             }
         }
@@ -375,10 +423,6 @@ struct FocusTraceCalendarPopover: View {
             Spacer()
             Button("今天") {
                 selection = latestDay
-                displayedMonth = Self.startOfMonth(
-                    containing: latestDay,
-                    calendar: calendar
-                )
                 dismiss()
             }
             .buttonStyle(.borderless)
@@ -386,41 +430,21 @@ struct FocusTraceCalendarPopover: View {
         }
     }
 
-    private var weekdaySymbols: [String] {
-        let symbols = calendar.veryShortStandaloneWeekdaySymbols
-        let offset = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
-        return Array(symbols[offset...] + symbols[..<offset])
-    }
-
-    private var monthRows: [[Date?]] {
-        guard let dayRange = calendar.range(of: .day, in: .month, for: displayedMonth),
-              let weekday = calendar.dateComponents([.weekday], from: displayedMonth).weekday else {
-            return []
-        }
-
-        let leading = (weekday - calendar.firstWeekday + 7) % 7
-        var cells = Array<Date?>(repeating: nil, count: leading)
-        cells.append(
-            contentsOf: dayRange.compactMap { day in
-                calendar.date(byAdding: .day, value: day - 1, to: displayedMonth)
-            }
-        )
-        let trailing = (7 - cells.count % 7) % 7
-        cells.append(contentsOf: Array(repeating: nil, count: trailing))
-        return stride(from: 0, to: cells.count, by: 7).map {
-            Array(cells[$0..<min($0 + 7, cells.count)])
-        }
-    }
-
     private var latestMonth: Date {
-        Self.startOfMonth(containing: latestDay, calendar: calendar)
+        FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: latestDay,
+            calendar: calendar
+        )
     }
 
     private var canMoveToNextMonth: Bool {
-        displayedMonth < latestMonth
+        layout.month < latestMonth
     }
 
-    private func dayButton(_ date: Date) -> some View {
+    private func dayButton(
+        _ cell: FocusTraceCalendarDayLayout,
+        date: Date
+    ) -> some View {
         let isSelected = calendar.isDate(date, inSameDayAs: selection)
         let isToday = calendar.isDate(date, inSameDayAs: latestDay)
         let isUnavailable = date > latestDay
@@ -440,7 +464,7 @@ struct FocusTraceCalendarPopover: View {
                         .stroke(FocusTraceTheme.mint.opacity(0.85), lineWidth: 1.5)
                 }
 
-                Text("\(calendar.component(.day, from: date))")
+                Text(cell.dayText)
                     .font(.caption.weight(isSelected || isToday ? .semibold : .regular))
                     .monospacedDigit()
                     .foregroundStyle(
@@ -454,7 +478,7 @@ struct FocusTraceCalendarPopover: View {
         }
         .buttonStyle(.plain)
         .disabled(isUnavailable)
-        .accessibilityLabel(date.formatted(date: .long, time: .omitted))
+        .accessibilityLabel(cell.accessibilityLabel)
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
@@ -477,21 +501,254 @@ struct FocusTraceCalendarPopover: View {
     }
 
     private func moveMonth(by offset: Int) {
-        guard let month = calendar.date(byAdding: .month, value: offset, to: displayedMonth) else {
-            return
+        let target = FocusTraceCalendarLayoutEngine.movedMonth(
+            from: layout.month,
+            by: offset,
+            latestDate: latestDay,
+            calendar: calendar
+        )
+        layout = FocusTraceCalendarLayoutCache.preparedLayout(
+            containing: target,
+            calendar: calendar
+        )
+    }
+}
+
+@MainActor
+private enum FocusTraceCalendarLayoutCache {
+    private struct Key: Hashable {
+        let era: Int
+        let year: Int
+        let month: Int
+        let calendarIdentifier: String
+        let timeZoneIdentifier: String
+        let localeIdentifier: String
+        let firstWeekday: Int
+    }
+
+    private static var layouts: [Key: FocusTraceCalendarMonthLayout] = [:]
+    private static let maximumCachedMonths = 36
+
+    static func preparedLayout(
+        containing date: Date,
+        calendar: Calendar
+    ) -> FocusTraceCalendarMonthLayout {
+        let locale = Locale.current
+        var requested: FocusTraceCalendarMonthLayout?
+        for offset in FocusTraceUXContract.calendarPrewarmMonthOffsets {
+            guard let nearbyDate = calendar.date(
+                byAdding: .month,
+                value: offset,
+                to: date
+            ) else {
+                continue
+            }
+            let key = key(for: nearbyDate, calendar: calendar, locale: locale)
+            let layout: FocusTraceCalendarMonthLayout
+            if let cached = layouts[key] {
+                layout = cached
+            } else {
+                layout = FocusTraceCalendarLayoutEngine.layout(
+                    containing: nearbyDate,
+                    calendar: calendar,
+                    locale: locale
+                )
+                layouts[key] = layout
+                trimIfNeeded()
+            }
+            if offset == 0 {
+                requested = layout
+            }
         }
-        displayedMonth = min(
-            Self.startOfMonth(containing: month, calendar: calendar),
-            latestMonth
+        return requested ?? FocusTraceCalendarLayoutEngine.layout(
+            containing: date,
+            calendar: calendar,
+            locale: locale
         )
     }
 
-    private static func startOfMonth(
-        containing date: Date,
-        calendar: Calendar
-    ) -> Date {
-        let components = calendar.dateComponents([.year, .month], from: date)
-        return calendar.date(from: components) ?? calendar.startOfDay(for: date)
+    private static func key(
+        for date: Date,
+        calendar: Calendar,
+        locale: Locale
+    ) -> Key {
+        let components = calendar.dateComponents([.era, .year, .month], from: date)
+        return Key(
+            era: components.era ?? 0,
+            year: components.year ?? 0,
+            month: components.month ?? 0,
+            calendarIdentifier: String(describing: calendar.identifier),
+            timeZoneIdentifier: calendar.timeZone.identifier,
+            localeIdentifier: locale.identifier,
+            firstWeekday: calendar.firstWeekday
+        )
+    }
+
+    private static func trimIfNeeded() {
+        while layouts.count > maximumCachedMonths,
+              let firstKey = layouts.keys.first {
+            layouts.removeValue(forKey: firstKey)
+        }
+    }
+}
+
+@MainActor
+private struct FocusTraceInstantPopover<PopoverContent: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    @ViewBuilder let content: () -> PopoverContent
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented)
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.setAccessibilityElement(false)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.isPresented = $isPresented
+        context.coordinator.anchorView = nsView
+        context.coordinator.update(content: AnyView(content()))
+
+        if isPresented {
+            guard !context.coordinator.popover.isShown else { return }
+            DispatchQueue.main.async {
+                guard isPresented, nsView.window != nil,
+                      !context.coordinator.popover.isShown else {
+                    return
+                }
+                context.coordinator.show(relativeTo: nsView)
+            }
+        } else if context.coordinator.popover.isShown {
+            context.coordinator.close()
+        }
+    }
+
+    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
+        coordinator.close()
+        coordinator.stopMonitoring()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSPopoverDelegate {
+        let popover = NSPopover()
+        var isPresented: Binding<Bool>
+        weak var anchorView: NSView?
+        private var eventMonitor: Any?
+        private var resignActiveObserver: NSObjectProtocol?
+
+        init(isPresented: Binding<Bool>) {
+            self.isPresented = isPresented
+            super.init()
+            // The anchor button owns toggling. A transient popover can close on
+            // mouse-down before the button sees the second click, which races
+            // the binding and immediately reopens it.
+            popover.behavior = .applicationDefined
+            popover.animates = FocusTraceUXContract.calendarPopoverAnimationsEnabled
+            popover.delegate = self
+        }
+
+        func update(content: AnyView) {
+            if let hostingController =
+                popover.contentViewController as? NSHostingController<AnyView> {
+                hostingController.rootView = content
+            } else {
+                popover.contentViewController = NSHostingController(rootView: content)
+            }
+        }
+
+        func show(relativeTo anchorView: NSView) {
+            self.anchorView = anchorView
+            popover.show(
+                relativeTo: anchorView.bounds,
+                of: anchorView,
+                preferredEdge: .maxY
+            )
+            startMonitoring()
+        }
+
+        func close() {
+            stopMonitoring()
+            if popover.isShown {
+                popover.performClose(nil)
+            }
+        }
+
+        private func startMonitoring() {
+            guard eventMonitor == nil else { return }
+            eventMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .keyDown]
+            ) { [weak self] event in
+                guard let self, self.popover.isShown else { return event }
+                if event.type == .keyDown, event.keyCode == 53 {
+                    self.requestClose()
+                    return nil
+                }
+                guard event.type == .leftMouseDown || event.type == .rightMouseDown else {
+                    return event
+                }
+                if event.window === self.popover.contentViewController?.view.window {
+                    return event
+                }
+                if let anchorView = self.anchorView,
+                   event.window === anchorView.window {
+                    let location = anchorView.convert(event.locationInWindow, from: nil)
+                    if anchorView.bounds.contains(location) {
+                        return event
+                    }
+                }
+                self.requestClose()
+                return event
+            }
+            resignActiveObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didResignActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.requestClose()
+                }
+            }
+        }
+
+        func stopMonitoring() {
+            if let eventMonitor {
+                NSEvent.removeMonitor(eventMonitor)
+                self.eventMonitor = nil
+            }
+            if let resignActiveObserver {
+                NotificationCenter.default.removeObserver(resignActiveObserver)
+                self.resignActiveObserver = nil
+            }
+        }
+
+        private func requestClose() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                let next = FocusTraceCalendarPopoverState.next(
+                    isPresented: self.isPresented.wrappedValue,
+                    event: .dismissRequested
+                )
+                if self.isPresented.wrappedValue != next {
+                    self.isPresented.wrappedValue = next
+                } else {
+                    self.close()
+                }
+            }
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            stopMonitoring()
+            guard isPresented.wrappedValue else { return }
+            DispatchQueue.main.async { [isPresented] in
+                isPresented.wrappedValue = FocusTraceCalendarPopoverState.next(
+                    isPresented: isPresented.wrappedValue,
+                    event: .dismissRequested
+                )
+            }
+        }
     }
 }
 
