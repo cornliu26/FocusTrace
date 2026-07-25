@@ -59,6 +59,17 @@ class CodexReviewContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "dataQualityBlocked"):
             VALIDATOR.validate(report(reliable=False), payload)
 
+    def test_report_filename_preserves_the_reports_own_civil_date(self) -> None:
+        source = report(reliable=False)
+        payload = review(
+            status="dataQualityBlocked",
+            problem="工作流归因率只有 68%；当前不能据此判断注意力。",
+        )
+        source["reportDate"] = "2026-07-25T00:30:00+14:00"
+        payload["reportDate"] = source["reportDate"]
+
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
     def test_repeated_evidence_and_filler_are_rejected(self) -> None:
         repeated = review(
             status="behaviorFinding",

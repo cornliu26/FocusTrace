@@ -134,7 +134,7 @@ def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
     ):
         raise ValueError("阶段 2 未解锁时不能用解锁进度填充每日结论")
 
-    return parse_iso8601(report_date).astimezone().strftime("%Y-%m-%d")
+    return parse_iso8601(report_date).strftime("%Y-%m-%d")
 
 
 def write_atomically(path: Path, payload: dict[str, Any]) -> None:

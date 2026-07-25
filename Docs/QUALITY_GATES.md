@@ -44,7 +44,7 @@
 | RETURN-01 | Agent 返回点只按显式状态提醒，聚合指标不读取文字 | `parkingReminderRequiresActiveDueAndUnsentRecord`、`parkingMetricsTrackResumptionWithoutReadingCue` |
 | REVIEW-01 | 数据不足或归因不可靠时拒绝生成注意力建议 | `analysisLocksUntilMinimumData`、`dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow` |
 | REVIEW-02 | Codex 写回先给唯一问题、再给唯一行动；最多两条不重复证据，数据不可靠时只给修复动作，并兼容已生成的 v1 写回 | `codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay`、`codexReviewKeepsLegacyReadCompatibility`、`codexWorkspaceDemandsProblemActionAndNoFiller` |
-| REVIEW-03 | 官方聚合脚本可按日期重建历史报告，写回仍按报告日期单独展示，且参数在预构建与 SwiftPM 路径一致 | `dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration`、仓库回归 |
+| REVIEW-03 | 官方聚合脚本可按日期重建历史报告；写回按报告自身时区的日期单独展示，不受运行机器时区影响；参数在预构建与 SwiftPM 路径一致 | `dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration`、`test_report_filename_preserves_the_reports_own_civil_date`、仓库回归 |
 | PRIV-01 | Codex 只读取聚合报告，报告不泄露原始活动与返回点文字 | `automationJSONIsStructuredAndAggregateOnly`、`codexWorkspaceMakesTheAggregateOnlyBoundaryDurable` |
 | DATA-01 | 旧 store 解码、CSV 转义、JSON 往返保持兼容 | `legacyTaskLifecycleMigrationIsLossless`、`csvQuotesSeparatorsWithoutAddingExtraFields`、`jsonRoundTrip` |
 | RELEASE-01 | 版本和构建号按语义顺序比较，更新清单校验完整 | `releaseManifestUsesSemanticVersionAndBuildOrdering` |
