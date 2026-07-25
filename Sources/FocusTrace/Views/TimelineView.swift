@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import FocusTraceCore
 
@@ -41,7 +42,7 @@ struct TimelineView: View {
                     colorScheme: colorScheme
                 )
                 .equatable()
-                .frame(height: 310)
+                .frame(height: 360)
 
                 summaryGrid(snapshot.presentation.summary)
                 rawActivityList(
@@ -246,7 +247,7 @@ struct TimelineChart: View, Equatable {
                     SwitchingScalePopover(averageSwitches: averageSwitches)
                 }
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("每 5 分钟统计应用切换次数")
+                    Text("先看工作流，再看主应用，最后找高切换区间")
                         .font(.callout.weight(.medium))
                     Text(occupiedBuckets.isEmpty
                          ? "工作时段开始后会在这里形成概览"
@@ -264,18 +265,16 @@ struct TimelineChart: View, Equatable {
                         let frame = frameFor(start: interval.startedAt, end: interval.endedAt ?? now, width: width)
                         if frame.width > 0 {
                             RoundedRectangle(cornerRadius: 4)
-                                .fill(workflowColor(interval.taskID).opacity(0.78))
+                                .fill(workflowColor(interval.taskID))
                                 .overlay {
-                                    if interval.taskID == currentTaskID {
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .stroke(
-                                                VerdantTimelinePalette.currentWorkflowStroke,
-                                                lineWidth: 1.5
-                                            )
-                                    }
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(
+                                            VerdantTimelinePalette.segmentSeparator(colorScheme),
+                                            lineWidth: 0.75
+                                        )
                                 }
-                                .frame(width: frame.width, height: 25)
-                                .offset(x: frame.offset, y: 5)
+                                .frame(width: max(1, frame.width - 1), height: 25)
+                                .offset(x: frame.offset + 0.5, y: 5)
                                 .help("\(taskName(interval.taskID)) · \(duration(interval.startedAt, interval.endedAt ?? now))")
                         }
                     }
@@ -284,14 +283,14 @@ struct TimelineChart: View, Equatable {
             HStack {
                 Text("主应用").frame(width: 50, alignment: .leading)
                 track(height: 36) { width in
-                    ForEach(buckets) { bucket in
-                        let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
-                        if let app = bucket.dominantApp, frame.width > 0 {
+                    ForEach(applicationRuns) { run in
+                        let frame = frameFor(start: run.start, end: run.end, width: width)
+                        if frame.width > 0 {
                             RoundedRectangle(cornerRadius: 2.5)
-                                .fill(applicationColor(app.bundleID).opacity(0.86))
+                                .fill(applicationColor(run.app.bundleID))
                                 .frame(width: max(1, frame.width - 1), height: 25)
                                 .offset(x: frame.offset + 0.5, y: 5)
-                                .help("\(timeRange(bucket.start, bucket.end)) · \(app.name) · 活跃 \(duration(bucket.activeSeconds)) · \(bucket.uniqueAppCount) 个应用")
+                                .help("\(timeRange(run.start, run.end)) · \(run.app.name) · 活跃 \(duration(run.activeSeconds))")
                         }
                     }
                 }
@@ -305,7 +304,7 @@ struct TimelineChart: View, Equatable {
                         if bucket.activeSeconds > 0, frame.width > 0 {
                             let barHeight = max(4, 34 * CGFloat(bucket.switchCount) / CGFloat(maximum))
                             RoundedRectangle(cornerRadius: 2)
-                                .fill(fragmentationColor(bucket.fragmentationLevel).opacity(0.85))
+                                .fill(fragmentationColor(bucket.fragmentationLevel))
                                 .frame(width: max(1, frame.width - 1), height: barHeight)
                                 .offset(x: frame.offset + 0.5, y: 39 - barHeight)
                                 .help("\(timeRange(bucket.start, bucket.end)) · 应用切换 \(bucket.switchCount) 次 · Space \(bucket.spaceSwitchCount) 次")
@@ -342,6 +341,38 @@ struct TimelineChart: View, Equatable {
             HStack {
                 Spacer().frame(width: 58)
                 hourLabels
+            }
+            if !workflowLegendIDs.isEmpty {
+                HStack(spacing: 10) {
+                    Text("工作流")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 50, alignment: .leading)
+                    ForEach(workflowLegendIDs, id: \.self) { id in
+                        legendItem(taskName(id), workflowColor(id))
+                    }
+                    if workflowCount > workflowLegendIDs.count {
+                        Text("+\(workflowCount - workflowLegendIDs.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+            }
+            if !applicationLegend.isEmpty {
+                HStack(spacing: 10) {
+                    Text("主应用")
+                        .font(.caption.weight(.semibold))
+                        .frame(width: 50, alignment: .leading)
+                    ForEach(applicationLegend, id: \.bundleID) { app in
+                        legendItem(app.name, applicationColor(app.bundleID))
+                    }
+                    if applicationCount > applicationLegend.count {
+                        Text("+\(applicationCount - applicationLegend.count)")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
             }
             HStack(spacing: 12) {
                 legend("较少 0–2", fragmentationColor(.quiet))
@@ -412,17 +443,72 @@ struct TimelineChart: View, Equatable {
     }
 
     private func workflowColor(_ id: UUID) -> Color {
-        let palette = VerdantTimelinePalette.workflows
-        return palette[
-            StablePaletteAssignment.index(for: id.uuidString, count: palette.count)
-        ]
+        let rankedIDs = workflowLegendIDs.map(\.uuidString)
+        guard let index = TimelineCategoryPaletteAssignment.index(
+            for: id.uuidString,
+            rankedIDs: rankedIDs
+        ) else {
+            return FocusTraceTimelinePalette.workflowOther.swiftUIColor
+        }
+        return FocusTraceTimelinePalette.workflows[index].swiftUIColor
     }
 
     private func applicationColor(_ bundleID: String) -> Color {
-        let palette = VerdantTimelinePalette.applications
-        return palette[
-            StablePaletteAssignment.index(for: bundleID, count: palette.count)
-        ]
+        let rankedIDs = applicationLegend.map(\.bundleID)
+        guard let index = TimelineCategoryPaletteAssignment.index(
+            for: bundleID,
+            rankedIDs: rankedIDs
+        ) else {
+            return FocusTraceTimelinePalette.applicationOther.swiftUIColor
+        }
+        return FocusTraceTimelinePalette.applications[index].swiftUIColor
+    }
+
+    private var workflowLegendIDs: [UUID] {
+        Array(workflowDurations.keys.sorted { left, right in
+            let leftDuration = workflowDurations[left, default: 0]
+            let rightDuration = workflowDurations[right, default: 0]
+            if leftDuration != rightDuration { return leftDuration > rightDuration }
+            return taskName(left).localizedStandardCompare(taskName(right)) == .orderedAscending
+        }.prefix(TimelineCategoryPaletteAssignment.maximumColoredCategories))
+    }
+
+    private var workflowCount: Int {
+        workflowDurations.count
+    }
+
+    private var workflowDurations: [UUID: TimeInterval] {
+        taskIntervals.reduce(into: [:]) { result, interval in
+            let start = max(range.start, interval.startedAt)
+            let end = min(range.end, interval.endedAt ?? now)
+            result[interval.taskID, default: 0] += max(
+                0,
+                end.timeIntervalSince(start)
+            )
+        }
+    }
+
+    private var applicationLegend: [AppIdentity] {
+        Array(applicationDurations.keys.sorted { left, right in
+            let leftDuration = applicationDurations[left, default: 0]
+            let rightDuration = applicationDurations[right, default: 0]
+            if leftDuration != rightDuration { return leftDuration > rightDuration }
+            return left.name.localizedStandardCompare(right.name) == .orderedAscending
+        }.prefix(TimelineCategoryPaletteAssignment.maximumColoredCategories))
+    }
+
+    private var applicationCount: Int {
+        applicationDurations.count
+    }
+
+    private var applicationRuns: [TimelineApplicationRun] {
+        TimelineApplicationRunEngine.runs(from: buckets)
+    }
+
+    private var applicationDurations: [AppIdentity: TimeInterval] {
+        applicationRuns.reduce(into: [:]) { result, run in
+            result[run.app, default: 0] += run.activeSeconds
+        }
     }
 
     private func duration(_ start: Date, _ end: Date) -> String {
@@ -449,10 +535,10 @@ struct TimelineChart: View, Equatable {
 
     private func fragmentationColor(_ level: FragmentationLevel) -> Color {
         switch level {
-        case .quiet: return VerdantTimelinePalette.quiet
-        case .steady: return VerdantTimelinePalette.steady
-        case .fragmented: return VerdantTimelinePalette.fragmented
-        case .intense: return VerdantTimelinePalette.intense
+        case .quiet: return FocusTraceTimelinePalette.quiet.swiftUIColor
+        case .steady: return FocusTraceTimelinePalette.steady.swiftUIColor
+        case .fragmented: return FocusTraceTimelinePalette.fragmented.swiftUIColor
+        case .intense: return FocusTraceTimelinePalette.intense.swiftUIColor
         }
     }
 
@@ -524,47 +610,43 @@ struct TimelineChart: View, Equatable {
         }
     }
 
+    private func legendItem(_ text: String, _ color: Color) -> some View {
+        HStack(spacing: 5) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(color)
+                .frame(width: 10, height: 10)
+            Text(text)
+                .font(.caption2)
+                .lineLimit(1)
+        }
+    }
+
     private static let timeStyle = Date.FormatStyle.dateTime.hour().minute()
 }
 
 private enum VerdantTimelinePalette {
-    static let workflows: [Color] = [
-        Color(red: 0.26, green: 0.69, blue: 0.54),
-        Color(red: 0.36, green: 0.76, blue: 0.62),
-        Color(red: 0.28, green: 0.66, blue: 0.61),
-        Color(red: 0.48, green: 0.72, blue: 0.55),
-        Color(red: 0.31, green: 0.72, blue: 0.68),
-        Color(red: 0.43, green: 0.67, blue: 0.52)
-    ]
+    static func segmentSeparator(_ scheme: ColorScheme) -> Color {
+        scheme == .dark
+            ? Color(nsColor: .windowBackgroundColor)
+            : Color(nsColor: .textBackgroundColor)
+    }
 
-    static let applications: [Color] = [
-        Color(red: 0.37, green: 0.78, blue: 0.64),
-        Color(red: 0.35, green: 0.75, blue: 0.72),
-        Color(red: 0.40, green: 0.68, blue: 0.78),
-        Color(red: 0.48, green: 0.61, blue: 0.78),
-        Color(red: 0.56, green: 0.72, blue: 0.60),
-        Color(red: 0.49, green: 0.68, blue: 0.67)
-    ]
-
-    static let quiet = Color(red: 0.55, green: 0.82, blue: 0.64)
-    static let steady = Color(red: 0.31, green: 0.75, blue: 0.58)
-    static let fragmented = Color(red: 0.16, green: 0.62, blue: 0.51)
-    static let intense = Color(red: 0.08, green: 0.43, blue: 0.36)
-    static let currentWorkflowStroke = Color(red: 0.78, green: 0.98, blue: 0.90)
     static func trackFill(_ scheme: ColorScheme) -> Color {
-        scheme == .dark ? Color.white.opacity(0.075) : Color.white.opacity(0.82)
+        Color(nsColor: .textBackgroundColor)
     }
 
     static func panelFill(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color.white.opacity(0.045)
-            : Color(red: 0.91, green: 0.96, blue: 0.94).opacity(0.72)
+        Color(nsColor: .controlBackgroundColor)
     }
 
     static func panelBorder(_ scheme: ColorScheme) -> Color {
-        scheme == .dark
-            ? Color.white.opacity(0.08)
-            : Color(red: 0.36, green: 0.72, blue: 0.60).opacity(0.16)
+        Color(nsColor: .separatorColor)
+    }
+}
+
+private extension FocusTraceRGBColor {
+    var swiftUIColor: Color {
+        Color(red: red, green: green, blue: blue)
     }
 }
 

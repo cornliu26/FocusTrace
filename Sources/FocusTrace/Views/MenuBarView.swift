@@ -74,26 +74,77 @@ struct MenuBarView: View {
     }
 
     private var quickRequirementCapture: some View {
-        Button {
-            showingRequirementCapture = true
-        } label: {
-            HStack(spacing: 7) {
-                Image(systemName: "plus.circle")
-                    .foregroundStyle(FocusTraceTheme.mint)
-                Text("收下一个需求")
-                Spacer()
-                if state.untriagedRequirementCount > 0 {
-                    Text("\(state.untriagedRequirementCount) 待整理")
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 7) {
+            if let queuePrompt = requirementQueuePrompt {
+                Button {
+                    openMain(.inbox)
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: queuePrompt.icon)
+                            .foregroundStyle(queuePrompt.color)
+                        Text(queuePrompt.title)
+                        Spacer()
+                        Text("查看")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(queuePrompt.color)
+                    }
+                    .font(.caption.weight(.medium))
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .padding(8)
+                .background(
+                    queuePrompt.color.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
             }
-            .font(.caption.weight(.medium))
-            .contentShape(Rectangle())
+
+            Button {
+                showingRequirementCapture = true
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: "plus.circle")
+                        .foregroundStyle(FocusTraceTheme.sky)
+                    Text("收下一个需求")
+                    Spacer()
+                }
+                .font(.caption.weight(.medium))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("先记下来，不切换或绑定当前工作流")
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-        .help("先记下来，不切换或绑定当前工作流")
+    }
+
+    private var requirementQueuePrompt: (
+        title: String,
+        icon: String,
+        color: Color
+    )? {
+        let summary = state.requirementQueueSummary
+        if summary.overdueCount > 0 {
+            return (
+                "\(summary.overdueCount) 个需求已逾期",
+                "exclamationmark.circle.fill",
+                FocusTraceTheme.coral
+            )
+        }
+        if summary.dueTodayCount > 0 {
+            return (
+                "\(summary.dueTodayCount) 个需求今天截止",
+                "calendar.badge.clock",
+                FocusTraceTheme.amber
+            )
+        }
+        if summary.needsPlanningCount > 0 {
+            return (
+                "\(summary.needsPlanningCount) 个需求待整理",
+                "tray.full",
+                FocusTraceTheme.sky
+            )
+        }
+        return nil
     }
 
     private var header: some View {
@@ -393,12 +444,12 @@ struct MenuBarView: View {
 
     private func openMain(_ section: AppSection) {
         state.selectedAppSection = section
-        openWindow(id: "main")
+        openWindow(id: FocusTraceWindowContract.mainWindowID)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     private func showReturnPointSheet() {
-        openWindow(id: "main")
+        openWindow(id: FocusTraceWindowContract.mainWindowID)
         NSApp.activate(ignoringOtherApps: true)
         state.showTaskParking = true
     }

@@ -2,6 +2,12 @@ import AppKit
 import Foundation
 import FocusTraceCore
 
+enum CodexWorkspaceMaintenance {
+    static func refreshExistingWorkspaceIfPresent() throws {
+        try CodexWorkspaceInstaller().refreshExistingWorkspaceIfPresent()
+    }
+}
+
 @MainActor
 final class CodexConnectionLauncher: ObservableObject {
     enum Status: Equatable {
@@ -12,6 +18,17 @@ final class CodexConnectionLauncher: ObservableObject {
     }
 
     @Published private(set) var status: Status = .idle
+    private var didRefreshExistingWorkspace = false
+
+    func refreshExistingWorkspaceIfPresent() {
+        guard !didRefreshExistingWorkspace else { return }
+        didRefreshExistingWorkspace = true
+        do {
+            try CodexWorkspaceMaintenance.refreshExistingWorkspaceIfPresent()
+        } catch {
+            status = .failed("Codex 复盘协议更新失败：\(error.localizedDescription)")
+        }
+    }
 
     func connect() {
         guard status != .preparing else { return }
@@ -115,6 +132,47 @@ private struct CodexWorkspaceInstaller {
             focusTraceURL: focusTraceURL
         )
         return workspaceURL
+    }
+
+    /// Existing scheduled tasks keep their working directory, so updating the
+    /// generated instructions and validator upgrades the next run in place.
+    /// Reports and user preferences are deliberately left untouched.
+    func refreshExistingWorkspaceIfPresent() throws {
+        let applicationSupportURL = fileManager.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        )[0]
+        let workspaceURL = applicationSupportURL
+            .appendingPathComponent("FocusTrace", isDirectory: true)
+            .appendingPathComponent(
+                CodexWorkspaceContract.workspaceDirectoryName,
+                isDirectory: true
+            )
+        guard fileManager.fileExists(atPath: workspaceURL.path) else { return }
+
+        let scriptsURL = workspaceURL
+            .appendingPathComponent("Scripts", isDirectory: true)
+        try fileManager.createDirectory(
+            at: scriptsURL,
+            withIntermediateDirectories: true
+        )
+        try write(
+            CodexWorkspaceContract.agentsInstructions,
+            to: workspaceURL.appendingPathComponent("AGENTS.md")
+        )
+        try write(
+            CodexWorkspaceContract.workspaceReadme,
+            to: workspaceURL.appendingPathComponent("README.md")
+        )
+        let reviewInstallerURL = scriptsURL
+            .appendingPathComponent("install-codex-review.py")
+        try installBundledFile(
+            named: "install-codex-review",
+            extension: "py",
+            subdirectory: "CodexBridge",
+            to: reviewInstallerURL
+        )
+        try makeExecutable(reviewInstallerURL)
     }
 
     private func write(_ text: String, to destination: URL) throws {

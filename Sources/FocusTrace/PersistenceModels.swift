@@ -337,6 +337,9 @@ final class RequirementItemModel: Codable, Identifiable {
     var source: String
     var capturedAt: Date
     var dueDate: Date?
+    var importanceRaw: String?
+    var reminderSentAt: Date?
+    var planningVersion: Int?
     var priorityRaw: String
     var statusRaw: String
     var workflowID: UUID?
@@ -348,6 +351,9 @@ final class RequirementItemModel: Codable, Identifiable {
         source: String = "",
         capturedAt: Date = Date(),
         dueDate: Date? = nil,
+        importance: RequirementImportance? = nil,
+        reminderSentAt: Date? = nil,
+        planningVersion: Int? = nil,
         priority: RequirementPriority = .unplanned,
         status: RequirementStatus = .inbox,
         workflowID: UUID? = nil,
@@ -358,6 +364,9 @@ final class RequirementItemModel: Codable, Identifiable {
         self.source = source
         self.capturedAt = capturedAt
         self.dueDate = dueDate
+        self.importanceRaw = importance?.rawValue
+        self.reminderSentAt = reminderSentAt
+        self.planningVersion = planningVersion
         self.priorityRaw = priority.rawValue
         self.statusRaw = status.rawValue
         self.workflowID = workflowID
@@ -367,6 +376,11 @@ final class RequirementItemModel: Codable, Identifiable {
     var priority: RequirementPriority {
         get { RequirementPriority(rawValue: priorityRaw) ?? .unplanned }
         set { priorityRaw = newValue.rawValue }
+    }
+
+    var importance: RequirementImportance {
+        get { importanceRaw.flatMap(RequirementImportance.init(rawValue:)) ?? .normal }
+        set { importanceRaw = newValue.rawValue }
     }
 
     var status: RequirementStatus {
@@ -672,6 +686,9 @@ extension RequirementItemModel {
             source: source,
             capturedAt: capturedAt,
             dueDate: dueDate,
+            importance: importance,
+            reminderSentAt: reminderSentAt,
+            planningVersion: planningVersion ?? 0,
             priority: priority,
             status: status,
             workflowID: workflowID,

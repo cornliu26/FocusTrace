@@ -8,9 +8,9 @@ public enum CodexWorkspaceContract {
     public static let reportDirectoryName = "Reports"
 
     public static let setupPrompt = """
-    请帮我完成 FocusTrace 的 Codex 每日深度复盘接入。
+    请帮我完成 FocusTrace 的 Codex 每日行动复盘接入。
 
-    先阅读当前工作区的 AGENTS.md，并立即执行一次其中的“每日复盘流程”来验证文件桥。验证成功后，创建一个名为“FocusTrace 每日深度复盘”的定时任务：每天 18:35 在当前本地工作区执行同一套每日复盘流程。
+    先阅读当前工作区的 AGENTS.md，并立即执行一次其中的“每日复盘流程”来验证文件桥。验证成功后，创建一个名为“FocusTrace 每日行动复盘”的定时任务：每天 18:35 在当前本地工作区执行同一套每日复盘流程。
 
     必须遵守 AGENTS.md 的隐私边界：只读取聚合报告，不读取 FocusTrace 原始活动数据，也不修改训练计划、允许应用、通知或其他偏好。完成后简要告诉我本次验证结果和定时任务状态。
     """
@@ -39,23 +39,54 @@ public enum CodexWorkspaceContract {
 
     1. Run `./Scripts/generate-daily-report.sh`.
     2. Read only `Reports/latest.json` and `Reports/latest.md`.
-    3. Produce one concise Chinese conclusion and at most one training
-       adjustment. Separate confirmed aggregate evidence from inference.
+    3. Turn the report into a decision brief, not a summary. Answer only:
+       - 当前最重要的问题是什么？
+       - 今天具体怎么解决？
+
+       Select exactly one problem in this order:
+       - If `dataQuality.isReliableForBehavior` is false, select the highest
+         priority data-quality blocker. Do not make a behavior or attention
+         claim.
+       - Otherwise, prefer a `previousRecommendationEvaluation` whose status is
+         `needsAdjustment` or `notRun`.
+       - Otherwise, use the strongest current normalized trend or the report's
+         single `recommendation`.
+
+       The action must be executable today. State its trigger and concrete
+       behavior; use the report's `recommendation.method.steps` and
+       `successMeasure` rather than inventing an unrelated productivity tip.
     4. Write `Reports/codex-draft.json` with exactly these fields:
 
        ```json
        {
-         "schemaVersion": 1,
+         "schemaVersion": 2,
          "sourceReportID": "copy reportID from latest.json",
          "reportDate": "copy reportDate from latest.json exactly",
          "generatedAt": "current ISO 8601 timestamp with timezone",
-         "headline": "one concise conclusion",
-         "interpretation": "what the aggregate evidence means and does not mean",
-         "recommendation": "one specific training adjustment, or keep the plan",
-         "evidence": ["aggregate evidence 1", "aggregate evidence 2"],
-         "nextCheck": "one measurable point for the next review"
+         "status": "behaviorFinding or dataQualityBlocked",
+         "problem": "one sentence naming the single problem and its measured consequence",
+         "recommendation": "one concrete action to perform today",
+         "evidence": ["one or two non-duplicated aggregate facts"],
+         "nextCheck": "when to check one metric and its target"
        }
        ```
+
+       Hard writing rules:
+       - If behavior reliability is false, use `dataQualityBlocked` and include
+         the exact phrase “当前不能据此判断注意力” in `problem`. The recommendation
+         must repair that one data problem.
+       - If behavior reliability is true, use `behaviorFinding`.
+       - `problem` is at most 110 Chinese characters; `recommendation` at most
+         150; each evidence item at most 80; `nextCheck` at most 80.
+       - The four displayed parts together are at most 360 characters.
+       - Evidence must be a fact from the aggregate report, not another opinion,
+         and the two items must not restate each other.
+       - Do not add a preface, privacy explanation, generic trend summary,
+         motivational sentence, or a second recommendation.
+       - Do not discuss Phase 2 unlock progress unless an unlocked Phase 2
+         insight is the selected problem.
+       - Avoid filler such as “总体来看”, “值得注意”, “建议继续关注” and
+         “保持当前节奏”.
 
     5. Validate and install it with:
 
@@ -66,7 +97,8 @@ public enum CodexWorkspaceContract {
          --output-dir Reports
        ```
 
-    6. Report a short Chinese summary. Do not paste the full JSON unless asked.
+    6. Reply with only the problem and today's action. Do not paste the full
+       JSON unless asked.
     """
 
     public static let workspaceReadme = """
@@ -101,7 +133,7 @@ public enum CodexWorkspaceContract {
     fi
 
     mkdir -p "$REPORT_DIR" "$BRIDGE_DIR"
-    "$REPORT_TOOL" --store "$STORE_PATH" --output-dir "$REPORT_DIR"
+    "$REPORT_TOOL" --store "$STORE_PATH" --output-dir "$REPORT_DIR" "$@"
 
     /usr/bin/python3 - "$BRIDGE_DIR/bridge.json" "$REPORT_DIR" <<'PY'
     import datetime

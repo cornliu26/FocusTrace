@@ -232,6 +232,10 @@ suite.run("已优化的日常交互契约保持稳定") {
         "日期选择必须保持图形化日历弹层，不能退化为日期列表"
     )
     try expect(
+        FocusTraceUXContract.requirementDateSelectionPresentation == .graphicalCalendar,
+        "需求截止日期必须保持图形化日历，不能退化为日期列表"
+    )
+    try expect(
         !FocusTraceUXContract.calendarPopoverAnimationsEnabled
             && FocusTraceUXContract.calendarRefreshGranularity == .day
             && FocusTraceUXContract.calendarPrewarmMonthOffsets == [-1, 0, 1],
@@ -255,12 +259,116 @@ suite.run("已优化的日常交互契约保持稳定") {
         "侧栏图标尺寸和时间轴图标必须保持统一"
     )
     try expect(
-        FocusTraceUXContract.timelinePaletteName == "verdant-v1",
-        "时间轴必须保持统一的绿色主题色板"
+        FocusTraceUXContract.timelinePaletteName == "radix-cool-v4",
+        "时间轴必须保持经过决策的语义色板"
     )
     try expect(
-        StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6,
-        "固定色板映射必须落在合法范围"
+        !FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled,
+        "当前工作流不能给每个碎片添加深色描边"
+    )
+}
+
+suite.run("当前工作流碎片不使用黑色描边") {
+    try expect(
+        !FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled,
+        "当前工作流已在页面其他位置说明，时间轴只能使用统一分隔线"
+    )
+}
+
+suite.run("时间轴用不同语义编码上下文、工具和高切换风险") {
+    try expect(
+        FocusTraceTimelinePalette.workflows.map(\.hexadecimalRGB)
+            == [0x29A383, 0x00A2C7, 0x0090FF, 0x3E63DD, 0x5B5BD6],
+        "工作流必须使用 Radix Jade/Cyan/Blue/Indigo/Iris 9 原值"
+    )
+    try expect(
+        FocusTraceTimelinePalette.applications.map(\.hexadecimalRGB)
+            == [0x56BA9F, 0x3DB9CF, 0x5EB1EF, 0x8DA4EF, 0x9B9EF0],
+        "主应用必须使用对应的 Radix 8 阶原值"
+    )
+    try expect(
+        FocusTraceTimelinePalette.densityScale.map(\.hexadecimalRGB)
+            == [0x29A383, 0x00A2C7, 0xFFC53D, 0xE54D2E],
+        "切换密度必须使用 Radix Jade/Cyan/Amber/Tomato 9 原值"
+    )
+    try expect(
+        FocusTraceTimelinePalette.workflowOther.hexadecimalRGB == 0x8B8D98
+            && FocusTraceTimelinePalette.applicationOther.hexadecimalRGB == 0xB9BBC6,
+        "超过五类必须统一使用 Radix Slate"
+    )
+}
+
+suite.run("时间轴分类色按当天排名且最多使用五种") {
+    let ranked = [
+        "workflow-a", "workflow-b", "workflow-c",
+        "workflow-d", "workflow-e", "workflow-f"
+    ]
+    try expect(
+        TimelineCategoryPaletteAssignment.maximumColoredCategories == 5
+            && TimelineCategoryPaletteAssignment.index(
+                for: "workflow-a",
+                rankedIDs: ranked
+            ) == 0
+            && TimelineCategoryPaletteAssignment.index(
+                for: "workflow-e",
+                rankedIDs: ranked
+            ) == 4
+            && TimelineCategoryPaletteAssignment.index(
+                for: "workflow-f",
+                rankedIDs: ranked
+            ) == nil,
+        "只能按顺序给前五类着色，其余必须回退到中性 Slate"
+    )
+}
+
+suite.run("主应用连续区间合并后不再形成五分钟彩色马赛克") {
+    let start = Date(timeIntervalSince1970: 1_750_000_000)
+    let codex = AppIdentity(bundleID: "com.openai.codex", name: "Codex")
+    let lark = AppIdentity(bundleID: "com.larksuite.suite", name: "飞书")
+    func bucket(
+        _ offsetMinutes: Int,
+        _ app: AppIdentity?,
+        _ activeSeconds: TimeInterval
+    ) -> TimelineBucket {
+        let bucketStart = start.addingTimeInterval(
+            TimeInterval(offsetMinutes * 60)
+        )
+        return TimelineBucket(
+            start: bucketStart,
+            end: bucketStart.addingTimeInterval(5 * 60),
+            dominantApp: app,
+            activeSeconds: activeSeconds,
+            switchCount: 0,
+            spaceSwitchCount: 0,
+            uniqueAppCount: app == nil ? 0 : 1,
+            fragmentationLevel: .quiet
+        )
+    }
+
+    let runs = TimelineApplicationRunEngine.runs(from: [
+        bucket(0, codex, 280),
+        bucket(5, codex, 260),
+        bucket(10, nil, 0),
+        bucket(15, codex, 240),
+        bucket(20, lark, 220)
+    ])
+    try expect(
+        runs.count == 3
+            && runs[0].app == codex
+            && runs[0].bucketCount == 2
+            && runs[0].activeSeconds == 540
+            && runs[1].app == codex
+            && runs[2].app == lark,
+        "相邻同应用应合并，空档和应用变化必须断开"
+    )
+}
+
+suite.run("所有入口只复用一个 FocusTrace 主窗口") {
+    try expect(
+        FocusTraceWindowContract.mainWindowID == "main"
+            && !FocusTraceWindowContract.allowsMultipleMainWindows
+            && !FocusTraceWindowContract.exposesDedicatedSettingsWindow,
+        "主窗口必须是单实例且不能另开冗余设置窗口"
     )
 }
 
@@ -275,7 +383,8 @@ suite.run("日历月份在点击前预生成且计算耗时稳定") {
     ))!
     let locale = Locale(identifier: "zh_CN")
     let measuredAt = Date()
-    let layouts = (-18...18).compactMap { offset -> FocusTraceCalendarMonthLayout? in
+    let layouts = FocusTracePerformanceBudget.calendarMonthOffsets.compactMap {
+        offset -> FocusTraceCalendarMonthLayout? in
         guard let month = calendar.date(
             byAdding: .month,
             value: offset,
@@ -295,8 +404,14 @@ suite.run("日历月份在点击前预生成且计算耗时稳定") {
         calendar: calendar,
         locale: locale
     )
-    try expect(layouts.count == 37, "月份布局批量生成不应遗漏")
-    try expect(elapsed < 1.0, "37 个月份布局应在一秒内完成")
+    try expect(
+        layouts.count == FocusTracePerformanceBudget.calendarMonthOffsets.count,
+        "月份布局批量生成不应遗漏"
+    )
+    try expect(
+        elapsed < FocusTracePerformanceBudget.calendarLayoutMaximumSeconds,
+        "月份布局不能超过性能预算"
+    )
     try expect(selectedLayout.weekdaySymbols.count == 7, "星期栏必须保持七列")
     try expect(
         selectedLayout.cells.count.isMultiple(of: 7),
@@ -355,14 +470,205 @@ suite.run("需求先进入收件箱且安排时不自动开始") {
     let workflowID = UUID()
     let attached = RequirementEngine.attached(captured, to: workflowID)
     try expect(attached.workflowID == workflowID, "安排后应关联目标工作流")
-    try expect(attached.status == .planned, "安排后应进入已计划状态")
+    try expect(attached.status == .inbox, "只选择工作流不能代替截止日期和重要程度")
     try expect(attached.status != .active, "安排需求不能自动开始或切换上下文")
+    try expect(RequirementEngine.needsPlanning(attached), "关联工作流后仍应完成独立整理")
     try expect(
         RequirementEngine.suggestedWorkflowTitle(
             from: "修复训练失败后的告警。补充对应文档",
             maximumLength: 20
         ) == "修复训练失败后的告警",
         "新工作流建议名称应提取第一句"
+    )
+}
+
+suite.run("需求截止日期、重要程度和工作流彼此独立") {
+    let calendar = utcCalendar()
+    let now = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let deadline = calendar.date(byAdding: .day, value: 2, to: now)!
+    guard let captured = RequirementEngine.captured(
+        title: "补上失败告警",
+        at: now
+    ) else {
+        throw VerificationFailure(message: "有效需求应能被收下")
+    }
+    let workflowID = UUID()
+    let planned = RequirementEngine.planned(
+        captured,
+        dueDate: deadline,
+        importance: .high,
+        workflowID: workflowID,
+        calendar: calendar
+    )
+
+    try expect(
+        planned.dueDate == calendar.startOfDay(for: deadline),
+        "截止日期应按天保存"
+    )
+    try expect(planned.importance == .high, "重要程度不能被截止日期替代")
+    try expect(planned.workflowID == workflowID, "工作流归属应独立保存")
+    try expect(planned.status == .planned, "整理需求不能自动开始")
+    try expect(!RequirementEngine.needsPlanning(planned), "完整整理后应离开待整理")
+}
+
+suite.run("需求队列按紧迫性再按重要程度排序") {
+    let calendar = utcCalendar()
+    let now = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+    let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+    let overdue = RequirementRecord(
+        title: "逾期",
+        capturedAt: now,
+        dueDate: yesterday,
+        importance: .low,
+        status: .planned
+    )
+    let todayLow = RequirementRecord(
+        title: "今天低",
+        capturedAt: now,
+        dueDate: now,
+        importance: .low,
+        status: .planned
+    )
+    let todayHigh = RequirementRecord(
+        title: "今天高",
+        capturedAt: now.addingTimeInterval(1),
+        dueDate: now,
+        importance: .high,
+        status: .planned
+    )
+    let future = RequirementRecord(
+        title: "未来",
+        capturedAt: now,
+        dueDate: tomorrow,
+        importance: .high,
+        status: .planned
+    )
+    let legacy = RequirementRecord(
+        title: "旧版今天",
+        capturedAt: now,
+        priority: .today,
+        status: .planned
+    )
+    let legacyAttached = RequirementRecord(
+        title: "旧版已绑定",
+        capturedAt: now,
+        planningVersion: 0,
+        status: .planned,
+        workflowID: UUID()
+    )
+    let ordered = RequirementEngine.ordered(
+        [legacy, future, todayLow, overdue, todayHigh],
+        at: now,
+        calendar: calendar
+    )
+
+    try expect(
+        ordered.map(\.id) == [
+            overdue.id,
+            todayHigh.id,
+            todayLow.id,
+            future.id,
+            legacy.id
+        ],
+        "队列必须先按逾期、今天、未来排序，同一天再按重要程度"
+    )
+    try expect(
+        RequirementEngine.queueSection(
+            for: legacy,
+            at: now,
+            calendar: calendar
+        ) == .needsPlanning,
+        "旧版模糊安排必须要求确认，不能猜测截止日期"
+    )
+    try expect(
+        RequirementEngine.needsPlanning(legacyAttached),
+        "旧版只绑定工作流的需求也必须重新确认三项安排"
+    )
+}
+
+suite.run("需求到期只提醒一次且千项排序不超预算") {
+    let calendar = utcCalendar()
+    let now = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let due = RequirementRecord(
+        title: "今天",
+        dueDate: now,
+        status: .planned
+    )
+    let alreadySent = RequirementRecord(
+        title: "已提醒",
+        dueDate: now,
+        reminderSentAt: now.addingTimeInterval(-60),
+        status: .planned
+    )
+    let active = RequirementRecord(
+        title: "正在处理",
+        dueDate: now,
+        status: .active
+    )
+    try expect(
+        RequirementEngine.dueForReminder(
+            [alreadySent, active, due],
+            at: now,
+            calendar: calendar
+        ).map(\.id) == [due.id],
+        "已提醒或正在处理的需求不能重复通知"
+    )
+    let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+    let rescheduled = RequirementEngine.planned(
+        alreadySent,
+        dueDate: tomorrow,
+        importance: alreadySent.importance,
+        workflowID: alreadySent.workflowID,
+        calendar: calendar
+    )
+    try expect(
+        rescheduled.reminderSentAt == nil,
+        "用户更改截止日期后应允许新承诺再次提醒"
+    )
+
+    let requirements = (0..<FocusTracePerformanceBudget.requirementQueueCount).map {
+        index in
+        RequirementRecord(
+            title: "需求 \(index)",
+            capturedAt: now.addingTimeInterval(Double(index)),
+            dueDate: now.addingTimeInterval(Double((index % 30) * 86_400)),
+            importance: RequirementImportance.allCases[index % 3],
+            status: .planned
+        )
+    }
+    let measuredAt = Date()
+    let ordered = RequirementEngine.ordered(
+        requirements,
+        at: now,
+        calendar: calendar
+    )
+    let elapsed = Date().timeIntervalSince(measuredAt)
+    try expect(
+        ordered.count == FocusTracePerformanceBudget.requirementQueueCount,
+        "千项需求排序不能丢失记录"
+    )
+    try expect(
+        elapsed < FocusTracePerformanceBudget.requirementQueueMaximumSeconds,
+        "千项需求排序不能超过性能预算"
     )
 }
 
@@ -429,7 +735,7 @@ suite.run("大数据时间轴单次聚合且按分钟刷新") {
     let apps = (0..<8).map {
         AppIdentity(bundleID: "app.\($0)", name: "App \($0)")
     }
-    let activities = (0..<2_000).map { index in
+    let activities = (0..<FocusTracePerformanceBudget.timelineActivityCount).map { index in
         let began = start.addingTimeInterval(Double(index * 15))
         return ActivityRecord(
             app: apps[index % apps.count],
@@ -440,7 +746,7 @@ suite.run("大数据时间轴单次聚合且按分钟刷新") {
             classification: .allowed
         )
     }
-    let markers = (0..<300).map { index in
+    let markers = (0..<FocusTracePerformanceBudget.timelineMarkerCount).map { index in
         TimelineMarkerRecord(
             date: start.addingTimeInterval(Double(index * 60)),
             kind: index.isMultiple(of: 3) ? .activeSpaceChanged : .taskChanged
@@ -460,8 +766,15 @@ suite.run("大数据时间轴单次聚合且按分钟刷新") {
     let elapsed = Date().timeIntervalSince(measuredAt)
     try expect(snapshot.buckets.count == 144, "十二小时应生成 144 个五分钟桶")
     try expect(!snapshot.eventBuckets.isEmpty, "关键事件应完成聚合")
-    try expect(snapshot.summary.appSwitchCount == 1_999, "大量应用切换统计不应丢失")
-    try expect(elapsed < 1.0, "2000 条片段的呈现聚合应在一秒内完成")
+    try expect(
+        snapshot.summary.appSwitchCount
+            == FocusTracePerformanceBudget.timelineActivityCount - 1,
+        "大量应用切换统计不应丢失"
+    )
+    try expect(
+        elapsed < FocusTracePerformanceBudget.timelinePresentationMaximumSeconds,
+        "大数据时间轴呈现不能超过性能预算"
+    )
 
     let firstTick = start.addingTimeInterval(12.1)
     let secondTick = start.addingTimeInterval(58.9)
@@ -470,6 +783,49 @@ suite.run("大数据时间轴单次聚合且按分钟刷新") {
             == TimelinePresentationEngine.renderMinute(for: secondTick, calendar: calendar),
         "同一分钟的秒级计时不应触发时间轴重算"
     )
+}
+
+suite.run("时间轴缓存只在分钟或数据变化时失效") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 9
+    ))!
+    let range = DateInterval(start: day, duration: 12 * 60 * 60)
+    let first = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(1),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let sameMinute = TimelinePresentationCacheKey(
+        selectedDay: day.addingTimeInterval(15),
+        range: range,
+        now: day.addingTimeInterval(58),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let nextMinute = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(61),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let changedData = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(1),
+        dataRevision: 8,
+        calendar: calendar
+    )
+    try expect(first == sameMinute, "同一分钟且数据未变时应复用时间轴呈现")
+    try expect(first != nextMinute, "跨分钟后应刷新开放片段时长")
+    try expect(first != changedData, "数据变化后必须立即刷新时间轴")
 }
 
 suite.run("首次专注工具建议只使用当前工作流的真实应用") {
@@ -1382,6 +1738,65 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(!jsonText.contains("com.openai.codex"), "结构化日报不应泄露 Bundle ID")
 }
 
+suite.run("Codex 写回是问题到行动的短决策") {
+    let review = CodexReviewArtifact(
+        sourceReportID: "focustrace-report",
+        reportDate: Date(timeIntervalSince1970: 100),
+        generatedAt: Date(timeIntervalSince1970: 200),
+        status: .behaviorFinding,
+        problem: "今天没有形成带结果反馈的训练样本。",
+        recommendation: "开始工作前写下唯一产出，完成一轮 15 分钟训练并记录难度。",
+        evidence: ["今日训练 0 次"],
+        nextCheck: "今天结束前检查训练完成数是否达到 1。"
+    )
+    try expect(review.hasValidShape, "一条强证据的短决策应通过")
+    try expect(
+        review.isConsistentWithBehaviorReliability(true),
+        "可靠数据应只接受行为问题"
+    )
+    try expect(
+        !review.isConsistentWithBehaviorReliability(false),
+        "不可靠数据不能接受行为问题"
+    )
+
+    let repeated = CodexReviewArtifact(
+        sourceReportID: review.sourceReportID,
+        reportDate: review.reportDate,
+        generatedAt: review.generatedAt,
+        status: .behaviorFinding,
+        problem: review.displayedProblem,
+        recommendation: review.recommendation,
+        evidence: ["今日训练 0 次", "今日训练0次"],
+        nextCheck: review.nextCheck
+    )
+    try expect(!repeated.hasValidShape, "重复证据不应通过写回形状校验")
+}
+
+suite.run("Codex 旧写回只保留可行动部分") {
+    let json = """
+    {
+      "schemaVersion": 1,
+      "sourceReportID": "legacy-report",
+      "reportDate": "1970-01-01T00:01:40Z",
+      "generatedAt": "1970-01-01T00:03:20Z",
+      "headline": "工作流归因不足，当前不能据此判断注意力。",
+      "interpretation": "旧协议生成的解释段落不再进入主要展示。",
+      "recommendation": "先校准当前桌面的工作流绑定。",
+      "evidence": ["工作流归因率 68%", "可靠门槛 70%"],
+      "nextCheck": "下一工作日检查归因率是否达到 70%。"
+    }
+    """
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let review = try decoder.decode(CodexReviewArtifact.self, from: Data(json.utf8))
+    try expect(review.hasValidShape, "已有 v1 写回必须继续可读")
+    try expect(
+        review.displayedProblem == "工作流归因不足，当前不能据此判断注意力。",
+        "旧协议的冗长解释不应进入问题展示"
+    )
+    try expect(review.displayedStatus == .dataQualityBlocked, "旧版数据阻塞应保留语义")
+}
+
 suite.run("Codex 一键接入使用官方深链和聚合工作区") {
     let workspace = URL(
         fileURLWithPath: "/Users/example/Library/Application Support/FocusTrace/CodexWorkspace",
@@ -1411,6 +1826,23 @@ suite.run("Codex 一键接入使用官方深链和聚合工作区") {
             "Read only `Reports/latest.json` and `Reports/latest.md`"
         ),
         "工作区必须限制为聚合报告"
+    )
+    for contract in [
+        "当前最重要的问题是什么？",
+        "今天具体怎么解决？",
+        "\"schemaVersion\": 2",
+        "当前不能据此判断注意力",
+        "at most 360 characters",
+        "Do not add a preface"
+    ] {
+        try expect(
+            CodexWorkspaceContract.agentsInstructions.contains(contract),
+            "工作区缺少短决策约束：\(contract)"
+        )
+    }
+    try expect(
+        !CodexWorkspaceContract.agentsInstructions.contains("\"interpretation\""),
+        "新写回协议不应继续要求解释段落"
     )
 }
 
@@ -1531,6 +1963,142 @@ suite.run("README 首页保持面向用户且技术细节折叠") {
         readme.range(of: "## 安装")!.lowerBound
             < readme.range(of: "## 高级特性")!.lowerBound,
         "README 必须先讲安装与上手，再讲高级能力"
+    )
+    for productPillar in ["**看清**", "**不丢**", "**改善**"] {
+        try expect(
+            readme.contains(productPillar),
+            "README 必须明确呈现三个核心注意力问题：\(productPillar)"
+        )
+    }
+    for currentCapability in [
+        "### 需求箱",
+        "只有明确点击“开始处理”才会激活它的上下文",
+        "### Codex 每日行动复盘",
+        "**当前问题**",
+        "**今天怎么做**",
+        "**如何验收**",
+        "选择过去的日期，也可以重新查看已经写回的历史复盘"
+    ] {
+        try expect(
+            readme.contains(currentCapability),
+            "README 没有准确描述当前能力：\(currentCapability)"
+        )
+    }
+
+    let reportScript = try String(
+        contentsOf: URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath,
+            isDirectory: true
+        ).appendingPathComponent("Scripts/generate-daily-report.sh"),
+        encoding: .utf8
+    )
+    try expect(
+        reportScript.components(separatedBy: "\"$@\"").count == 3,
+        "历史日报生成必须把日期参数同时传给预构建与 SwiftPM 两条路径"
+    )
+}
+
+suite.run("产品纲领和质量门禁是仓库硬约束") {
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    func contents(_ path: String) throws -> String {
+        try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+
+    let doctrine = try contents("Docs/PRODUCT_DOCTRINE.md")
+    for heading in [
+        "## 三个核心问题",
+        "### 问题门：是否解决真实问题",
+        "### 边界门：是否知道自己不解决什么",
+        "### 闭环门：流程是否能够自己完成",
+        "## 需求与工作流的关系"
+    ] {
+        try expect(doctrine.contains(heading), "产品纲领缺少：\(heading)")
+    }
+
+    let quality = try contents("Docs/QUALITY_GATES.md")
+    for contractID in [
+        "CAP-01", "UX-03", "UX-04", "REQ-01", "PRIV-01",
+        "PERF-01", "PERF-04"
+    ] {
+        try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
+    }
+
+    let unitTests = try contents("Tests/FocusTraceCoreTests/FocusTraceCoreTests.swift")
+    for evidence in [
+        "activationClosesPreviousAndIgnoresDuplicate",
+        "calendarPopoverAnchorPressesAlternateExactlyOnce",
+        "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
+        "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",
+        "requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity",
+        "requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork",
+        "requirementQueueHandlesOneThousandItemsWithinBudget",
+        "timelineSemanticPaletteSeparatesContextToolsAndRisk",
+        "timelineCurrentWorkflowDoesNotUseDarkSegmentOutlines",
+        "timelineCategoryColorsFollowRankAndCapAtFive",
+        "timelineApplicationRunsMergeAdjacentDominantBuckets",
+        "mainWindowContractRemainsSingleInstance",
+        "timelinePresentationCacheInvalidatesOnlyForMeaningfulChanges",
+        "dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow",
+        "automationJSONIsStructuredAndAggregateOnly",
+        "codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay",
+        "codexReviewKeepsLegacyReadCompatibility",
+        "codexWorkspaceDemandsProblemActionAndNoFiller",
+        "dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration"
+    ] {
+        try expect(
+            unitTests.contains("func \(evidence)"),
+            "质量基线引用的单元或回归证据不存在：\(evidence)"
+        )
+    }
+
+    let pullRequestTemplate = try contents(".github/pull_request_template.md")
+    for gate in ["用户问题", "边界与闭环", "质量证据", "契约变化"] {
+        try expect(
+            pullRequestTemplate.contains(gate),
+            "Pull Request 模板缺少门禁：\(gate)"
+        )
+    }
+
+    let ci = try contents(".github/workflows/ci.yml")
+    try expect(ci.contains("pull_request:"), "持续集成必须覆盖 Pull Request")
+    try expect(ci.contains("./Scripts/test.sh"), "持续集成必须运行完整质量门禁")
+
+    let notificationRouter = try contents(
+        "Sources/FocusTrace/NotificationRouter.swift"
+    )
+    try expect(
+        notificationRouter.contains("打开 FocusTrace 查看最紧迫的一项。")
+            && !notificationRouter.contains("firstTitle"),
+        "需求到期通知不能在锁屏暴露需求标题"
+    )
+
+    let appScene = try contents("Sources/FocusTrace/FocusTraceApp.swift")
+    try expect(
+        appScene.contains("Window(\"FocusTrace\", id: FocusTraceWindowContract.mainWindowID)")
+            && !appScene.contains("WindowGroup(")
+            && !appScene.contains("Settings {")
+            && appScene.contains("CommandGroup(replacing: .newItem)"),
+        "FocusTrace 必须使用单实例主窗口并移除系统新建窗口入口"
+    )
+
+    let timelineView = try contents(
+        "Sources/FocusTrace/Views/TimelineView.swift"
+    )
+    try expect(
+        timelineView.contains("先看工作流，再看主应用，最后找高切换区间")
+            && timelineView.contains("workflowLegendIDs")
+            && timelineView.contains("applicationLegend")
+            && timelineView.contains("TimelineApplicationRunEngine.runs")
+            && timelineView.contains("segmentSeparator")
+            && !timelineView.contains("StablePaletteAssignment.index")
+            && !timelineView.contains("currentWorkflowStroke"),
+        "时间轴必须合并主应用、使用统一浅色分隔并按排名使用参考色板"
     )
 }
 

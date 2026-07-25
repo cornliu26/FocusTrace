@@ -6,6 +6,10 @@ public enum FocusTraceDateSelectionPresentation: String, Codable, Sendable {
     case graphicalCalendarPopover = "focusTrace.dateSelector.graphicalCalendarPopover"
 }
 
+public enum FocusTraceRequirementDateSelectionPresentation: String, Codable, Sendable {
+    case graphicalCalendar = "focusTrace.requirementDateSelector.graphicalCalendar"
+}
+
 public enum FocusTraceCalendarPopoverEvent: Sendable {
     case anchorPressed
     case dismissRequested
@@ -28,6 +32,8 @@ public enum FocusTraceCalendarPopoverState {
 public enum FocusTraceUXContract {
     public static let dateSelectionPresentation: FocusTraceDateSelectionPresentation =
         .graphicalCalendarPopover
+    public static let requirementDateSelectionPresentation:
+        FocusTraceRequirementDateSelectionPresentation = .graphicalCalendar
     public static let calendarPopoverAnimationsEnabled = false
     public static let calendarRefreshGranularity = Calendar.Component.day
     public static let calendarPrewarmMonthOffsets = [-1, 0, 1]
@@ -37,7 +43,108 @@ public enum FocusTraceUXContract {
     public static let primaryDailyActionCount = 1
     public static let sidebarIconCanvasSize = 18.0
     public static let sidebarTimelineIcon = "clock.arrow.circlepath"
-    public static let timelinePaletteName = "verdant-v1"
+    public static let timelinePaletteName = "radix-cool-v4"
+    public static let timelineCurrentWorkflowOutlineEnabled = false
+}
+
+/// The app has one durable work context, so every entry point must reuse the
+/// same main window instead of creating visual copies of that context.
+public enum FocusTraceWindowContract {
+    public static let mainWindowID = "main"
+    public static let allowsMultipleMainWindows = false
+    public static let exposesDedicatedSettingsWindow = false
+}
+
+public struct FocusTraceRGBColor: Equatable, Sendable {
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+
+    public init(red: Double, green: Double, blue: Double) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    public init(hex: UInt32) {
+        red = Double((hex >> 16) & 0xff) / 255
+        green = Double((hex >> 8) & 0xff) / 255
+        blue = Double(hex & 0xff) / 255
+    }
+
+    public var hexadecimalRGB: UInt32 {
+        let redValue = UInt32((red * 255).rounded())
+        let greenValue = UInt32((green * 255).rounded())
+        let blueValue = UInt32((blue * 255).rounded())
+        return (redValue << 16) | (greenValue << 8) | blueValue
+    }
+
+}
+
+/// Exact sRGB tokens from Radix Colors 3.0.0.
+///
+/// Workflows use solid step 9 colors; applications use the corresponding
+/// softer step 8 colors. The sequence stays inside FocusTrace's jade-to-iris
+/// brand family. Amber and tomato are reserved for switching severity.
+public enum FocusTraceTimelinePalette {
+    public static let workflows = [
+        FocusTraceRGBColor(hex: 0x29A383), // Jade 9
+        FocusTraceRGBColor(hex: 0x00A2C7), // Cyan 9
+        FocusTraceRGBColor(hex: 0x0090FF), // Blue 9
+        FocusTraceRGBColor(hex: 0x3E63DD), // Indigo 9
+        FocusTraceRGBColor(hex: 0x5B5BD6)  // Iris 9
+    ]
+
+    public static let applications = [
+        FocusTraceRGBColor(hex: 0x56BA9F), // Jade 8
+        FocusTraceRGBColor(hex: 0x3DB9CF), // Cyan 8
+        FocusTraceRGBColor(hex: 0x5EB1EF), // Blue 8
+        FocusTraceRGBColor(hex: 0x8DA4EF), // Indigo 8
+        FocusTraceRGBColor(hex: 0x9B9EF0)  // Iris 8
+    ]
+
+    public static let workflowOther = FocusTraceRGBColor(hex: 0x8B8D98) // Slate 9
+    public static let applicationOther = FocusTraceRGBColor(hex: 0xB9BBC6) // Slate 8
+
+    public static let quiet = FocusTraceRGBColor(hex: 0x29A383) // Jade 9
+    public static let steady = FocusTraceRGBColor(hex: 0x00A2C7) // Cyan 9
+    public static let fragmented = FocusTraceRGBColor(hex: 0xFFC53D) // Amber 9
+    public static let intense = FocusTraceRGBColor(hex: 0xE54D2E) // Tomato 9
+
+    public static var densityScale: [FocusTraceRGBColor] {
+        [quiet, steady, fragmented, intense]
+    }
+
+}
+
+public enum TimelineCategoryPaletteAssignment {
+    public static let maximumColoredCategories = 5
+
+    public static func index(
+        for id: String,
+        rankedIDs: [String]
+    ) -> Int? {
+        guard let index = rankedIDs.prefix(maximumColoredCategories)
+            .firstIndex(of: id)
+        else {
+            return nil
+        }
+        return rankedIDs.distance(from: rankedIDs.startIndex, to: index)
+    }
+}
+
+/// Stable workloads and upper bounds for performance-sensitive daily paths.
+///
+/// These are regression budgets, not benchmark claims. Change them only with
+/// measured evidence and an explicit update to Docs/QUALITY_GATES.md.
+public enum FocusTracePerformanceBudget {
+    public static let calendarMonthOffsets = Array(-18...18)
+    public static let calendarLayoutMaximumSeconds = 1.0
+    public static let timelineActivityCount = 2_000
+    public static let timelineMarkerCount = 300
+    public static let timelinePresentationMaximumSeconds = 1.0
+    public static let requirementQueueCount = 1_000
+    public static let requirementQueueMaximumSeconds = 0.1
 }
 
 public struct FocusTraceCalendarDayLayout: Equatable, Identifiable, Sendable {
@@ -184,18 +291,6 @@ public enum FocusTraceCalendarLayoutEngine {
         guard !symbols.isEmpty else { return [] }
         let offset = max(0, min(symbols.count - 1, calendar.firstWeekday - 1))
         return Array(symbols[offset...] + symbols[..<offset])
-    }
-}
-
-public enum StablePaletteAssignment {
-    public static func index(for value: String, count: Int) -> Int {
-        guard count > 0 else { return 0 }
-        var hash: UInt64 = 14_695_981_039_346_656_037
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1_099_511_628_211
-        }
-        return Int(hash % UInt64(count))
     }
 }
 

@@ -213,17 +213,51 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
 /// Aggregate-only interpretation written back by the optional Codex daily task.
 /// It deliberately references an AutomationReportArtifact instead of activity
 /// rows, so the app can reject stale or unrelated reviews.
+public enum CodexReviewStatus: String, Codable, Equatable, Sendable {
+    case behaviorFinding
+    case dataQualityBlocked
+}
+
 public struct CodexReviewArtifact: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let sourceReportID: String
     public let reportDate: Date
     public let generatedAt: Date
-    public let headline: String
-    public let interpretation: String
+    public let status: CodexReviewStatus?
+    public let problem: String?
     public let recommendation: String
     public let evidence: [String]
     public let nextCheck: String
+    public let headline: String?
+    public let interpretation: String?
 
+    public init(
+        schemaVersion: Int = 2,
+        sourceReportID: String,
+        reportDate: Date,
+        generatedAt: Date,
+        status: CodexReviewStatus,
+        problem: String,
+        recommendation: String,
+        evidence: [String],
+        nextCheck: String
+    ) {
+        self.schemaVersion = schemaVersion
+        self.sourceReportID = sourceReportID
+        self.reportDate = reportDate
+        self.generatedAt = generatedAt
+        self.status = status
+        self.problem = problem
+        self.recommendation = recommendation
+        self.evidence = evidence
+        self.nextCheck = nextCheck
+        headline = nil
+        interpretation = nil
+    }
+
+    /// Read compatibility for reviews created before the decision-brief
+    /// contract. The UI intentionally discards the legacy interpretation
+    /// paragraph so an old verbose artifact does not regain prominence.
     public init(
         schemaVersion: Int = 1,
         sourceReportID: String,
@@ -239,24 +273,87 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         self.sourceReportID = sourceReportID
         self.reportDate = reportDate
         self.generatedAt = generatedAt
-        self.headline = headline
-        self.interpretation = interpretation
+        status = nil
+        problem = nil
         self.recommendation = recommendation
         self.evidence = evidence
         self.nextCheck = nextCheck
+        self.headline = headline
+        self.interpretation = interpretation
+    }
+
+    public var displayedProblem: String {
+        if schemaVersion == 2 {
+            return problem?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        return headline?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    public var displayedStatus: CodexReviewStatus {
+        if let status { return status }
+        let legacyText = [
+            headline ?? "",
+            interpretation ?? ""
+        ].joined(separator: " ")
+        return legacyText.contains("不能据此判断注意力")
+            ? .dataQualityBlocked
+            : .behaviorFinding
     }
 
     public var hasValidShape: Bool {
-        schemaVersion == 1
-            && !sourceReportID.isEmpty
-            && !headline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !interpretation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !recommendation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && evidence.count == 2
-            && evidence.allSatisfy {
-                !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            }
-            && !nextCheck.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard !sourceReportID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !recommendation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !nextCheck.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+
+        if schemaVersion == 1 {
+            return !(headline ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !(interpretation ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && evidence.count == 2
+                && evidence.allSatisfy {
+                    !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                }
+        }
+
+        guard schemaVersion == 2,
+              status != nil,
+              !displayedProblem.isEmpty,
+              displayedProblem.count <= 110,
+              recommendation.count <= 150,
+              nextCheck.count <= 80,
+              (1...2).contains(evidence.count),
+              evidence.allSatisfy({
+                  let text = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                  return !text.isEmpty && text.count <= 80
+              }) else {
+            return false
+        }
+
+        let normalizedEvidence = evidence.map(Self.normalized)
+        guard Set(normalizedEvidence).count == evidence.count else {
+            return false
+        }
+
+        let visibleCharacterCount = displayedProblem.count
+            + recommendation.count
+            + evidence.reduce(0) { $0 + $1.count }
+            + nextCheck.count
+        return visibleCharacterCount <= 360
+    }
+
+    public func isConsistentWithBehaviorReliability(_ isReliable: Bool) -> Bool {
+        guard schemaVersion == 2 else { return schemaVersion == 1 }
+        if isReliable {
+            return status == .behaviorFinding
+        }
+        return status == .dataQualityBlocked
+            && displayedProblem.contains("当前不能据此判断注意力")
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.lowercased()
+            .filter { !$0.isWhitespace && !$0.isPunctuation }
     }
 }
 

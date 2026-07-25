@@ -1,5 +1,23 @@
 # FocusTrace repository instructions
 
+## Product doctrine
+
+- Read `Docs/PRODUCT_DOCTRINE.md` before changing product behavior, navigation, copy, analysis, reminders, or data collection.
+- Every product change must identify one primary attention problem: seeing fragmented work, preserving interrupted context, or improving attention through evidence. A visible feature is not a valid goal by itself.
+- Before implementation, state the observable user outcome, explicit non-goals and privacy boundary, and the complete loop from trigger through action, feedback, recovery, and exit.
+- Do not add a new control, reminder, score, or workflow state when the same outcome can be completed through an existing path.
+- Keep requirements and workflows conceptually separate: a requirement is a deliverable that may need timing and ordering; a workflow is the durable context in which work happens. Capturing one must not create or switch the other.
+- FocusTrace is not a diagnosis tool, a general project manager, a notification blocker, or a content-monitoring product. Expanding one of these boundaries requires an explicit product decision before implementation.
+
+## Iteration discipline
+
+- Prefer the smallest complete vertical slice that improves a user outcome; do not land disconnected UI, storage, or analysis fragments.
+- Treat shipped behavior, data compatibility, performance budgets, and deployment behavior as contracts. Consult `Docs/QUALITY_GATES.md` before implementation.
+- Every behavior change needs a focused unit or integration test and, when it touches a shipped path, an explicit regression test. Performance-sensitive paths need a stable workload and budget.
+- Add the new or changed capability to the quality baseline in `Docs/QUALITY_GATES.md`. Do not weaken an existing assertion or performance budget merely to make a change pass.
+- Use `Docs/decisions/TEMPLATE.md` for a material product change. Record the problem, boundary, loop, evidence, and rollback condition before writing the feature.
+- Keep changes small enough that a failed outcome can be reverted without rolling back unrelated improvements.
+
 ## Verification and deployment
 
 - Run `./Scripts/test.sh` before committing behavioral or packaging changes.

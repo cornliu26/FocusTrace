@@ -13,12 +13,14 @@ cd "$FOCUS_TRACE_PROJECT"
 if [[ -x "$FOCUS_TRACE_REPORT_BIN" ]]; then
   "$FOCUS_TRACE_REPORT_BIN" \
     --store "$FOCUS_TRACE_STORE" \
-    --output-dir "$FOCUS_TRACE_REPORT_DIR"
+    --output-dir "$FOCUS_TRACE_REPORT_DIR" \
+    "$@"
 else
   source "$SCRIPT_DIR/swiftpm-common.sh"
   swift run -c release "${SWIFTPM_COMMON_ARGS[@]}" FocusTraceReport \
     --store "$FOCUS_TRACE_STORE" \
-    --output-dir "$FOCUS_TRACE_REPORT_DIR"
+    --output-dir "$FOCUS_TRACE_REPORT_DIR" \
+    "$@"
 fi
 
 # Register only the aggregate report directory. The app never reads store.json

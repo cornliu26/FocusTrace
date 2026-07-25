@@ -72,6 +72,9 @@ final class CodexReviewBridge: ObservableObject {
                 from: Data(contentsOf: reviewURL)
             )
             guard review.hasValidShape,
+                  review.isConsistentWithBehaviorReliability(
+                      report.dataQuality.isReliableForBehavior
+                  ),
                   review.sourceReportID == report.reportID,
                   calendar.isDate(review.reportDate, inSameDayAs: report.reportDate) else {
                 updateStatus(.invalid("Codex 解读不是基于当前聚合报告，已停止展示"))

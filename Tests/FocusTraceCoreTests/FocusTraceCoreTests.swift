@@ -167,6 +167,10 @@ func optimizedDailyUXContractRemainsStable() {
         FocusTraceUXContract.dateSelectionPresentation
             == .graphicalCalendarPopover
     )
+    #expect(
+        FocusTraceUXContract.requirementDateSelectionPresentation
+            == .graphicalCalendar
+    )
     #expect(!FocusTraceUXContract.calendarPopoverAnimationsEnabled)
     #expect(FocusTraceUXContract.calendarRefreshGranularity == .day)
     #expect(FocusTraceUXContract.calendarPrewarmMonthOffsets == [-1, 0, 1])
@@ -175,8 +179,91 @@ func optimizedDailyUXContractRemainsStable() {
     #expect(FocusTraceUXContract.primaryDailyActionCount == 1)
     #expect(FocusTraceUXContract.sidebarIconCanvasSize == 18)
     #expect(FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath")
-    #expect(FocusTraceUXContract.timelinePaletteName == "verdant-v1")
-    #expect(StablePaletteAssignment.index(for: "com.openai.codex", count: 6) < 6)
+    #expect(FocusTraceUXContract.timelinePaletteName == "radix-cool-v4")
+    #expect(!FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled)
+}
+
+@Test
+func timelineSemanticPaletteSeparatesContextToolsAndRisk() {
+    #expect(
+        FocusTraceTimelinePalette.workflows.map(\.hexadecimalRGB)
+            == [0x29A383, 0x00A2C7, 0x0090FF, 0x3E63DD, 0x5B5BD6]
+    )
+    #expect(
+        FocusTraceTimelinePalette.applications.map(\.hexadecimalRGB)
+            == [0x56BA9F, 0x3DB9CF, 0x5EB1EF, 0x8DA4EF, 0x9B9EF0]
+    )
+    #expect(
+        FocusTraceTimelinePalette.densityScale.map(\.hexadecimalRGB)
+            == [0x29A383, 0x00A2C7, 0xFFC53D, 0xE54D2E]
+    )
+    #expect(FocusTraceTimelinePalette.workflowOther.hexadecimalRGB == 0x8B8D98)
+    #expect(FocusTraceTimelinePalette.applicationOther.hexadecimalRGB == 0xB9BBC6)
+}
+
+@Test
+func timelineCurrentWorkflowDoesNotUseDarkSegmentOutlines() {
+    #expect(!FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled)
+}
+
+@Test
+func timelineCategoryColorsFollowRankAndCapAtFive() {
+    let ranked = ["workflow-a", "workflow-b", "workflow-c", "workflow-d", "workflow-e", "workflow-f"]
+    #expect(TimelineCategoryPaletteAssignment.maximumColoredCategories == 5)
+    #expect(TimelineCategoryPaletteAssignment.index(for: "workflow-a", rankedIDs: ranked) == 0)
+    #expect(TimelineCategoryPaletteAssignment.index(for: "workflow-e", rankedIDs: ranked) == 4)
+    #expect(TimelineCategoryPaletteAssignment.index(for: "workflow-f", rankedIDs: ranked) == nil)
+    #expect(TimelineCategoryPaletteAssignment.index(for: "unknown", rankedIDs: ranked) == nil)
+}
+
+@Test
+func mainWindowContractRemainsSingleInstance() {
+    #expect(FocusTraceWindowContract.mainWindowID == "main")
+    #expect(!FocusTraceWindowContract.allowsMultipleMainWindows)
+    #expect(!FocusTraceWindowContract.exposesDedicatedSettingsWindow)
+}
+
+@Test
+func timelineApplicationRunsMergeAdjacentDominantBuckets() {
+    let start = Date(timeIntervalSince1970: 1_750_000_000)
+    let codex = AppIdentity(bundleID: "com.openai.codex", name: "Codex")
+    let lark = AppIdentity(bundleID: "com.larksuite.suite", name: "飞书")
+    func bucket(
+        offsetMinutes: Int,
+        app: AppIdentity?,
+        activeSeconds: TimeInterval
+    ) -> TimelineBucket {
+        let bucketStart = start.addingTimeInterval(
+            TimeInterval(offsetMinutes * 60)
+        )
+        return TimelineBucket(
+            start: bucketStart,
+            end: bucketStart.addingTimeInterval(5 * 60),
+            dominantApp: app,
+            activeSeconds: activeSeconds,
+            switchCount: 0,
+            spaceSwitchCount: 0,
+            uniqueAppCount: app == nil ? 0 : 1,
+            fragmentationLevel: .quiet
+        )
+    }
+
+    let runs = TimelineApplicationRunEngine.runs(from: [
+        bucket(offsetMinutes: 0, app: codex, activeSeconds: 280),
+        bucket(offsetMinutes: 5, app: codex, activeSeconds: 260),
+        bucket(offsetMinutes: 10, app: nil, activeSeconds: 0),
+        bucket(offsetMinutes: 15, app: codex, activeSeconds: 240),
+        bucket(offsetMinutes: 20, app: lark, activeSeconds: 220)
+    ])
+
+    #expect(runs.count == 3)
+    #expect(runs[0].app == codex)
+    #expect(runs[0].bucketCount == 2)
+    #expect(runs[0].end == start.addingTimeInterval(10 * 60))
+    #expect(runs[0].activeSeconds == 540)
+    #expect(runs[1].app == codex)
+    #expect(runs[1].bucketCount == 1)
+    #expect(runs[2].app == lark)
 }
 
 @Test
@@ -192,7 +279,8 @@ func calendarLayoutIsPreparedBeforePresentationAndRemainsBounded() {
     let locale = Locale(identifier: "zh_CN")
 
     let measuredAt = Date()
-    let layouts = (-18...18).compactMap { offset -> FocusTraceCalendarMonthLayout? in
+    let layouts = FocusTracePerformanceBudget.calendarMonthOffsets.compactMap {
+        offset -> FocusTraceCalendarMonthLayout? in
         guard let month = calendar.date(
             byAdding: .month,
             value: offset,
@@ -214,8 +302,8 @@ func calendarLayoutIsPreparedBeforePresentationAndRemainsBounded() {
     )
     let datedCells = selectedLayout.cells.compactMap(\.date)
 
-    #expect(layouts.count == 37)
-    #expect(elapsed < 1.0)
+    #expect(layouts.count == FocusTracePerformanceBudget.calendarMonthOffsets.count)
+    #expect(elapsed < FocusTracePerformanceBudget.calendarLayoutMaximumSeconds)
     #expect(selectedLayout.weekdaySymbols.count == 7)
     #expect(selectedLayout.cells.count.isMultiple(of: 7))
     #expect(datedCells.count == 31)
@@ -264,19 +352,251 @@ func requirementCaptureStaysInInboxUntilExplicitlyPlanned() throws {
     #expect(captured.source == "周会")
     #expect(captured.status == .inbox)
     #expect(captured.priority == .unplanned)
+    #expect(captured.importance == .normal)
     #expect(captured.workflowID == nil)
+    #expect(RequirementEngine.needsPlanning(captured))
 
     let workflowID = UUID()
     let attached = RequirementEngine.attached(captured, to: workflowID)
     #expect(attached.workflowID == workflowID)
-    #expect(attached.status == .planned)
+    #expect(attached.status == .inbox)
     #expect(attached.status != .active)
+    #expect(RequirementEngine.needsPlanning(attached))
     #expect(
         RequirementEngine.suggestedWorkflowTitle(
             from: "修复训练失败后的告警。补充对应文档",
             maximumLength: 20
         ) == "修复训练失败后的告警"
     )
+}
+
+@Test
+func requirementPlanningSeparatesDeadlineImportanceAndWorkflow() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let capturedAt = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let selectedDeadline = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 27,
+        hour: 18
+    ))!
+    let workflowID = UUID()
+    let captured = try #require(RequirementEngine.captured(
+        title: "补上失败告警",
+        at: capturedAt
+    ))
+
+    let planned = RequirementEngine.planned(
+        captured,
+        dueDate: selectedDeadline,
+        importance: .high,
+        workflowID: workflowID,
+        calendar: calendar
+    )
+
+    #expect(planned.dueDate == calendar.startOfDay(for: selectedDeadline))
+    #expect(planned.importance == .high)
+    #expect(planned.workflowID == workflowID)
+    #expect(planned.priority == .unplanned)
+    #expect(planned.status == .planned)
+    #expect(!RequirementEngine.needsPlanning(planned))
+    #expect(
+        RequirementEngine.queueSection(
+            for: planned,
+            at: capturedAt,
+            calendar: calendar
+        ) == .upcoming
+    )
+}
+
+@Test
+func requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let now = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+    let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+    let active = RequirementRecord(
+        title: "正在处理",
+        capturedAt: now,
+        status: .active
+    )
+    let overdue = RequirementRecord(
+        title: "已逾期",
+        capturedAt: now,
+        dueDate: yesterday,
+        importance: .low,
+        status: .planned
+    )
+    let todayLow = RequirementRecord(
+        title: "今天低",
+        capturedAt: now,
+        dueDate: now,
+        importance: .low,
+        status: .planned
+    )
+    let todayHigh = RequirementRecord(
+        title: "今天高",
+        capturedAt: now.addingTimeInterval(1),
+        dueDate: now,
+        importance: .high,
+        status: .planned
+    )
+    let upcoming = RequirementRecord(
+        title: "未来",
+        capturedAt: now,
+        dueDate: tomorrow,
+        importance: .high,
+        status: .planned
+    )
+    let unscheduled = RequirementRecord(
+        title: "无日期",
+        capturedAt: now,
+        importance: .high,
+        status: .planned
+    )
+    let legacy = RequirementRecord(
+        title: "旧版今天",
+        capturedAt: now,
+        priority: .today,
+        status: .planned
+    )
+    let legacyAttached = RequirementRecord(
+        title: "旧版已绑定",
+        capturedAt: now,
+        planningVersion: 0,
+        status: .planned,
+        workflowID: UUID()
+    )
+
+    let ordered = RequirementEngine.ordered(
+        [legacy, todayLow, upcoming, active, unscheduled, overdue, todayHigh],
+        at: now,
+        calendar: calendar
+    )
+    #expect(ordered.map(\.id) == [
+        active.id,
+        overdue.id,
+        todayHigh.id,
+        todayLow.id,
+        upcoming.id,
+        unscheduled.id,
+        legacy.id
+    ])
+    #expect(
+        RequirementEngine.queueSection(
+            for: legacy,
+            at: now,
+            calendar: calendar
+        ) == .needsPlanning
+    )
+    #expect(RequirementEngine.needsPlanning(legacyAttached))
+    #expect(RequirementEngine.summary(ordered, at: now, calendar: calendar) ==
+        RequirementQueueSummary(
+            overdueCount: 1,
+            dueTodayCount: 2,
+            needsPlanningCount: 1
+        )
+    )
+}
+
+@Test
+func requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let now = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 25,
+        hour: 10
+    ))!
+    let yesterday = calendar.date(byAdding: .day, value: -1, to: now)!
+    let tomorrow = calendar.date(byAdding: .day, value: 1, to: now)!
+    let overdue = RequirementRecord(
+        title: "逾期",
+        dueDate: yesterday,
+        status: .planned
+    )
+    let dueToday = RequirementRecord(
+        title: "今天",
+        dueDate: now,
+        status: .planned
+    )
+    let alreadySent = RequirementRecord(
+        title: "已提醒",
+        dueDate: now,
+        reminderSentAt: now.addingTimeInterval(-60),
+        status: .planned
+    )
+    let future = RequirementRecord(
+        title: "未来",
+        dueDate: tomorrow,
+        status: .planned
+    )
+    let active = RequirementRecord(
+        title: "正在处理",
+        dueDate: now,
+        status: .active
+    )
+    let completed = RequirementRecord(
+        title: "完成",
+        dueDate: now,
+        status: .completed
+    )
+    let legacy = RequirementRecord(
+        title: "旧安排",
+        dueDate: now,
+        priority: .today,
+        status: .planned
+    )
+
+    let due = RequirementEngine.dueForReminder(
+        [alreadySent, future, completed, dueToday, legacy, active, overdue],
+        at: now,
+        calendar: calendar
+    )
+    #expect(Set(due.map(\.id)) == Set([overdue.id, dueToday.id]))
+
+    let rescheduled = RequirementEngine.planned(
+        alreadySent,
+        dueDate: tomorrow,
+        importance: alreadySent.importance,
+        workflowID: alreadySent.workflowID,
+        calendar: calendar
+    )
+    #expect(rescheduled.reminderSentAt == nil)
+}
+
+@Test
+func requirementQueueHandlesOneThousandItemsWithinBudget() {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let requirements = (0..<FocusTracePerformanceBudget.requirementQueueCount).map {
+        index in
+        RequirementRecord(
+            title: "需求 \(index)",
+            capturedAt: now.addingTimeInterval(Double(index)),
+            dueDate: now.addingTimeInterval(Double((index % 30) * 86_400)),
+            importance: RequirementImportance.allCases[index % 3],
+            status: .planned
+        )
+    }
+    let measuredAt = Date()
+    let ordered = RequirementEngine.ordered(requirements, at: now)
+    let elapsed = Date().timeIntervalSince(measuredAt)
+
+    #expect(ordered.count == FocusTracePerformanceBudget.requirementQueueCount)
+    #expect(elapsed < FocusTracePerformanceBudget.requirementQueueMaximumSeconds)
 }
 
 @Test
@@ -333,7 +653,7 @@ func timelinePresentationUsesMinuteRefreshAndHandlesLargeDaysQuickly() {
     let apps = (0..<8).map {
         AppIdentity(bundleID: "app.\($0)", name: "App \($0)")
     }
-    let activities = (0..<2_000).map { index in
+    let activities = (0..<FocusTracePerformanceBudget.timelineActivityCount).map { index in
         let began = start.addingTimeInterval(Double(index * 15))
         return ActivityRecord(
             app: apps[index % apps.count],
@@ -344,7 +664,7 @@ func timelinePresentationUsesMinuteRefreshAndHandlesLargeDaysQuickly() {
             classification: .allowed
         )
     }
-    let markers = (0..<300).map { index in
+    let markers = (0..<FocusTracePerformanceBudget.timelineMarkerCount).map { index in
         TimelineMarkerRecord(
             date: start.addingTimeInterval(Double(index * 60)),
             kind: index.isMultiple(of: 3) ? .activeSpaceChanged : .taskChanged
@@ -365,8 +685,11 @@ func timelinePresentationUsesMinuteRefreshAndHandlesLargeDaysQuickly() {
 
     #expect(snapshot.buckets.count == 144)
     #expect(!snapshot.eventBuckets.isEmpty)
-    #expect(snapshot.summary.appSwitchCount == 1_999)
-    #expect(elapsed < 1.0)
+    #expect(
+        snapshot.summary.appSwitchCount
+            == FocusTracePerformanceBudget.timelineActivityCount - 1
+    )
+    #expect(elapsed < FocusTracePerformanceBudget.timelinePresentationMaximumSeconds)
 
     let firstTick = start.addingTimeInterval(12.1)
     let secondTick = start.addingTimeInterval(58.9)
@@ -374,6 +697,51 @@ func timelinePresentationUsesMinuteRefreshAndHandlesLargeDaysQuickly() {
         TimelinePresentationEngine.renderMinute(for: firstTick, calendar: calendar)
             == TimelinePresentationEngine.renderMinute(for: secondTick, calendar: calendar)
     )
+}
+
+@Test
+func timelinePresentationCacheInvalidatesOnlyForMeaningfulChanges() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(
+        year: 2026,
+        month: 7,
+        day: 24,
+        hour: 9
+    ))!
+    let range = DateInterval(start: day, duration: 12 * 60 * 60)
+    let first = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(1),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let sameMinute = TimelinePresentationCacheKey(
+        selectedDay: day.addingTimeInterval(15),
+        range: range,
+        now: day.addingTimeInterval(58),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let nextMinute = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(61),
+        dataRevision: 7,
+        calendar: calendar
+    )
+    let changedData = TimelinePresentationCacheKey(
+        selectedDay: day,
+        range: range,
+        now: day.addingTimeInterval(1),
+        dataRevision: 8,
+        calendar: calendar
+    )
+
+    #expect(first == sameMinute)
+    #expect(first != nextMinute)
+    #expect(first != changedData)
 }
 
 @Test
@@ -1290,30 +1658,64 @@ func automationJSONIsStructuredAndAggregateOnly() throws {
 }
 
 @Test
-func codexReviewRequiresACompleteTwoEvidenceWriteback() {
+func codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay() {
     let review = CodexReviewArtifact(
         sourceReportID: "focustrace-report",
         reportDate: Date(timeIntervalSince1970: 100),
         generatedAt: Date(timeIntervalSince1970: 200),
-        headline: "今天的记录质量足够，但训练样本仍不足。",
-        interpretation: "切换率只描述工作方式，不能单独证明分心。",
-        recommendation: "今天完成一次 15 分钟训练。",
-        evidence: ["有效记录 120 分钟", "工作流归因 86%"],
-        nextCheck: "明天比较训练是否完成及主观难度。"
+        status: .behaviorFinding,
+        problem: "今天没有形成带结果反馈的训练样本。",
+        recommendation: "开始工作前写下唯一产出，完成一轮 15 分钟训练并记录难度。",
+        evidence: ["今日训练 0 次"],
+        nextCheck: "今天结束前检查训练完成数是否达到 1。"
     )
     #expect(review.hasValidShape)
+    #expect(review.isConsistentWithBehaviorReliability(true))
+    #expect(!review.isConsistentWithBehaviorReliability(false))
+    #expect(review.displayedProblem == "今天没有形成带结果反馈的训练样本。")
 
-    let incomplete = CodexReviewArtifact(
+    let blocked = CodexReviewArtifact(
         sourceReportID: review.sourceReportID,
         reportDate: review.reportDate,
         generatedAt: review.generatedAt,
-        headline: review.headline,
-        interpretation: review.interpretation,
+        status: .dataQualityBlocked,
+        problem: "工作流归因不足；当前不能据此判断注意力。",
+        recommendation: "把当前桌面绑定到正在推进的工作流，并连续记录 30 分钟。",
+        evidence: ["工作流归因率 68%"],
+        nextCheck: "下一工作日检查归因率是否达到 70%。"
+    )
+    #expect(blocked.isConsistentWithBehaviorReliability(false))
+
+    let repeatedEvidence = CodexReviewArtifact(
+        sourceReportID: review.sourceReportID,
+        reportDate: review.reportDate,
+        generatedAt: review.generatedAt,
+        status: .behaviorFinding,
+        problem: review.displayedProblem,
         recommendation: review.recommendation,
-        evidence: ["只有一条证据"],
+        evidence: ["今日训练 0 次", "今日训练0次"],
         nextCheck: review.nextCheck
     )
-    #expect(!incomplete.hasValidShape)
+    #expect(!repeatedEvidence.hasValidShape)
+}
+
+@Test
+func codexReviewKeepsLegacyReadCompatibility() {
+    let legacy = CodexReviewArtifact(
+        sourceReportID: "legacy-report",
+        reportDate: Date(timeIntervalSince1970: 100),
+        generatedAt: Date(timeIntervalSince1970: 200),
+        headline: "工作流归因不足，当前不能据此判断注意力。",
+        interpretation: "这是一段旧协议生成的冗长解释，界面不应继续展示。",
+        recommendation: "先校准当前桌面的工作流绑定。",
+        evidence: ["工作流归因率 68%", "可靠门槛 70%"],
+        nextCheck: "下一工作日检查归因率是否达到 70%。"
+    )
+
+    #expect(legacy.hasValidShape)
+    #expect(legacy.displayedProblem == legacy.headline)
+    #expect(legacy.displayedStatus == .dataQualityBlocked)
+    #expect(!legacy.displayedProblem.contains("冗长解释"))
 }
 
 @Test
@@ -1358,6 +1760,22 @@ func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
 }
 
 @Test
+func codexWorkspaceDemandsProblemActionAndNoFiller() {
+    let instructions = CodexWorkspaceContract.agentsInstructions
+
+    #expect(instructions.contains("当前最重要的问题是什么？"))
+    #expect(instructions.contains("今天具体怎么解决？"))
+    #expect(instructions.contains("\"schemaVersion\": 2"))
+    #expect(instructions.contains("\"status\": \"behaviorFinding or dataQualityBlocked\""))
+    #expect(instructions.contains("当前不能据此判断注意力"))
+    #expect(instructions.contains("one or two non-duplicated aggregate facts"))
+    #expect(instructions.contains("at most 360 characters"))
+    #expect(instructions.contains("Do not add a preface"))
+    #expect(!instructions.contains("\"headline\""))
+    #expect(!instructions.contains("\"interpretation\""))
+}
+
+@Test
 func codexWorkspaceReportScriptIsValidBash() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1380,6 +1798,24 @@ func codexWorkspaceReportScriptIsValidBash() throws {
     process.waitUntilExit()
 
     #expect(process.terminationStatus == 0)
+    #expect(CodexWorkspaceContract.reportScript.contains("\"$@\""))
+}
+
+@Test
+func dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration() throws {
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    let script = try String(
+        contentsOf: root.appendingPathComponent(
+            "Scripts/generate-daily-report.sh"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(script.contains("--output-dir \"$FOCUS_TRACE_REPORT_DIR\""))
+    #expect(script.components(separatedBy: "\"$@\"").count == 3)
 }
 
 @Test @MainActor

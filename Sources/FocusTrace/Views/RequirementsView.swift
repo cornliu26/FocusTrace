@@ -6,6 +6,7 @@ struct RequirementsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var showingCapture = false
     @State private var requirementToConvert: RequirementItemModel?
+    @State private var requirementToPlan: RequirementItemModel?
     @State private var showCompleted = false
 
     var body: some View {
@@ -27,27 +28,32 @@ struct RequirementsView: View {
                     requirementSection(
                         title: "正在处理",
                         subtitle: "同一时刻只保留一个当前工作项",
-                        requirements: requirements(status: .active)
+                        requirements: requirements(in: .active)
                     )
                     requirementSection(
-                        title: "待整理",
-                        subtitle: "还没决定优先级或工作流",
-                        requirements: unplannedRequirements
+                        title: "已逾期",
+                        subtitle: "已经超过你确认的截止日期",
+                        requirements: requirements(in: .overdue)
                     )
                     requirementSection(
                         title: "今天",
-                        subtitle: "今天明确要推进",
-                        requirements: requirements(priority: .today)
+                        subtitle: "今天需要完成",
+                        requirements: requirements(in: .dueToday)
                     )
                     requirementSection(
-                        title: "本周",
-                        subtitle: "本周安排，但不打断当前工作",
-                        requirements: requirements(priority: .thisWeek)
+                        title: "待整理",
+                        subtitle: "分别确认截止日期、重要程度和工作流",
+                        requirements: requirements(in: .needsPlanning)
                     )
                     requirementSection(
-                        title: "以后",
-                        subtitle: "先保留，暂不承诺时间",
-                        requirements: requirements(priority: .later)
+                        title: "接下来",
+                        subtitle: "未来有明确截止日期",
+                        requirements: requirements(in: .upcoming)
+                    )
+                    requirementSection(
+                        title: "无截止日期",
+                        subtitle: "已经整理，但没有时间承诺",
+                        requirements: requirements(in: .unscheduled)
                     )
                 }
 
@@ -61,6 +67,9 @@ struct RequirementsView: View {
                                 RequirementCard(
                                     state: state,
                                     requirement: requirement,
+                                    onPlan: {
+                                        requirementToPlan = requirement
+                                    },
                                     onCreateWorkflow: {
                                         requirementToConvert = requirement
                                     }
@@ -85,23 +94,26 @@ struct RequirementsView: View {
         .sheet(item: $requirementToConvert) { requirement in
             RequirementConversionSheet(state: state, requirement: requirement)
         }
+        .sheet(item: $requirementToPlan) { requirement in
+            RequirementPlanningSheet(state: state, requirement: requirement)
+        }
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(FocusTraceTheme.mint.opacity(0.13))
+                    .fill(FocusTraceTheme.sky.opacity(0.13))
                 Image(systemName: "tray.and.arrow.down")
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(FocusTraceTheme.mint)
+                    .foregroundStyle(FocusTraceTheme.sky)
             }
             .frame(width: 46, height: 46)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text("需求箱")
                     .font(.system(.title2, design: .rounded, weight: .bold))
-                Text("先收下，再决定挂到已有工作流还是创建新工作流。记录需求不会切走当前桌面。")
+                Text("先收下，再分别确认什么时候做、有多重要、在哪个工作流处理。")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -135,6 +147,9 @@ struct RequirementsView: View {
                     RequirementCard(
                         state: state,
                         requirement: requirement,
+                        onPlan: {
+                            requirementToPlan = requirement
+                        },
                         onCreateWorkflow: {
                             requirementToConvert = requirement
                         }
@@ -154,19 +169,14 @@ struct RequirementsView: View {
         state.orderedRequirements.filter { $0.status == .completed }
     }
 
-    private var unplannedRequirements: [RequirementItemModel] {
+    private func requirements(
+        in section: RequirementQueueSection
+    ) -> [RequirementItemModel] {
         openRequirements.filter {
-            $0.status != .active && $0.priority == .unplanned
-        }
-    }
-
-    private func requirements(status: RequirementStatus) -> [RequirementItemModel] {
-        openRequirements.filter { $0.status == status }
-    }
-
-    private func requirements(priority: RequirementPriority) -> [RequirementItemModel] {
-        openRequirements.filter {
-            $0.status != .active && $0.priority == priority
+            RequirementEngine.queueSection(
+                for: $0.record,
+                at: state.now
+            ) == section
         }
     }
 }
@@ -174,6 +184,7 @@ struct RequirementsView: View {
 private struct RequirementCard: View {
     @ObservedObject var state: ApplicationState
     let requirement: RequirementItemModel
+    let onPlan: () -> Void
     let onCreateWorkflow: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
@@ -189,24 +200,65 @@ private struct RequirementCard: View {
                     if !requirement.source.isEmpty {
                         Text("来自 \(requirement.source)")
                     }
-                    if let workflowID = requirement.workflowID {
-                        Label(state.taskName(for: workflowID), systemImage: "rectangle.on.rectangle")
-                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
+                HStack(spacing: 8) {
+                    deadlineLabel
+                    importanceLabel
+                    if let workflowID = requirement.workflowID {
+                        Label(
+                            state.taskName(for: workflowID),
+                            systemImage: "rectangle.on.rectangle"
+                        )
+                    } else {
+                        Label("未指定工作流", systemImage: "rectangle.dashed")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+
+                if requirement.priority != .unplanned {
+                    Label(
+                        "旧版安排“\(requirement.priority.legacyTitle)”需要重新确认截止日期",
+                        systemImage: "exclamationmark.circle"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(FocusTraceTheme.amber)
+                }
+
                 HStack(spacing: 9) {
-                    priorityMenu
-                    workflowMenu
+                    if requirement.status != .completed {
+                        Button(
+                            RequirementEngine.needsPlanning(requirement.record)
+                                ? "整理"
+                                : "调整"
+                        ) {
+                            onPlan()
+                        }
+                        .buttonStyle(.borderless)
+                    }
                     Spacer()
                     if requirement.status == .active {
                         Label("正在处理", systemImage: "bolt.fill")
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(FocusTraceTheme.mint)
-                    } else if requirement.workflowID != nil {
+                            .foregroundStyle(FocusTraceTheme.sky)
+                    } else if !RequirementEngine.needsPlanning(requirement.record),
+                              requirement.workflowID != nil {
                         Button("开始处理") {
                             state.startRequirement(requirement.id)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                    } else if !RequirementEngine.needsPlanning(requirement.record),
+                              let currentWorkflowID = state.currentTaskID,
+                              requirement.status != .completed {
+                        Button("在当前工作流处理") {
+                            state.startRequirement(
+                                requirement.id,
+                                in: currentWorkflowID
+                            )
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -221,6 +273,11 @@ private struct RequirementCard: View {
                         .help("标记完成")
                     }
                     Menu {
+                        if requirement.status != .completed {
+                            Button("升级为新工作流…") {
+                                onCreateWorkflow()
+                            }
+                        }
                         Button("归档为不做", role: .destructive) {
                             state.archiveRequirement(requirement.id)
                         }
@@ -235,7 +292,7 @@ private struct RequirementCard: View {
         .padding(13)
         .background(
             requirement.status == .active
-                ? FocusTraceTheme.mint.opacity(0.10)
+                ? FocusTraceTheme.sky.opacity(0.10)
                 : FocusTraceTheme.cardFill(colorScheme),
             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
         )
@@ -243,7 +300,7 @@ private struct RequirementCard: View {
             RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .stroke(
                     requirement.status == .active
-                        ? FocusTraceTheme.mint.opacity(0.5)
+                        ? FocusTraceTheme.sky.opacity(0.5)
                         : Color.primary.opacity(0.06),
                     lineWidth: 1
                 )
@@ -253,58 +310,58 @@ private struct RequirementCard: View {
     private var statusMark: some View {
         Circle()
             .fill(requirement.status == .active
-                  ? FocusTraceTheme.mint
-                  : priorityColor.opacity(0.78))
+                  ? FocusTraceTheme.sky
+                  : queueColor.opacity(0.82))
             .frame(width: 9, height: 9)
             .padding(.top, 6)
     }
 
-    private var priorityMenu: some View {
-        Menu {
-            ForEach(RequirementPriority.allCases, id: \.self) { priority in
-                Button(priority.title) {
-                    state.setRequirementPriority(requirement.id, priority: priority)
-                }
-            }
-        } label: {
-            Label(requirement.priority.title, systemImage: "flag")
-                .font(.caption)
+    @ViewBuilder
+    private var deadlineLabel: some View {
+        if let dueDate = requirement.dueDate {
+            Label(deadlineText(dueDate), systemImage: "calendar")
+                .foregroundStyle(queueColor)
+        } else if RequirementEngine.needsPlanning(requirement.record) {
+            Label("待确认时间", systemImage: "calendar.badge.exclamationmark")
+                .foregroundStyle(FocusTraceTheme.amber)
+        } else {
+            Label("无截止日期", systemImage: "calendar.badge.minus")
+                .foregroundStyle(.secondary)
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
     }
 
-    private var workflowMenu: some View {
-        Menu {
-            ForEach(state.activeTasks) { workflow in
-                Button(workflow.title) {
-                    state.attachRequirement(requirement.id, to: workflow.id)
-                }
-            }
-            if !state.activeTasks.isEmpty {
-                Divider()
-            }
-            Button("转成新工作流…") {
-                onCreateWorkflow()
-            }
-        } label: {
-            Label(
-                requirement.workflowID == nil ? "安排工作流" : "更换工作流",
-                systemImage: "rectangle.on.rectangle"
+    private var importanceLabel: some View {
+        Label(requirement.importance.title, systemImage: "flag")
+            .foregroundStyle(
+                requirement.importance == .high
+                    ? FocusTraceTheme.coral
+                    : Color.secondary
             )
-            .font(.caption)
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
     }
 
-    private var priorityColor: Color {
-        switch requirement.priority {
-        case .unplanned: return .secondary
-        case .today: return FocusTraceTheme.mint
-        case .thisWeek: return FocusTraceTheme.sky
-        case .later: return FocusTraceTheme.amber
+    private var queueColor: Color {
+        switch RequirementEngine.queueSection(
+            for: requirement.record,
+            at: state.now
+        ) {
+        case .active: return FocusTraceTheme.sky
+        case .overdue: return FocusTraceTheme.coral
+        case .dueToday: return FocusTraceTheme.amber
+        case .upcoming: return FocusTraceTheme.sky
+        case .unscheduled: return .secondary
+        case .needsPlanning: return FocusTraceTheme.amber
+        case nil: return .secondary
         }
+    }
+
+    private func deadlineText(_ date: Date) -> String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(date) { return "今天截止" }
+        if calendar.isDateInTomorrow(date) { return "明天截止" }
+        if calendar.startOfDay(for: date) < calendar.startOfDay(for: state.now) {
+            return "已逾期 · \(date.formatted(.dateTime.month().day()))"
+        }
+        return "\(date.formatted(.dateTime.month().day())) 截止"
     }
 }
 
@@ -366,6 +423,139 @@ struct QuickRequirementCaptureSheet: View {
     }
 }
 
+private struct RequirementPlanningSheet: View {
+    @ObservedObject var state: ApplicationState
+    let requirement: RequirementItemModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var hasDeadline: Bool
+    @State private var deadline: Date
+    @State private var importance: RequirementImportance
+    @State private var workflowID: UUID?
+
+    init(state: ApplicationState, requirement: RequirementItemModel) {
+        self.state = state
+        self.requirement = requirement
+        let today = Calendar.current.startOfDay(for: Date())
+        _hasDeadline = State(initialValue: requirement.dueDate != nil)
+        _deadline = State(initialValue: requirement.dueDate ?? today)
+        _importance = State(initialValue: requirement.importance)
+        _workflowID = State(initialValue: requirement.workflowID)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("整理这个需求")
+                    .font(.title2.bold())
+                Text("三个决定彼此独立；保存不会切换工作流。")
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(requirement.title)
+                .font(.callout.weight(.medium))
+                .padding(11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    FocusTraceTheme.sky.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+
+            if requirement.priority != .unplanned {
+                Label(
+                    "旧版只记录了“\(requirement.priority.legacyTitle)”，无法推断真实截止日期，请重新确认。",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+                .foregroundStyle(FocusTraceTheme.amber)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("有明确截止日期", isOn: $hasDeadline)
+                    if hasDeadline {
+                        DatePicker(
+                            "截止日期",
+                            selection: $deadline,
+                            in: earliestDeadline...,
+                            displayedComponents: .date
+                        )
+                        .datePickerStyle(.graphical)
+                        .labelsHidden()
+                        .accessibilityIdentifier(
+                            FocusTraceUXContract
+                                .requirementDateSelectionPresentation
+                                .rawValue
+                        )
+                        .frame(maxWidth: .infinity)
+                    } else {
+                        Text("没有时间承诺的需求仍会保留，但不会触发到期提醒。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } label: {
+                Label("什么时候必须完成", systemImage: "calendar")
+            }
+
+            GroupBox {
+                Picker("重要程度", selection: $importance) {
+                    ForEach(RequirementImportance.allCases, id: \.self) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+            } label: {
+                Label("同样紧迫时，哪一项更重要", systemImage: "flag")
+            }
+
+            GroupBox {
+                Picker("工作流", selection: $workflowID) {
+                    Text("暂不指定").tag(nil as UUID?)
+                    ForEach(state.activeTasks) { workflow in
+                        Text(workflow.title).tag(Optional(workflow.id))
+                    }
+                }
+                .labelsHidden()
+                Text("一个工作流可以承接多个需求；只有确实需要独立上下文时才新建工作流。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 4)
+            } label: {
+                Label("在哪里处理", systemImage: "rectangle.on.rectangle")
+            }
+
+            HStack {
+                Button("取消") { dismiss() }
+                Spacer()
+                Button("保存安排") {
+                    if state.planRequirement(
+                        id: requirement.id,
+                        dueDate: hasDeadline ? deadline : nil,
+                        importance: importance,
+                        workflowID: workflowID
+                    ) {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
+    }
+
+    private var earliestDeadline: Date {
+        min(
+            Calendar.current.startOfDay(for: requirement.dueDate ?? Date()),
+            Calendar.current.startOfDay(for: Date())
+        )
+    }
+}
+
 private struct RequirementConversionSheet: View {
     @ObservedObject var state: ApplicationState
     let requirement: RequirementItemModel
@@ -419,12 +609,22 @@ private struct RequirementConversionSheet: View {
 }
 
 private extension RequirementPriority {
-    var title: String {
+    var legacyTitle: String {
         switch self {
         case .unplanned: return "待整理"
         case .today: return "今天"
         case .thisWeek: return "本周"
         case .later: return "以后"
+        }
+    }
+}
+
+private extension RequirementImportance {
+    var title: String {
+        switch self {
+        case .high: return "高"
+        case .normal: return "普通"
+        case .low: return "低"
         }
     }
 }

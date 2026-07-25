@@ -101,6 +101,22 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         Task { try? await UNUserNotificationCenter.current().add(request) }
     }
 
+    func sendRequirementDue(count: Int) {
+        let content = UNMutableNotificationContent()
+        content.title = count == 1
+            ? "有一个需求该处理了"
+            : "有 \(count) 个需求该处理了"
+        content.body = "打开 FocusTrace 查看最紧迫的一项。"
+        content.userInfo = ["openRequirements": true]
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "requirements-due-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        )
+        Task { try? await UNUserNotificationCenter.current().add(request) }
+    }
+
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
@@ -112,6 +128,12 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse
     ) async {
+        if response.notification.request.content.userInfo["openRequirements"] as? Bool == true {
+            await MainActor.run { [weak self] in
+                self?.state?.showRequirements()
+            }
+            return
+        }
         if let rawID = response.notification.request.content.userInfo["taskParkingID"] as? String,
            let id = UUID(uuidString: rawID) {
             let action = response.actionIdentifier

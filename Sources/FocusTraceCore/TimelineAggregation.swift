@@ -49,6 +49,67 @@ public struct TimelineBucket: Identifiable, Equatable, Sendable {
     }
 }
 
+public struct TimelineApplicationRun: Identifiable, Equatable, Sendable {
+    public var id: Date { start }
+    public let start: Date
+    public let end: Date
+    public let app: AppIdentity
+    public let activeSeconds: TimeInterval
+    public let bucketCount: Int
+
+    public init(
+        start: Date,
+        end: Date,
+        app: AppIdentity,
+        activeSeconds: TimeInterval,
+        bucketCount: Int
+    ) {
+        self.start = start
+        self.end = end
+        self.app = app
+        self.activeSeconds = activeSeconds
+        self.bucketCount = bucketCount
+    }
+}
+
+/// Turns five-minute dominant-app samples into readable continuous runs.
+/// Empty buckets remain gaps, and returning to an app after a gap starts a new
+/// run so the timeline never invents continuity.
+public enum TimelineApplicationRunEngine {
+    public static func runs(
+        from buckets: [TimelineBucket]
+    ) -> [TimelineApplicationRun] {
+        var result: [TimelineApplicationRun] = []
+        for bucket in buckets {
+            guard bucket.activeSeconds > 0, let app = bucket.dominantApp else {
+                continue
+            }
+            if let previous = result.last,
+               previous.app.bundleID == app.bundleID,
+               abs(previous.end.timeIntervalSince(bucket.start)) < 0.5 {
+                result[result.count - 1] = TimelineApplicationRun(
+                    start: previous.start,
+                    end: bucket.end,
+                    app: previous.app,
+                    activeSeconds: previous.activeSeconds + bucket.activeSeconds,
+                    bucketCount: previous.bucketCount + 1
+                )
+            } else {
+                result.append(
+                    TimelineApplicationRun(
+                        start: bucket.start,
+                        end: bucket.end,
+                        app: app,
+                        activeSeconds: bucket.activeSeconds,
+                        bucketCount: 1
+                    )
+                )
+            }
+        }
+        return result
+    }
+}
+
 public enum TimelineAggregationEngine {
     private struct MutableBucket {
         var durations: [AppIdentity: TimeInterval] = [:]
@@ -207,6 +268,29 @@ public struct TimelinePresentationSnapshot: Equatable, Sendable {
         self.summary = summary
         self.buckets = buckets
         self.eventBuckets = eventBuckets
+    }
+}
+
+public struct TimelinePresentationCacheKey: Equatable, Sendable {
+    public let selectedDay: Date
+    public let range: DateInterval
+    public let renderMinute: Date
+    public let dataRevision: UInt64
+
+    public init(
+        selectedDay: Date,
+        range: DateInterval,
+        now: Date,
+        dataRevision: UInt64,
+        calendar: Calendar = .current
+    ) {
+        self.selectedDay = calendar.startOfDay(for: selectedDay)
+        self.range = range
+        self.renderMinute = TimelinePresentationEngine.renderMinute(
+            for: now,
+            calendar: calendar
+        )
+        self.dataRevision = dataRevision
     }
 }
 

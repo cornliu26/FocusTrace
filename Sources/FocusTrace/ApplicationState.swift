@@ -43,15 +43,8 @@ struct TimelineViewSnapshot {
     let presentation: TimelinePresentationSnapshot
 }
 
-private struct TimelineViewCacheKey: Equatable {
-    let selectedDay: Date
-    let range: DateInterval
-    let renderMinute: Date
-    let dataRevision: UInt64
-}
-
 private struct TimelineViewCache {
-    let key: TimelineViewCacheKey
+    let key: TimelinePresentationCacheKey
     let snapshot: TimelineViewSnapshot
 }
 
@@ -140,16 +133,16 @@ final class ApplicationState: ObservableObject {
 
     var orderedRequirements: [RequirementItemModel] {
         let byID = Dictionary(uniqueKeysWithValues: requirements.map { ($0.id, $0) })
-        return RequirementEngine.ordered(requirements.map(\.record)).compactMap {
+        return RequirementEngine.ordered(
+            requirements.map(\.record),
+            at: now
+        ).compactMap {
             byID[$0.id]
         }
     }
 
-    var untriagedRequirementCount: Int {
-        requirements.filter {
-            $0.status == .inbox
-                || ($0.status == .planned && $0.priority == .unplanned)
-        }.count
+    var requirementQueueSummary: RequirementQueueSummary {
+        RequirementEngine.summary(requirements.map(\.record), at: now)
     }
 
     var activeRequirement: RequirementItemModel? {
@@ -342,11 +335,12 @@ final class ApplicationState: ObservableObject {
             for: now,
             calendar: calendar
         )
-        let key = TimelineViewCacheKey(
+        let key = TimelinePresentationCacheKey(
             selectedDay: selectedDay,
             range: range,
-            renderMinute: renderMinute,
-            dataRevision: timelineDataRevision
+            now: now,
+            dataRevision: timelineDataRevision,
+            calendar: calendar
         )
         if let timelineViewCache, timelineViewCache.key == key {
             return timelineViewCache.snapshot
@@ -447,6 +441,7 @@ final class ApplicationState: ObservableObject {
         notificationRouter.state = self
         notificationRouter.configure()
         sendDueTaskParkingReminders(at: Date())
+        sendDueRequirementReminder(at: Date())
         workspaceMonitor.start()
         if spaceAnchorRegistry.isEnabled {
             applySpaceResolution(
@@ -566,27 +561,40 @@ final class ApplicationState: ObservableObject {
         return true
     }
 
-    func updateRequirement(
+    @discardableResult
+    func planRequirement(
         id: UUID,
-        title: String,
-        source: String,
-        priority: RequirementPriority
-    ) {
-        guard let requirement = requirements.first(where: { $0.id == id }),
-              let clean = RequirementEngine.captured(title: title, source: source)
-        else { return }
-        requirement.title = clean.title
-        requirement.source = clean.source
-        requirement.priority = priority
+        dueDate: Date?,
+        importance: RequirementImportance,
+        workflowID: UUID?
+    ) -> Bool {
+        guard let requirement = requirements.first(where: { $0.id == id }) else {
+            return false
+        }
+        if let workflowID,
+           !activeTasks.contains(where: { $0.id == workflowID }) {
+            errorMessage = "选择的工作流已经结束，请重新选择。"
+            return false
+        }
+        let planned = RequirementEngine.planned(
+            requirement.record,
+            dueDate: dueDate,
+            importance: importance,
+            workflowID: workflowID,
+        )
+        requirement.dueDate = planned.dueDate
+        requirement.importance = planned.importance
+        requirement.reminderSentAt = planned.reminderSentAt
+        requirement.planningVersion = planned.planningVersion
+        requirement.priority = planned.priority
+        requirement.workflowID = planned.workflowID
+        requirement.status = planned.status
+        if planned.dueDate != nil {
+            notificationRouter.requestAuthorizationIfNeeded()
+        }
         saveOrReport()
         objectWillChange.send()
-    }
-
-    func setRequirementPriority(_ id: UUID, priority: RequirementPriority) {
-        guard let requirement = requirements.first(where: { $0.id == id }) else { return }
-        requirement.priority = priority
-        saveOrReport()
-        objectWillChange.send()
+        return true
     }
 
     func attachRequirement(_ id: UUID, to workflowID: UUID) {
@@ -594,9 +602,6 @@ final class ApplicationState: ObservableObject {
               activeTasks.contains(where: { $0.id == workflowID })
         else { return }
         requirement.workflowID = workflowID
-        if requirement.status == .inbox {
-            requirement.status = .planned
-        }
         saveOrReport()
         objectWillChange.send()
     }
@@ -607,19 +612,29 @@ final class ApplicationState: ObservableObject {
               let workflow = createInactiveWorkflow(title: workflowTitle)
         else { return nil }
         requirement.workflowID = workflow.id
-        requirement.status = .planned
         saveOrReport()
         objectWillChange.send()
         return workflow.id
     }
 
-    func startRequirement(_ id: UUID) {
-        guard let requirement = requirements.first(where: { $0.id == id }),
-              let workflowID = requirement.workflowID,
+    func startRequirement(_ id: UUID, in fallbackWorkflowID: UUID? = nil) {
+        guard let requirement = requirements.first(where: { $0.id == id }) else {
+            return
+        }
+        guard !RequirementEngine.needsPlanning(requirement.record) else {
+            errorMessage = "请先确认这个需求的截止日期、重要程度和工作流安排。"
+            return
+        }
+        guard
+              let workflowID = requirement.workflowID ?? fallbackWorkflowID,
               activeTasks.contains(where: { $0.id == workflowID })
         else {
             errorMessage = "请先把这个需求安排到一个进行中的工作流。"
             return
+        }
+        if requirement.workflowID == nil {
+            requirement.workflowID = workflowID
+            requirement.status = .planned
         }
 
         if isSpaceWorkflowModeEnabled {
@@ -657,6 +672,11 @@ final class ApplicationState: ObservableObject {
         requirement.status = .archived
         saveOrReport()
         objectWillChange.send()
+    }
+
+    func showRequirements() {
+        selectedAppSection = .inbox
+        showMainWindow()
     }
 
     func createWorkflowAndBindCurrentSpace(
@@ -1647,6 +1667,7 @@ final class ApplicationState: ObservableObject {
                     wasRecording = shouldRecord
                 }
                 self.sendDueTaskParkingReminders(at: date)
+                self.sendDueRequirementReminder(at: date)
             }
         }
     }
@@ -1915,6 +1936,22 @@ final class ApplicationState: ObservableObject {
         }
     }
 
+    private func sendDueRequirementReminder(at date: Date) {
+        guard preferences.isWithinWorkSchedule(date) else { return }
+        let due = RequirementEngine.dueForReminder(
+            requirements.map(\.record),
+            at: date
+        )
+        guard !due.isEmpty else { return }
+        let dueIDs = Set(due.map(\.id))
+        for requirement in requirements where dueIDs.contains(requirement.id) {
+            requirement.reminderSentAt = date
+        }
+        notificationRouter.sendRequirementDue(count: due.count)
+        saveOrReport()
+        objectWillChange.send()
+    }
+
     private func recoverInterruptedState() {
         let now = Date()
         do {
@@ -2120,7 +2157,10 @@ final class ApplicationState: ObservableObject {
     }
 
     private func showMainWindow() {
+        NotificationCenter.default.post(
+            name: .focusTraceOpenMainWindowRequested,
+            object: nil
+        )
         NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first(where: { $0.canBecomeMain })?.makeKeyAndOrderFront(nil)
     }
 }

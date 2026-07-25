@@ -26,6 +26,7 @@ struct ReviewView: View {
         }
         .focusTraceScreen()
         .task(id: state.selectedDate) {
+            codexLauncher.refreshExistingWorkspaceIfPresent()
             await codexBridge.observe(for: state.selectedDate)
         }
     }
@@ -40,7 +41,7 @@ struct ReviewView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text("先看结论，再决定是否展开数据")
                     .font(.headline)
-                Text("本地分析实时可用；Codex 是可选的每日深度复盘，不参与采集。")
+                Text("本地分析实时可用；Codex 是可选的每日行动复盘，不参与采集。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -176,10 +177,6 @@ struct ReviewView: View {
     private var codexAnalysis: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 13) {
-                Text("FocusTrace 只把匿名聚合报告交给 Codex；Codex 负责解释趋势并写回本页，不会读取窗口标题、输入内容或逐条轨迹。")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
                 switch codexBridge.status {
                 case .notConnected:
                     VStack(alignment: .leading, spacing: 12) {
@@ -216,27 +213,50 @@ struct ReviewView: View {
                         color: .blue
                     )
                 case let .ready(_, review):
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(review.headline)
-                            .font(.title3.bold())
-                        Text(review.interpretation)
-                            .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Label(
+                                review.displayedStatus == .dataQualityBlocked
+                                    ? "当前数据问题"
+                                    : "当前问题",
+                                systemImage: review.displayedStatus == .dataQualityBlocked
+                                    ? "exclamationmark.triangle.fill"
+                                    : "scope"
+                            )
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(
+                                review.displayedStatus == .dataQualityBlocked
+                                    ? FocusTraceTheme.amber
+                                    : FocusTraceTheme.coral
+                            )
+                            Text(review.displayedProblem)
+                                .font(.title3.bold())
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(review.evidence, id: \.self) { evidence in
+                                Label(evidence, systemImage: "chart.bar.fill")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
 
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Codex 建议")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.purple)
+                        Divider()
+
+                        VStack(alignment: .leading, spacing: 7) {
+                            Label("今天怎么做", systemImage: "arrow.right.circle.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(FocusTraceTheme.mint)
                             Text(review.recommendation)
                                 .font(.headline)
-                            ForEach(review.evidence, id: \.self) { evidence in
-                                Label(evidence, systemImage: "checkmark.circle")
-                                    .font(.callout)
-                            }
-                            Label("下次验证：\(review.nextCheck)", systemImage: "scope")
+                                .fixedSize(horizontal: false, vertical: true)
+                            Label("验收：\(review.nextCheck)", systemImage: "checkmark.seal")
                                 .font(.callout.weight(.medium))
-                                .foregroundStyle(.purple)
+                                .foregroundStyle(FocusTraceTheme.sky)
                         }
-                        Text("写回于 \(review.generatedAt.formatted(date: .omitted, time: .shortened))")
+
+                        Label(
+                            "仅使用本地聚合数据 · 写回于 \(review.generatedAt.formatted(date: .omitted, time: .shortened))",
+                            systemImage: "lock.shield"
+                        )
                             .font(.caption)
                             .foregroundStyle(.tertiary)
                     }
@@ -262,7 +282,7 @@ struct ReviewView: View {
             .padding(8)
         } label: {
             HStack {
-                Label("Codex 每日深度复盘", systemImage: "sparkles")
+                Label("Codex 每日行动复盘", systemImage: "sparkles")
                 Spacer()
                 Text("可选增强 · 文件桥")
                     .font(.caption.weight(.medium))

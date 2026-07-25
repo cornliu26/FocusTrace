@@ -1,10 +1,21 @@
 import Foundation
 
+/// Legacy planning buckets written by FocusTrace 0.2 and earlier.
+///
+/// They did not record when "today" or "this week" was chosen, so they cannot
+/// be migrated into a trustworthy deadline. New product behavior must use
+/// `dueDate` and `RequirementImportance` instead.
 public enum RequirementPriority: String, Codable, CaseIterable, Sendable {
     case unplanned
     case today
     case thisWeek
     case later
+}
+
+public enum RequirementImportance: String, Codable, CaseIterable, Sendable {
+    case high
+    case normal
+    case low
 }
 
 public enum RequirementStatus: String, Codable, CaseIterable, Sendable {
@@ -15,12 +26,42 @@ public enum RequirementStatus: String, Codable, CaseIterable, Sendable {
     case archived
 }
 
+public enum RequirementQueueSection: String, Codable, CaseIterable, Sendable {
+    case active
+    case overdue
+    case dueToday
+    case upcoming
+    case unscheduled
+    case needsPlanning
+}
+
+public struct RequirementQueueSummary: Equatable, Sendable {
+    public let overdueCount: Int
+    public let dueTodayCount: Int
+    public let needsPlanningCount: Int
+
+    public init(
+        overdueCount: Int,
+        dueTodayCount: Int,
+        needsPlanningCount: Int
+    ) {
+        self.overdueCount = overdueCount
+        self.dueTodayCount = dueTodayCount
+        self.needsPlanningCount = needsPlanningCount
+    }
+}
+
 public struct RequirementRecord: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public var title: String
     public var source: String
     public let capturedAt: Date
     public var dueDate: Date?
+    public var importance: RequirementImportance
+    public var reminderSentAt: Date?
+    public var planningVersion: Int
+    /// Kept only to make old, ambiguous planning visible until the user
+    /// confirms a real deadline and importance.
     public var priority: RequirementPriority
     public var status: RequirementStatus
     public var workflowID: UUID?
@@ -32,6 +73,9 @@ public struct RequirementRecord: Codable, Equatable, Identifiable, Sendable {
         source: String = "",
         capturedAt: Date = Date(),
         dueDate: Date? = nil,
+        importance: RequirementImportance = .normal,
+        reminderSentAt: Date? = nil,
+        planningVersion: Int = 1,
         priority: RequirementPriority = .unplanned,
         status: RequirementStatus = .inbox,
         workflowID: UUID? = nil,
@@ -42,6 +86,9 @@ public struct RequirementRecord: Codable, Equatable, Identifiable, Sendable {
         self.source = source
         self.capturedAt = capturedAt
         self.dueDate = dueDate
+        self.importance = importance
+        self.reminderSentAt = reminderSentAt
+        self.planningVersion = planningVersion
         self.priority = priority
         self.status = status
         self.workflowID = workflowID
@@ -59,7 +106,8 @@ public enum RequirementEngine {
         return RequirementRecord(
             title: cleanTitle,
             source: normalizedText(source) ?? "",
-            capturedAt: date
+            capturedAt: date,
+            planningVersion: 0
         )
     }
 
@@ -80,26 +128,64 @@ public enum RequirementEngine {
     }
 
     public static func ordered(_ requirements: [RequirementRecord]) -> [RequirementRecord] {
+        ordered(requirements, at: Date())
+    }
+
+    public static func ordered(
+        _ requirements: [RequirementRecord],
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> [RequirementRecord] {
         requirements.sorted { left, right in
-            let leftStatus = statusRank(left.status)
-            let rightStatus = statusRank(right.status)
-            if leftStatus != rightStatus { return leftStatus < rightStatus }
+            let leftRank = orderingRank(left, at: date, calendar: calendar)
+            let rightRank = orderingRank(right, at: date, calendar: calendar)
+            if leftRank != rightRank { return leftRank < rightRank }
 
-            let leftPriority = priorityRank(left.priority)
-            let rightPriority = priorityRank(right.priority)
-            if leftPriority != rightPriority { return leftPriority < rightPriority }
-
-            switch (left.dueDate, right.dueDate) {
-            case let (leftDate?, rightDate?) where leftDate != rightDate:
-                return leftDate < rightDate
-            case (_?, nil):
-                return true
-            case (nil, _?):
-                return false
-            default:
-                return left.capturedAt < right.capturedAt
+            let leftDueDay = left.dueDate.map { calendar.startOfDay(for: $0) }
+            let rightDueDay = right.dueDate.map { calendar.startOfDay(for: $0) }
+            if leftDueDay != rightDueDay {
+                switch (leftDueDay, rightDueDay) {
+                case let (leftDate?, rightDate?):
+                    return leftDate < rightDate
+                case (_?, nil):
+                    return true
+                case (nil, _?):
+                    return false
+                default:
+                    break
+                }
             }
+
+            let leftImportance = importanceRank(left.importance)
+            let rightImportance = importanceRank(right.importance)
+            if leftImportance != rightImportance {
+                return leftImportance < rightImportance
+            }
+            return left.capturedAt < right.capturedAt
         }
+    }
+
+    public static func planned(
+        _ requirement: RequirementRecord,
+        dueDate: Date?,
+        importance: RequirementImportance,
+        workflowID: UUID?,
+        calendar: Calendar = .current
+    ) -> RequirementRecord {
+        var result = requirement
+        let normalizedDueDate = dueDate.map { calendar.startOfDay(for: $0) }
+        if result.dueDate != normalizedDueDate {
+            result.reminderSentAt = nil
+        }
+        result.dueDate = normalizedDueDate
+        result.importance = importance
+        result.workflowID = workflowID
+        result.planningVersion = 1
+        result.priority = .unplanned
+        if result.status == .inbox {
+            result.status = .planned
+        }
+        return result
     }
 
     public static func attached(
@@ -108,10 +194,76 @@ public enum RequirementEngine {
     ) -> RequirementRecord {
         var result = requirement
         result.workflowID = workflowID
-        if result.status == .inbox {
-            result.status = .planned
-        }
         return result
+    }
+
+    public static func needsPlanning(_ requirement: RequirementRecord) -> Bool {
+        requirement.status == .inbox
+            || requirement.planningVersion < 1
+            || requirement.priority != .unplanned
+    }
+
+    public static func queueSection(
+        for requirement: RequirementRecord,
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> RequirementQueueSection? {
+        guard ![RequirementStatus.completed, .archived].contains(requirement.status) else {
+            return nil
+        }
+        if requirement.status == .active { return .active }
+        if needsPlanning(requirement) { return .needsPlanning }
+        guard let dueDate = requirement.dueDate else { return .unscheduled }
+
+        let dueDay = calendar.startOfDay(for: dueDate)
+        let today = calendar.startOfDay(for: date)
+        if dueDay < today { return .overdue }
+        if dueDay == today { return .dueToday }
+        return .upcoming
+    }
+
+    public static func summary(
+        _ requirements: [RequirementRecord],
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> RequirementQueueSummary {
+        var overdueCount = 0
+        var dueTodayCount = 0
+        var needsPlanningCount = 0
+        for requirement in requirements {
+            switch queueSection(for: requirement, at: date, calendar: calendar) {
+            case .overdue:
+                overdueCount += 1
+            case .dueToday:
+                dueTodayCount += 1
+            case .needsPlanning:
+                needsPlanningCount += 1
+            default:
+                break
+            }
+        }
+        return RequirementQueueSummary(
+            overdueCount: overdueCount,
+            dueTodayCount: dueTodayCount,
+            needsPlanningCount: needsPlanningCount
+        )
+    }
+
+    public static func dueForReminder(
+        _ requirements: [RequirementRecord],
+        at date: Date,
+        calendar: Calendar = .current
+    ) -> [RequirementRecord] {
+        ordered(requirements, at: date, calendar: calendar).filter { requirement in
+            guard requirement.reminderSentAt == nil,
+                  !needsPlanning(requirement),
+                  requirement.status == .planned,
+                  let dueDate = requirement.dueDate
+            else {
+                return false
+            }
+            return calendar.startOfDay(for: dueDate) <= calendar.startOfDay(for: date)
+        }
     }
 
     private static func normalizedText(_ value: String) -> String? {
@@ -122,22 +274,38 @@ public enum RequirementEngine {
         return result.isEmpty ? nil : result
     }
 
+    private static func orderingRank(
+        _ requirement: RequirementRecord,
+        at date: Date,
+        calendar: Calendar
+    ) -> Int {
+        if let section = queueSection(for: requirement, at: date, calendar: calendar) {
+            switch section {
+            case .active: return 0
+            case .overdue: return 1
+            case .dueToday: return 2
+            case .upcoming: return 3
+            case .unscheduled: return 4
+            case .needsPlanning: return 5
+            }
+        }
+        return statusRank(requirement.status)
+    }
+
     private static func statusRank(_ status: RequirementStatus) -> Int {
         switch status {
         case .active: return 0
-        case .inbox: return 1
-        case .planned: return 2
-        case .completed: return 3
-        case .archived: return 4
+        case .inbox, .planned: return 5
+        case .completed: return 6
+        case .archived: return 7
         }
     }
 
-    private static func priorityRank(_ priority: RequirementPriority) -> Int {
-        switch priority {
-        case .today: return 0
-        case .thisWeek: return 1
-        case .later: return 2
-        case .unplanned: return 3
+    private static func importanceRank(_ importance: RequirementImportance) -> Int {
+        switch importance {
+        case .high: return 0
+        case .normal: return 1
+        case .low: return 2
         }
     }
 }

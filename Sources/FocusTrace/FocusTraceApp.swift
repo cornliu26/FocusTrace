@@ -1,7 +1,14 @@
 import AppKit
 import Foundation
 import SwiftUI
+import FocusTraceCore
 import FocusTraceMacSupport
+
+extension Notification.Name {
+    static let focusTraceOpenMainWindowRequested = Notification.Name(
+        "FocusTrace.openMainWindowRequested"
+    )
+}
 
 @main
 struct FocusTraceApp: App {
@@ -24,7 +31,7 @@ struct FocusTraceApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("FocusTrace", id: "main") {
+        Window("FocusTrace", id: FocusTraceWindowContract.mainWindowID) {
             if isSpaceAnchorProbe {
                 SpaceAnchorProbeView()
                     .frame(width: 1, height: 1)
@@ -32,7 +39,11 @@ struct FocusTraceApp: App {
                 RootView(state: state)
                     .frame(minWidth: 920, minHeight: 640)
                     .environmentObject(updateManager)
-                    .task { state.start() }
+                    .task {
+                        try? CodexWorkspaceMaintenance
+                            .refreshExistingWorkspaceIfPresent()
+                        state.start()
+                    }
                     .task {
                         await updateManager.checkAutomatically(
                             enabled: state.preferences.automaticUpdateChecks
@@ -41,28 +52,42 @@ struct FocusTraceApp: App {
             }
         }
         .defaultSize(width: 1080, height: 760)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+        }
 
         MenuBarExtra {
             MenuBarView(state: state)
                 .environmentObject(updateManager)
         } label: {
-            Label {
-                Text(
-                    state.currentFocusID == nil
-                        ? "FocusTrace"
-                        : "FocusTrace 正在专注"
-                )
-            } icon: {
-                FocusTraceStatusMark(isFocusing: state.currentFocusID != nil)
-            }
-            .labelStyle(.iconOnly)
+            FocusTraceStatusItemLabel(state: state)
         }
         .menuBarExtraStyle(.window)
+    }
+}
 
-        Settings {
-            SettingsView(state: state)
-                .frame(width: 620, height: 560)
-                .environmentObject(updateManager)
+private struct FocusTraceStatusItemLabel: View {
+    @ObservedObject var state: ApplicationState
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Label {
+            Text(
+                state.currentFocusID == nil
+                    ? "FocusTrace"
+                    : "FocusTrace 正在专注"
+            )
+        } icon: {
+            FocusTraceStatusMark(isFocusing: state.currentFocusID != nil)
+        }
+        .labelStyle(.iconOnly)
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .focusTraceOpenMainWindowRequested
+            )
+        ) { _ in
+            openWindow(id: FocusTraceWindowContract.mainWindowID)
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }

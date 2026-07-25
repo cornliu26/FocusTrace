@@ -1,0 +1,29 @@
+name: FocusTrace Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: focustrace-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: macos-14
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+
+      - name: Select Swift toolchain
+        run: sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
+
+      - name: Run unit, regression, privacy, and performance gates
+        env:
+          FOCUSTRACE_NATIVE_TESTING: "1"
+        run: ./Scripts/test.sh
