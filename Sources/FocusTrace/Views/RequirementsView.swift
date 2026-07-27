@@ -86,6 +86,7 @@ struct RequirementsView: View {
                         }
                         .padding(.top, 10)
                     }
+                    .focusTraceDisclosureHitTarget(isExpanded: $showCompleted)
                     .padding(14)
                     .background(
                         FocusTraceTheme.cardFill(colorScheme),
@@ -528,6 +529,7 @@ struct QuickRequirementCaptureSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .padding(.top, 8)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showSource)
             .font(.callout)
 
             HStack {

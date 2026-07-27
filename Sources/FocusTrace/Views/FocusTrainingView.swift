@@ -261,10 +261,7 @@ struct FocusTrainingView: View {
         GroupBox {
             DisclosureGroup(
                 "管理工作流与允许应用",
-                isExpanded: Binding(
-                    get: { showWorkflowManagement || state.activeTasks.isEmpty },
-                    set: { showWorkflowManagement = $0 }
-                )
+                isExpanded: workflowManagementExpansion
             ) {
             VStack(spacing: 0) {
                 ForEach(state.activeTasks) { task in
@@ -351,11 +348,24 @@ struct FocusTrainingView: View {
                             .padding(.vertical, 6)
                         }
                     }
+                    .focusTraceDisclosureHitTarget(
+                        isExpanded: $showCompletedWorkflows
+                    )
                 }
             }
             .padding(8)
             }
+            .focusTraceDisclosureHitTarget(
+                isExpanded: workflowManagementExpansion
+            )
         }
+    }
+
+    private var workflowManagementExpansion: Binding<Bool> {
+        Binding(
+            get: { showWorkflowManagement || state.activeTasks.isEmpty },
+            set: { showWorkflowManagement = $0 }
+        )
     }
 
     private var privacyNote: some View {

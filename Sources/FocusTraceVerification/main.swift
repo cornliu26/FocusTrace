@@ -269,10 +269,10 @@ suite.run("已优化的日常交互契约保持稳定") {
     )
 }
 
-suite.run("所有展开标题共享宽命中区域且一次只切换一次") {
+suite.run("展开箭头扩大命中范围但不改变视觉布局") {
     try expect(
-        FocusTraceDisclosureInteraction.minimumHitTargetHeight >= 44,
-        "展开标题的最小命中高度不能低于 44pt"
+        FocusTraceDisclosureInteraction.hitTargetSize == 36,
+        "展开箭头应使用 36pt 的不可见点击热区"
     )
     let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
         isExpanded: false
@@ -286,17 +286,38 @@ suite.run("所有展开标题共享宽命中区域且一次只切换一次") {
         fileURLWithPath: FileManager.default.currentDirectoryPath,
         isDirectory: true
     )
-    let theme = try String(
-        contentsOf: root.appendingPathComponent(
-            "Sources/FocusTrace/Views/FocusTraceTheme.swift"
-        ),
-        encoding: .utf8
+    func contents(_ path: String) throws -> String {
+        try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+    let theme = try contents(
+        "Sources/FocusTrace/Views/FocusTraceTheme.swift"
     )
     try expect(
-        theme.contains(
-            ".disclosureGroupStyle(FocusTraceWideDisclosureGroupStyle())"
-        ) && theme.contains(".contentShape(Rectangle())"),
-        "FocusTrace 视觉系统必须把宽命中样式应用到所有展开控件"
+        theme.contains("content.overlay(alignment: .topLeading)")
+            && !theme.contains("FocusTraceWideDisclosureGroupStyle"),
+        "点击热区必须作为不可见 overlay 存在，不能替换系统 DisclosureGroup 布局"
+    )
+
+    let disclosureSources = try [
+        "Sources/FocusTrace/Views/TimelineView.swift",
+        "Sources/FocusTrace/Views/RequirementsView.swift",
+        "Sources/FocusTrace/Views/FocusTrainingView.swift",
+        "Sources/FocusTrace/Views/ReviewView.swift",
+        "Sources/FocusTrace/Views/OnboardingView.swift",
+        "Sources/FocusTrace/Views/TaskEditor.swift"
+    ].map(contents).joined(separator: "\n")
+    let disclosureCount = disclosureSources.components(
+        separatedBy: "DisclosureGroup"
+    ).count - 1
+    let expandedHitTargetCount = disclosureSources.components(
+        separatedBy: ".focusTraceDisclosureHitTarget("
+    ).count - 1
+    try expect(
+        disclosureCount == expandedHitTargetCount,
+        "每个展开控件都必须单独增加箭头热区，不能通过全局宽行样式实现"
     )
 }
 
@@ -2272,7 +2293,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     for evidence in [
         "activationClosesPreviousAndIgnoresDuplicate",
         "calendarPopoverAnchorPressesAlternateExactlyOnce",
-        "disclosureRowsUseLargeHitAreaAndToggleExactlyOnce",
+        "disclosureButtonsExpandHitAreaWithoutChangingLayout",
         "requirementCalendarBoundsAllowFutureAndRespectEarliestDate",
         "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
         "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",

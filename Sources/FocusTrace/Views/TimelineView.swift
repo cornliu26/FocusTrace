@@ -175,6 +175,7 @@ struct TimelineView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showRawActivities)
             .padding(4)
         }
     }

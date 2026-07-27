@@ -94,7 +94,7 @@ public enum FocusTraceCalendarBounds {
 }
 
 public enum FocusTraceDisclosureInteraction {
-    public static let minimumHitTargetHeight = 44.0
+    public static let hitTargetSize = 36.0
 
     public static func stateAfterHeaderPress(isExpanded: Bool) -> Bool {
         !isExpanded

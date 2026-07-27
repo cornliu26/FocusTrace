@@ -184,8 +184,8 @@ func optimizedDailyUXContractRemainsStable() {
 }
 
 @Test
-func disclosureRowsUseLargeHitAreaAndToggleExactlyOnce() {
-    #expect(FocusTraceDisclosureInteraction.minimumHitTargetHeight >= 44)
+func disclosureButtonsExpandHitAreaWithoutChangingLayout() {
+    #expect(FocusTraceDisclosureInteraction.hitTargetSize == 36)
     let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
         isExpanded: false
     )

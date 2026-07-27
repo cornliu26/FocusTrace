@@ -907,44 +907,32 @@ struct FocusTraceGroupBoxStyle: GroupBoxStyle {
     }
 }
 
-struct FocusTraceWideDisclosureGroupStyle: DisclosureGroupStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+struct FocusTraceDisclosureHitTargetModifier: ViewModifier {
+    @Binding var isExpanded: Bool
+
+    func body(content: Content) -> some View {
+        content.overlay(alignment: .topLeading) {
             Button {
-                configuration.isExpanded =
+                isExpanded =
                     FocusTraceDisclosureInteraction.stateAfterHeaderPress(
-                        isExpanded: configuration.isExpanded
+                        isExpanded: isExpanded
                     )
             } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(
-                            configuration.isExpanded ? .degrees(90) : .zero
+                Color.clear
+                    .frame(
+                        width: CGFloat(
+                            FocusTraceDisclosureInteraction.hitTargetSize
+                        ),
+                        height: CGFloat(
+                            FocusTraceDisclosureInteraction.hitTargetSize
                         )
-                        .frame(width: 16)
-
-                    configuration.label
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(
-                    maxWidth: .infinity,
-                    minHeight: CGFloat(
-                        FocusTraceDisclosureInteraction.minimumHitTargetHeight
-                    ),
-                    alignment: .leading
-                )
-                .contentShape(Rectangle())
+                    )
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? "已展开" : "已折叠")
-
-            if configuration.isExpanded {
-                configuration.content
-            }
+            .offset(x: -10, y: -8)
+            .accessibilityHidden(true)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1002,7 +990,6 @@ struct FocusTraceVisualSystemModifier: ViewModifier {
         content
             .tint(FocusTraceTheme.mint)
             .groupBoxStyle(FocusTraceGroupBoxStyle())
-            .disclosureGroupStyle(FocusTraceWideDisclosureGroupStyle())
     }
 }
 
@@ -1017,5 +1004,13 @@ extension View {
 
     func focusTraceVisualSystem() -> some View {
         modifier(FocusTraceVisualSystemModifier())
+    }
+
+    func focusTraceDisclosureHitTarget(
+        isExpanded: Binding<Bool>
+    ) -> some View {
+        modifier(
+            FocusTraceDisclosureHitTargetModifier(isExpanded: isExpanded)
+        )
     }
 }

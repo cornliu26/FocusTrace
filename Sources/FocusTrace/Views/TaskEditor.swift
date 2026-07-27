@@ -97,6 +97,7 @@ struct TaskEditorSheet: View {
                 }
                 .padding(.top, 10)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showDetails)
 
             HStack {
                 if editingTask != nil {

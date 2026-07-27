@@ -160,6 +160,7 @@ struct ReviewView: View {
                     }
                     .padding(.top, 10)
                 }
+                .focusTraceDisclosureHitTarget(isExpanded: $showLocalEvidence)
             }
             .padding(8)
         } label: {
@@ -383,6 +384,7 @@ struct ReviewView: View {
                 }
                 .padding(.top, 12)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showDailyDetails)
             .padding(8)
         } label: {
             Text("数据证据")
@@ -503,6 +505,7 @@ struct ReviewView: View {
             }
             .padding(8)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showPlanHistory)
         }
     }
 
