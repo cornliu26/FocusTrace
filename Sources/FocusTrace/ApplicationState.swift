@@ -32,6 +32,11 @@ struct ResumedWorkflowCheckpoint: Identifiable, Equatable {
     let resumedAt: Date
 }
 
+struct WorkflowDeletionImpact: Equatable {
+    let unfinishedRequirementCount: Int
+    let spaceBindingCount: Int
+}
+
 struct TimelineViewSnapshot {
     let id: UInt64
     let renderNow: Date
@@ -152,6 +157,13 @@ final class ApplicationState: ObservableObject {
     var completedWorkflows: [FocusTaskModel] {
         tasks.filter { $0.workflowLifecycle == .completed }
             .sorted { ($0.completedAt ?? .distantPast) > ($1.completedAt ?? .distantPast) }
+    }
+
+    var inactiveWorkflows: [FocusTaskModel] {
+        tasks.filter { $0.workflowLifecycle != .open }
+            .sorted {
+                ($0.completedAt ?? $0.createdAt) > ($1.completedAt ?? $1.createdAt)
+            }
     }
 
     var currentTask: FocusTaskModel? {
@@ -485,11 +497,11 @@ final class ApplicationState: ObservableObject {
     ) {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanTitle.isEmpty else { return }
-        createTask(
+        guard createTask(
             title: cleanTitle,
             expectedOutcome: expectedOutcome,
             allowedBundleIDs: allowedBundleIDs
-        )
+        ) else { return }
         preferences.completeOnboarding()
         if let currentTaskID {
             bindCurrentSpace(to: currentTaskID)
@@ -507,13 +519,13 @@ final class ApplicationState: ObservableObject {
         objectWillChange.send()
     }
 
+    @discardableResult
     func createTask(
         title: String,
         expectedOutcome: String,
         allowedBundleIDs: Set<String>
-    ) {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return }
+    ) -> Bool {
+        guard let cleanTitle = validatedWorkflowTitle(title) else { return false }
         let task = FocusTaskModel(
             title: cleanTitle,
             expectedOutcome: expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -523,6 +535,7 @@ final class ApplicationState: ObservableObject {
         tasks.append(task)
         saveOrReport()
         switchTask(to: task.id)
+        return true
     }
 
     @discardableResult
@@ -531,8 +544,7 @@ final class ApplicationState: ObservableObject {
         expectedOutcome: String = "",
         allowedBundleIDs: Set<String> = []
     ) -> FocusTaskModel? {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return nil }
+        guard let cleanTitle = validatedWorkflowTitle(title) else { return nil }
         let workflow = FocusTaskModel(
             title: cleanTitle,
             expectedOutcome: expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -617,59 +629,67 @@ final class ApplicationState: ObservableObject {
         return workflow.id
     }
 
-    func startRequirement(_ id: UUID, in fallbackWorkflowID: UUID? = nil) {
+    @discardableResult
+    func startRequirement(_ id: UUID, in fallbackWorkflowID: UUID? = nil) -> Bool {
         guard let requirement = requirements.first(where: { $0.id == id }) else {
-            return
+            return false
         }
-        guard !RequirementEngine.needsPlanning(requirement.record) else {
-            errorMessage = "请先确认这个需求的截止日期、重要程度和工作流安排。"
-            return
+        let assignedWorkflowID = requirement.workflowID.flatMap { candidate in
+            activeTasks.contains(where: { $0.id == candidate }) ? candidate : nil
         }
         guard
-              let workflowID = requirement.workflowID ?? fallbackWorkflowID,
+              let workflowID = assignedWorkflowID ?? fallbackWorkflowID,
               activeTasks.contains(where: { $0.id == workflowID })
         else {
-            errorMessage = "请先把这个需求安排到一个进行中的工作流。"
-            return
-        }
-        if requirement.workflowID == nil {
-            requirement.workflowID = workflowID
-            requirement.status = .planned
+            errorMessage = "请选择一个进行中的工作流来处理这条需求。"
+            return false
         }
 
         if isSpaceWorkflowModeEnabled {
             if let currentSpaceWorkflowID, currentSpaceWorkflowID != workflowID {
                 errorMessage = "当前桌面已绑定到“\(taskName(for: currentSpaceWorkflowID))”。请切到目标工作流的桌面，或先解除当前桌面绑定。"
-                return
+                return false
             }
             if currentSpaceWorkflowID == nil {
                 bindCurrentSpace(to: workflowID)
-                guard currentSpaceWorkflowID == workflowID else { return }
+                guard currentSpaceWorkflowID == workflowID else { return false }
             }
         } else {
             switchTask(to: workflowID)
         }
 
         for item in requirements where item.status == .active && item.id != id {
-            item.status = .planned
+            applyRequirementRecord(
+                RequirementEngine.paused(item.record),
+                to: item
+            )
         }
-        requirement.status = .active
+        applyRequirementRecord(
+            RequirementEngine.started(requirement.record, in: workflowID),
+            to: requirement
+        )
         selectedAppSection = .focus
         saveOrReport()
         objectWillChange.send()
+        return true
     }
 
     func completeRequirement(_ id: UUID) {
         guard let requirement = requirements.first(where: { $0.id == id }) else { return }
-        requirement.status = .completed
-        requirement.completedAt = Date()
+        applyRequirementRecord(
+            RequirementEngine.completed(requirement.record),
+            to: requirement
+        )
         saveOrReport()
         objectWillChange.send()
     }
 
     func archiveRequirement(_ id: UUID) {
         guard let requirement = requirements.first(where: { $0.id == id }) else { return }
-        requirement.status = .archived
+        applyRequirementRecord(
+            RequirementEngine.archived(requirement.record),
+            to: requirement
+        )
         saveOrReport()
         objectWillChange.send()
     }
@@ -679,13 +699,13 @@ final class ApplicationState: ObservableObject {
         showMainWindow()
     }
 
+    @discardableResult
     func createWorkflowAndBindCurrentSpace(
         title: String,
         expectedOutcome: String = "",
         allowedBundleIDs: Set<String> = []
-    ) {
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return }
+    ) -> Bool {
+        guard let cleanTitle = validatedWorkflowTitle(title) else { return false }
         let workflow = FocusTaskModel(
             title: cleanTitle,
             expectedOutcome: expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -695,26 +715,102 @@ final class ApplicationState: ObservableObject {
         tasks.append(workflow)
         saveOrReport()
         bindCurrentSpace(to: workflow.id)
+        return true
     }
 
     var suggestedWorkflowTitle: String {
-        "工作流 \(tasks.count + 1)"
+        var index = 1
+        while !WorkflowNamePolicy.isAvailable(
+            "工作流 \(index)",
+            among: tasks.map(\.title)
+        ) {
+            index += 1
+        }
+        return "工作流 \(index)"
     }
 
+    @discardableResult
     func updateTask(
         id: UUID,
         title: String,
         expectedOutcome: String,
         allowedBundleIDs: Set<String>
-    ) {
-        guard let task = tasks.first(where: { $0.id == id }) else { return }
-        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return }
+    ) -> Bool {
+        guard let task = tasks.first(where: { $0.id == id }),
+              let cleanTitle = validatedWorkflowTitle(title, excluding: id)
+        else { return false }
         task.title = cleanTitle
         task.expectedOutcome = expectedOutcome.trimmingCharacters(in: .whitespacesAndNewlines)
         task.allowedBundleIDs = Array(allowedBundleIDs).sorted()
         saveOrReport()
         objectWillChange.send()
+        return true
+    }
+
+    func workflowNameValidationMessage(
+        for proposedTitle: String,
+        excluding excludedID: UUID? = nil
+    ) -> String? {
+        guard WorkflowNamePolicy.normalizedTitle(proposedTitle) != nil else {
+            return "请输入工作流名称。"
+        }
+        let existingTitles = tasks
+            .filter { $0.id != excludedID }
+            .map(\.title)
+        guard WorkflowNamePolicy.isAvailable(
+            proposedTitle,
+            among: existingTitles
+        ) else {
+            return "已经有同名工作流，请换一个更容易辨认的名称。"
+        }
+        return nil
+    }
+
+    func workflowDeletionImpact(for id: UUID) -> WorkflowDeletionImpact? {
+        guard tasks.contains(where: { $0.id == id }) else { return nil }
+        return WorkflowDeletionImpact(
+            unfinishedRequirementCount: requirements.filter {
+                $0.workflowID == id
+                    && ![RequirementStatus.completed, .archived].contains($0.status)
+            }.count,
+            spaceBindingCount: workflowSpaceBindings.filter {
+                $0.workflowID == id
+                    && [.verified, .needsRebind, .conflict].contains($0.state)
+            }.count
+        )
+    }
+
+    @discardableResult
+    func deleteWorkflow(_ id: UUID) -> Bool {
+        guard let workflow = tasks.first(where: { $0.id == id }) else {
+            return false
+        }
+        let date = Date()
+        if currentFocus?.taskID == id { endFocus() }
+        if currentTaskID == id { switchTask(to: nil, source: .space) }
+        releaseAllSpaceBindings(for: id, state: .released)
+        activeTaskParkings
+            .filter { $0.taskID == id }
+            .forEach { $0.dismissedAt = date }
+        for requirement in requirements where requirement.workflowID == id {
+            applyRequirementRecord(
+                RequirementEngine.detachedFromWorkflow(
+                    requirement.record,
+                    workflowID: id
+                ),
+                to: requirement
+            )
+        }
+        if pendingWorkflowUndo?.workflowID == id {
+            workflowUndoTask?.cancel()
+            workflowUndoTask = nil
+            pendingWorkflowUndo = nil
+        }
+        store.delete(workflow)
+        tasks.removeAll { $0.id == id }
+        saveOrReport()
+        objectWillChange.send()
+        return true
     }
 
     func archiveTask(_ id: UUID) {
@@ -2133,6 +2229,36 @@ final class ApplicationState: ObservableObject {
         workflowSpaceBindings = store.workflowSpaceBindings.sorted { $0.boundAt < $1.boundAt }
         requirements = store.requirements.sorted { $0.capturedAt < $1.capturedAt }
         invalidateTimelinePresentation()
+    }
+
+    private func validatedWorkflowTitle(
+        _ proposedTitle: String,
+        excluding excludedID: UUID? = nil
+    ) -> String? {
+        if let validationMessage = workflowNameValidationMessage(
+            for: proposedTitle,
+            excluding: excludedID
+        ) {
+            errorMessage = validationMessage
+            return nil
+        }
+        return WorkflowNamePolicy.normalizedTitle(proposedTitle)
+    }
+
+    private func applyRequirementRecord(
+        _ record: RequirementRecord,
+        to model: RequirementItemModel
+    ) {
+        model.title = record.title
+        model.source = record.source
+        model.dueDate = record.dueDate
+        model.importance = record.importance
+        model.reminderSentAt = record.reminderSentAt
+        model.planningVersion = record.planningVersion
+        model.priority = record.priority
+        model.status = record.status
+        model.workflowID = record.workflowID
+        model.completedAt = record.completedAt
     }
 
     private func saveOrReport() {

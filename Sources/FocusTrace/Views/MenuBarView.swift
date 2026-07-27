@@ -139,7 +139,7 @@ struct MenuBarView: View {
         }
         if summary.needsPlanningCount > 0 {
             return (
-                "\(summary.needsPlanningCount) 个需求待整理",
+                "\(summary.needsPlanningCount) 个需求待决定",
                 "tray.full",
                 FocusTraceTheme.sky
             )
@@ -534,19 +534,35 @@ private struct QuickWorkflowCreatorSheet: View {
                 Button("取消") { dismiss() }
                 Spacer()
                 Button("创建并绑定") {
-                    state.createWorkflowAndBindCurrentSpace(
+                    if state.createWorkflowAndBindCurrentSpace(
                         title: title,
                         expectedOutcome: ""
-                    )
-                    dismiss()
+                    ) {
+                        dismiss()
+                    }
                 }
                 .buttonStyle(FocusTracePrimaryButtonStyle())
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    WorkflowNamePolicy.normalizedTitle(title) == nil
+                        || workflowNameConflict != nil
+                )
+            }
+            if let validationMessage = workflowNameConflict {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
         .padding(22)
         .frame(width: 440)
         .focusTraceScreen()
         .focusTraceVisualSystem()
+    }
+
+    private var workflowNameConflict: String? {
+        guard WorkflowNamePolicy.normalizedTitle(title) != nil else {
+            return nil
+        }
+        return state.workflowNameValidationMessage(for: title)
     }
 }

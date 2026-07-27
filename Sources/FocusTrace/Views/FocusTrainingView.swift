@@ -6,6 +6,7 @@ struct FocusTrainingView: View {
     @State private var showingNewTask = false
     @State private var editingTask: FocusTaskModel?
     @State private var workflowToComplete: FocusTaskModel?
+    @State private var workflowToDelete: FocusTaskModel?
     @State private var showCompletedWorkflows = false
     @State private var showWorkflowManagement = false
 
@@ -55,6 +56,26 @@ struct FocusTrainingView: View {
             }
         } message: {
             Text("会闭合当前区间并释放桌面绑定；30 秒内可以撤销。")
+        }
+        .confirmationDialog(
+            "删除这个工作流？",
+            isPresented: Binding(
+                get: { workflowToDelete != nil },
+                set: { if !$0 { workflowToDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let workflowToDelete {
+                Button("删除“\(workflowToDelete.title)”", role: .destructive) {
+                    state.deleteWorkflow(workflowToDelete.id)
+                    self.workflowToDelete = nil
+                }
+                Button("取消", role: .cancel) {
+                    self.workflowToDelete = nil
+                }
+            }
+        } message: {
+            Text(workflowDeletionMessage)
         }
     }
 
@@ -309,6 +330,9 @@ struct FocusTrainingView: View {
                         } label: {
                             Label("完成", systemImage: "checkmark.circle")
                         }
+                        Button("删除…", role: .destructive) {
+                            workflowToDelete = task
+                        }
                     }
                     .padding(.vertical, 9)
                     if task.id != state.activeTasks.last?.id { Divider() }
@@ -327,17 +351,21 @@ struct FocusTrainingView: View {
                 }
                 .padding(.top, 12)
 
-                if !state.completedWorkflows.isEmpty {
+                if !state.inactiveWorkflows.isEmpty {
                     Divider().padding(.vertical, 10)
                     DisclosureGroup(
-                        "已完成工作流（\(state.completedWorkflows.count)）",
+                        "已结束工作流（\(state.inactiveWorkflows.count)）",
                         isExpanded: $showCompletedWorkflows
                     ) {
-                        ForEach(state.completedWorkflows) { workflow in
+                        ForEach(state.inactiveWorkflows) { workflow in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(workflow.title)
-                                    if let completedAt = workflow.completedAt {
+                                    if workflow.workflowLifecycle == .archived {
+                                        Text("已归档")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else if let completedAt = workflow.completedAt {
                                         Text("完成于 \(completedAt.formatted(date: .abbreviated, time: .shortened))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
@@ -345,7 +373,9 @@ struct FocusTrainingView: View {
                                 }
                                 Spacer()
                                 Button("重新打开") { state.reopenWorkflow(workflow.id) }
-                                Button("归档") { state.archiveTask(workflow.id) }
+                                Button("删除…", role: .destructive) {
+                                    workflowToDelete = workflow
+                                }
                             }
                             .padding(.vertical, 6)
                         }
@@ -355,6 +385,21 @@ struct FocusTrainingView: View {
             .padding(8)
             }
         }
+    }
+
+    private var workflowDeletionMessage: String {
+        guard let workflowToDelete,
+              let impact = state.workflowDeletionImpact(for: workflowToDelete.id)
+        else {
+            return "历史时间轴和训练记录会保留。"
+        }
+        let requirements = impact.unfinishedRequirementCount == 0
+            ? "没有未完成需求需要解绑"
+            : "\(impact.unfinishedRequirementCount) 条未完成需求会回到“未指定工作流”"
+        let bindings = impact.spaceBindingCount == 0
+            ? "没有桌面绑定"
+            : "\(impact.spaceBindingCount) 个桌面绑定会解除"
+        return "\(requirements)，\(bindings)。历史时间轴和训练记录会保留。"
     }
 
     private var privacyNote: some View {

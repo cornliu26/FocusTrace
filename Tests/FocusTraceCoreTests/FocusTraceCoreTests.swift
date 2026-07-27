@@ -419,6 +419,88 @@ func requirementPlanningSeparatesDeadlineImportanceAndWorkflow() throws {
 }
 
 @Test
+func requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow() throws {
+    let workflowID = UUID()
+    let first = try #require(RequirementEngine.captured(title: "补上失败告警"))
+    let second = try #require(RequirementEngine.captured(title: "补充运行手册"))
+    let attachedFirst = RequirementEngine.attached(first, to: workflowID)
+    let attachedSecond = RequirementEngine.attached(second, to: workflowID)
+
+    let started = RequirementEngine.started(attachedFirst, in: workflowID)
+    #expect(RequirementEngine.needsPlanning(started))
+    #expect(started.status == .active)
+    #expect(started.workflowID == workflowID)
+
+    let completed = RequirementEngine.completed(
+        started,
+        at: Date(timeIntervalSince1970: 100)
+    )
+    #expect(completed.status == .completed)
+    #expect(completed.workflowID == workflowID)
+    #expect(attachedSecond.status == .inbox)
+    #expect(attachedSecond.workflowID == workflowID)
+}
+
+@Test
+func deletingWorkflowDetachesOnlyItsUnfinishedRequirements() throws {
+    let workflowID = UUID()
+    let otherWorkflowID = UUID()
+    let active = RequirementEngine.started(
+        try #require(RequirementEngine.captured(title: "正在做")),
+        in: workflowID
+    )
+    let completed = RequirementEngine.completed(
+        RequirementEngine.attached(
+            try #require(RequirementEngine.captured(title: "已经做完")),
+            to: workflowID
+        )
+    )
+    let unrelated = RequirementEngine.attached(
+        try #require(RequirementEngine.captured(title: "其他工作流")),
+        to: otherWorkflowID
+    )
+
+    let detached = RequirementEngine.detachedFromWorkflow(
+        active,
+        workflowID: workflowID
+    )
+    #expect(detached.workflowID == nil)
+    #expect(detached.status == .inbox)
+    #expect(
+        RequirementEngine.detachedFromWorkflow(
+            completed,
+            workflowID: workflowID
+        ) == completed
+    )
+    #expect(
+        RequirementEngine.detachedFromWorkflow(
+            unrelated,
+            workflowID: workflowID
+        ) == unrelated
+    )
+}
+
+@Test
+func workflowNamesAreUniqueAfterWhitespaceCaseAndWidthNormalization() {
+    #expect(
+        WorkflowNamePolicy.normalizedTitle("  发布   FocusTrace  ")
+            == "发布 FocusTrace"
+    )
+    #expect(!WorkflowNamePolicy.isAvailable(
+        "发布  focustrace",
+        among: ["发布 FocusTrace"]
+    ))
+    #expect(!WorkflowNamePolicy.isAvailable(
+        "Ｆｏｃｕｓ Ｔｒａｃｅ",
+        among: ["focus trace"]
+    ))
+    #expect(WorkflowNamePolicy.isAvailable(
+        "发布 FocusTrace 2",
+        among: ["发布 FocusTrace"]
+    ))
+}
+
+@Test
 func requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!

@@ -517,6 +517,83 @@ suite.run("需求截止日期、重要程度和工作流彼此独立") {
     try expect(!RequirementEngine.needsPlanning(planned), "完整整理后应离开待整理")
 }
 
+suite.run("需求无需先整理即可处理且在同一工作流内独立完成") {
+    let workflowID = UUID()
+    guard let first = RequirementEngine.captured(title: "补上失败告警"),
+          let second = RequirementEngine.captured(title: "补充运行手册")
+    else {
+        throw VerificationFailure(message: "有效需求应能被收下")
+    }
+    let attachedFirst = RequirementEngine.attached(first, to: workflowID)
+    let attachedSecond = RequirementEngine.attached(second, to: workflowID)
+    let started = RequirementEngine.started(attachedFirst, in: workflowID)
+
+    try expect(
+        RequirementEngine.needsPlanning(started),
+        "未安排日期的重要需求仍应保留待确认信息"
+    )
+    try expect(started.status == .active, "处理决定不能被安排详情阻塞")
+    try expect(started.workflowID == workflowID, "处理后应归入目标工作流")
+
+    let completed = RequirementEngine.completed(started, at: Date(timeIntervalSince1970: 100))
+    try expect(completed.status == .completed, "完成应只更新当前需求")
+    try expect(completed.workflowID == workflowID, "完成需求不应丢失工作流关系")
+    try expect(attachedSecond.status == .inbox, "同一工作流中的其他需求不应被完成")
+    try expect(attachedSecond.workflowID == workflowID, "工作流应能承接多条需求")
+}
+
+suite.run("工作流删除只解绑未完成需求") {
+    let workflowID = UUID()
+    let otherWorkflowID = UUID()
+    guard let activeSource = RequirementEngine.captured(title: "正在做"),
+          let completedSource = RequirementEngine.captured(title: "已经做完"),
+          let unrelatedSource = RequirementEngine.captured(title: "其他工作流")
+    else {
+        throw VerificationFailure(message: "有效需求应能被收下")
+    }
+    let active = RequirementEngine.started(activeSource, in: workflowID)
+    let completed = RequirementEngine.completed(
+        RequirementEngine.attached(completedSource, to: workflowID)
+    )
+    let unrelated = RequirementEngine.attached(unrelatedSource, to: otherWorkflowID)
+    let detached = RequirementEngine.detachedFromWorkflow(
+        active,
+        workflowID: workflowID
+    )
+
+    try expect(detached.workflowID == nil, "未完成需求应回到未指定工作流")
+    try expect(detached.status == .inbox, "未整理的活动需求应回到收件状态")
+    try expect(
+        RequirementEngine.detachedFromWorkflow(completed, workflowID: workflowID) == completed,
+        "已完成需求的历史关系应保留"
+    )
+    try expect(
+        RequirementEngine.detachedFromWorkflow(unrelated, workflowID: workflowID) == unrelated,
+        "删除一个工作流不能影响其他工作流的需求"
+    )
+}
+
+suite.run("工作流名称规范化后保持唯一") {
+    try expect(
+        WorkflowNamePolicy.normalizedTitle("  发布   FocusTrace  ") == "发布 FocusTrace",
+        "工作流名称应折叠多余空白"
+    )
+    try expect(
+        !WorkflowNamePolicy.isAvailable(
+            "发布  focustrace",
+            among: ["发布 FocusTrace"]
+        ),
+        "大小写和空白变体不能重复注册"
+    )
+    try expect(
+        !WorkflowNamePolicy.isAvailable(
+            "Ｆｏｃｕｓ Ｔｒａｃｅ",
+            among: ["focus trace"]
+        ),
+        "字符宽度变体不能重复注册"
+    )
+}
+
 suite.run("需求队列按紧迫性再按重要程度排序") {
     let calendar = utcCalendar()
     let now = calendar.date(from: DateComponents(
@@ -1942,6 +2019,59 @@ suite.run("JSON 导出可往返") {
     try expect(decoded.taskParkings.isEmpty, "空停车数组往返失败")
 }
 
+suite.run("需求日常操作保持两态且工作流删除入口可见") {
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    func contents(_ path: String) throws -> String {
+        try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+    let requirementsView = try contents(
+        "Sources/FocusTrace/Views/RequirementsView.swift"
+    )
+    try expect(
+        requirementsView.contains("Button(\"处理\")")
+            && requirementsView.contains("Button(\"不处理\""),
+        "未完成需求必须把处理和不处理作为两个显式日常决策"
+    )
+    try expect(
+        requirementsView.contains("Button(\"完成需求\")"),
+        "正在处理的需求必须能独立完成"
+    )
+    try expect(
+        !requirementsView.contains("Button(\"开始处理\")")
+            && !requirementsView.contains("Button(\"在当前工作流处理\")"),
+        "需求卡片不能重新暴露内部规划状态分支"
+    )
+    try expect(
+        requirementsView.contains("调整时间、重要程度与工作流…"),
+        "时间、重要程度和归属必须保留在次级详情路径"
+    )
+
+    let focusView = try contents(
+        "Sources/FocusTrace/Views/FocusTrainingView.swift"
+    )
+    try expect(
+        focusView.contains("Button(\"删除…\", role: .destructive)"),
+        "进行中和已结束工作流都必须有明确删除入口"
+    )
+    try expect(
+        focusView.contains("历史时间轴和训练记录会保留"),
+        "删除确认必须明确历史数据保留边界"
+    )
+
+    let state = try contents("Sources/FocusTrace/ApplicationState.swift")
+    try expect(
+        state.contains("func workflowNameValidationMessage(")
+            && state.contains("func deleteWorkflow("),
+        "所有创建路径必须共用名称校验，工作流删除必须由状态层负责"
+    )
+}
+
 suite.run("README 首页保持面向用户且技术细节折叠") {
     let readmeURL = URL(
         fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -1972,7 +2102,7 @@ suite.run("README 首页保持面向用户且技术细节折叠") {
     }
     for currentCapability in [
         "### 需求箱",
-        "只有明确点击“开始处理”才会激活它的上下文",
+        "准备做时点击“处理”",
         "### Codex 每日行动复盘",
         "**当前问题**",
         "**今天怎么做**",
@@ -2023,7 +2153,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let quality = try contents("Docs/QUALITY_GATES.md")
     for contractID in [
-        "CAP-01", "UX-03", "UX-04", "REQ-01", "PRIV-01",
+        "CAP-01", "UX-03", "UX-04", "REQ-01", "REQ-04", "FLOW-02", "PRIV-01",
         "PERF-01", "PERF-04"
     ] {
         try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
@@ -2035,6 +2165,9 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
         "calendarPopoverAnchorPressesAlternateExactlyOnce",
         "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
         "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",
+        "requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow",
+        "deletingWorkflowDetachesOnlyItsUnfinishedRequirements",
+        "workflowNamesAreUniqueAfterWhitespaceCaseAndWidthNormalization",
         "requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity",
         "requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork",
         "requirementQueueHandlesOneThousandItemsWithinBudget",

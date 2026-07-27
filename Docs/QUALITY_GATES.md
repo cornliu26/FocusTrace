@@ -38,6 +38,8 @@
 | REQ-01 | 新需求只进入收件箱，不自动绑定、切换或开始工作流 | `requirementCaptureStaysInInboxUntilExplicitlyPlanned` |
 | REQ-02 | 截止日期、重要程度和工作流归属彼此独立；旧版模糊安排不推断日期 | `requirementPlanningSeparatesDeadlineImportanceAndWorkflow`、`requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity` |
 | REQ-03 | 需求按逾期、今天、未来、无日期排序；到期提醒只发送一次且不在通知中显示需求标题 | `requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity`、`requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork`、仓库隐私回归 |
+| REQ-04 | 未完成需求只暴露“处理 / 不处理”两个日常决策；无需先安排日期或重要程度即可开始；同一工作流中的需求独立完成 | `requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow`、仓库交互回归 |
+| FLOW-02 | 工作流名称按空白、大小写和字符宽度规范化后唯一；删除只解绑未完成需求和桌面，保留历史轨迹与训练记录 | `workflowNamesAreUniqueAfterWhitespaceCaseAndWidthNormalization`、`deletingWorkflowDetachesOnlyItsUnfinishedRequirements`、仓库交互回归 |
 | ATT-01 | 提醒必须同时满足会话、基线、非允许应用和时间阈值 | `distractionGateRequiresAllConditions` |
 | TRAIN-01 | 初始训练与每五次训练的升降级规则稳定 | `initialDurationUsesDefaultWhenSamplesAreInsufficient`、`fiveSessionProgression` |
 | SPACE-01 | Space 未知或冲突时停止归因，不猜测工作流 | `spaceResolutionNeverGuessesWhenUnknownOrConflicted`、`unknownSpaceClosesWorkflowWithoutCarryingAttribution` |

@@ -41,6 +41,11 @@ struct TaskEditorSheet: View {
             TextField("工作流名称", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.large)
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             Text("先保存名称就可以开始；其余信息只在你需要专注训练时再补。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -96,8 +101,9 @@ struct TaskEditorSheet: View {
                 Button("取消") { dismiss() }
                 Spacer()
                 Button(editingTask == nil ? "创建工作流" : "保存") {
+                    let didSave: Bool
                     if let editingTask {
-                        state.updateTask(
+                        didSave = state.updateTask(
                             id: editingTask.id,
                             title: title,
                             expectedOutcome: outcome,
@@ -105,23 +111,26 @@ struct TaskEditorSheet: View {
                         )
                     } else {
                         if bindCurrentSpaceOnCreate {
-                            state.createWorkflowAndBindCurrentSpace(
+                            didSave = state.createWorkflowAndBindCurrentSpace(
                                 title: title,
                                 expectedOutcome: outcome,
                                 allowedBundleIDs: selectedApps
                             )
                         } else {
-                            state.createTask(
+                            didSave = state.createTask(
                                 title: title,
                                 expectedOutcome: outcome,
                                 allowedBundleIDs: selectedApps
                             )
                         }
                     }
-                    dismiss()
+                    if didSave { dismiss() }
                 }
                 .buttonStyle(FocusTracePrimaryButtonStyle())
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    WorkflowNamePolicy.normalizedTitle(title) == nil
+                        || validationMessage != nil
+                )
             }
         }
         .padding(22)
@@ -129,6 +138,16 @@ struct TaskEditorSheet: View {
         .focusTraceScreen()
         .focusTraceVisualSystem()
         .onAppear { loadVisibleApps() }
+    }
+
+    private var validationMessage: String? {
+        guard WorkflowNamePolicy.normalizedTitle(title) != nil else {
+            return nil
+        }
+        return state.workflowNameValidationMessage(
+            for: title,
+            excluding: editingTask?.id
+        )
     }
 
     private func binding(for bundleID: String) -> Binding<Bool> {
