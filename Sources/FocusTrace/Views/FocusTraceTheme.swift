@@ -238,7 +238,8 @@ struct FocusTraceDateNavigator: View, Equatable {
                 FocusTraceInstantPopover(isPresented: $showingCalendar) {
                     FocusTraceCalendarPopover(
                         selection: $selection,
-                        latestDate: latestDay,
+                        maximumDate: latestDay,
+                        quickSelectionDate: latestDay,
                         initialLayout: initialCalendarLayout
                     ) {
                         showingCalendar = false
@@ -316,13 +317,119 @@ struct FocusTraceDateNavigator: View, Equatable {
     }
 }
 
+struct FocusTraceCompactDatePicker: View {
+    @Binding var selection: Date
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var showingCalendar = false
+
+    private let label: String
+    private let minimumDate: Date?
+    private let maximumDate: Date?
+    private let quickSelectionDate: Date
+    private let initialCalendarLayout: FocusTraceCalendarMonthLayout
+    private let calendar = Calendar.current
+
+    init(
+        _ label: String,
+        selection: Binding<Date>,
+        minimumDate: Date? = nil,
+        maximumDate: Date? = nil
+    ) {
+        self.label = label
+        _selection = selection
+        let calendar = Calendar.current
+        self.minimumDate = minimumDate.map(calendar.startOfDay(for:))
+        self.maximumDate = maximumDate.map(calendar.startOfDay(for:))
+        quickSelectionDate = calendar.startOfDay(for: Date())
+        initialCalendarLayout = FocusTraceCalendarLayoutCache.preparedLayout(
+            containing: selection.wrappedValue,
+            calendar: calendar
+        )
+    }
+
+    var body: some View {
+        Button {
+            var transaction = Transaction(animation: nil)
+            transaction.disablesAnimations =
+                !FocusTraceUXContract.calendarPopoverAnimationsEnabled
+            withTransaction(transaction) {
+                showingCalendar = FocusTraceCalendarPopoverState.next(
+                    isPresented: showingCalendar,
+                    event: .anchorPressed
+                )
+            }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "calendar")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(FocusTraceTheme.mint)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        FocusTraceTheme.mint.opacity(0.10),
+                        in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    )
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(selection.formatted(date: .long, time: .omitted))
+                        .font(.callout.weight(.semibold))
+                        .monospacedDigit()
+                }
+
+                Spacer(minLength: 12)
+
+                Image(systemName: showingCalendar ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(width: 264, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(selection.formatted(date: .long, time: .omitted))
+        .accessibilityIdentifier(
+            FocusTraceUXContract.requirementDateSelectionPresentation.rawValue
+        )
+        .background(
+            FocusTraceTheme.elevatedFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
+        }
+        .background {
+            FocusTraceInstantPopover(isPresented: $showingCalendar) {
+                FocusTraceCalendarPopover(
+                    selection: $selection,
+                    minimumDate: minimumDate,
+                    maximumDate: maximumDate,
+                    quickSelectionDate: quickSelectionDate,
+                    initialLayout: initialCalendarLayout
+                ) {
+                    showingCalendar = false
+                }
+            }
+        }
+    }
+}
+
 struct FocusTraceCalendarPopover: View {
     @Binding var selection: Date
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var layout: FocusTraceCalendarMonthLayout
 
-    private let latestDay: Date
+    private let minimumDay: Date?
+    private let maximumDay: Date?
+    private let quickSelectionDay: Date?
+    private let today: Date
     private let dismiss: () -> Void
     private let calendar = Calendar.current
     private let columns = Array(
@@ -332,14 +439,18 @@ struct FocusTraceCalendarPopover: View {
 
     init(
         selection: Binding<Date>,
-        latestDate: Date,
+        minimumDate: Date? = nil,
+        maximumDate: Date? = nil,
+        quickSelectionDate: Date? = nil,
         initialLayout: FocusTraceCalendarMonthLayout,
         dismiss: @escaping () -> Void
     ) {
         _selection = selection
         let calendar = Calendar.current
-        let normalizedLatest = calendar.startOfDay(for: latestDate)
-        self.latestDay = normalizedLatest
+        minimumDay = minimumDate.map(calendar.startOfDay(for:))
+        maximumDay = maximumDate.map(calendar.startOfDay(for:))
+        quickSelectionDay = quickSelectionDate.map(calendar.startOfDay(for:))
+        today = calendar.startOfDay(for: Date())
         self.dismiss = dismiss
         _layout = State(initialValue: initialLayout)
     }
@@ -372,6 +483,7 @@ struct FocusTraceCalendarPopover: View {
             ) {
                 moveMonth(by: -1)
             }
+            .disabled(!canMoveMonth(by: -1))
 
             Spacer()
             Text(layout.title)
@@ -385,7 +497,7 @@ struct FocusTraceCalendarPopover: View {
             ) {
                 moveMonth(by: 1)
             }
-            .disabled(!canMoveToNextMonth)
+            .disabled(!canMoveMonth(by: 1))
         }
     }
 
@@ -421,24 +533,32 @@ struct FocusTraceCalendarPopover: View {
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
             Spacer()
-            Button("今天") {
-                selection = latestDay
-                dismiss()
+            if let quickSelectionDay,
+               FocusTraceCalendarBounds.isSelectable(
+                   quickSelectionDay,
+                   minimumDate: minimumDay,
+                   maximumDate: maximumDay,
+                   calendar: calendar
+               ) {
+                Button("今天") {
+                    selection = quickSelectionDay
+                    dismiss()
+                }
+                .buttonStyle(.borderless)
+                .disabled(calendar.isDate(selection, inSameDayAs: quickSelectionDay))
             }
-            .buttonStyle(.borderless)
-            .disabled(calendar.isDate(selection, inSameDayAs: latestDay))
         }
     }
 
-    private var latestMonth: Date {
-        FocusTraceCalendarLayoutEngine.startOfMonth(
-            containing: latestDay,
+    private func canMoveMonth(by offset: Int) -> Bool {
+        let target = FocusTraceCalendarBounds.movedMonth(
+            from: layout.month,
+            by: offset,
+            minimumDate: minimumDay,
+            maximumDate: maximumDay,
             calendar: calendar
         )
-    }
-
-    private var canMoveToNextMonth: Bool {
-        layout.month < latestMonth
+        return target != layout.month
     }
 
     private func dayButton(
@@ -446,8 +566,13 @@ struct FocusTraceCalendarPopover: View {
         date: Date
     ) -> some View {
         let isSelected = calendar.isDate(date, inSameDayAs: selection)
-        let isToday = calendar.isDate(date, inSameDayAs: latestDay)
-        let isUnavailable = date > latestDay
+        let isToday = calendar.isDate(date, inSameDayAs: today)
+        let isUnavailable = !FocusTraceCalendarBounds.isSelectable(
+            date,
+            minimumDate: minimumDay,
+            maximumDate: maximumDay,
+            calendar: calendar
+        )
 
         return Button {
             selection = calendar.startOfDay(for: date)
@@ -501,10 +626,11 @@ struct FocusTraceCalendarPopover: View {
     }
 
     private func moveMonth(by offset: Int) {
-        let target = FocusTraceCalendarLayoutEngine.movedMonth(
+        let target = FocusTraceCalendarBounds.movedMonth(
             from: layout.month,
             by: offset,
-            latestDate: latestDay,
+            minimumDate: minimumDay,
+            maximumDate: maximumDay,
             calendar: calendar
         )
         layout = FocusTraceCalendarLayoutCache.preparedLayout(

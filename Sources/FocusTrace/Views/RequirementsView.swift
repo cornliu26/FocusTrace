@@ -600,20 +600,11 @@ private struct RequirementPlanningSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("有明确截止日期", isOn: $hasDeadline)
                     if hasDeadline {
-                        DatePicker(
+                        FocusTraceCompactDatePicker(
                             "截止日期",
                             selection: $deadline,
-                            in: earliestDeadline...,
-                            displayedComponents: .date
+                            minimumDate: earliestDeadline
                         )
-                        .datePickerStyle(.graphical)
-                        .labelsHidden()
-                        .accessibilityIdentifier(
-                            FocusTraceUXContract
-                                .requirementDateSelectionPresentation
-                                .rawValue
-                        )
-                        .frame(maxWidth: .infinity)
                     } else {
                         Text("没有时间承诺的需求仍会保留，但不会触发到期提醒。")
                             .font(.caption)

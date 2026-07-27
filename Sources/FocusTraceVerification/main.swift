@@ -232,8 +232,9 @@ suite.run("已优化的日常交互契约保持稳定") {
         "日期选择必须保持图形化日历弹层，不能退化为日期列表"
     )
     try expect(
-        FocusTraceUXContract.requirementDateSelectionPresentation == .graphicalCalendar,
-        "需求截止日期必须保持图形化日历，不能退化为日期列表"
+        FocusTraceUXContract.requirementDateSelectionPresentation
+            == .graphicalCalendarPopover,
+        "需求截止日期必须保持紧凑图形日历弹层，不能退化为内嵌日历或日期列表"
     )
     try expect(
         !FocusTraceUXContract.calendarPopoverAnimationsEnabled
@@ -265,6 +266,67 @@ suite.run("已优化的日常交互契约保持稳定") {
     try expect(
         !FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled,
         "当前工作流不能给每个碎片添加深色描边"
+    )
+}
+
+suite.run("需求日期弹层允许未来日期且尊重下界") {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let earliest = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 27)
+    )!
+    let previousDay = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 26)
+    )!
+    let futureDay = calendar.date(
+        from: DateComponents(year: 2026, month: 8, day: 15)
+    )!
+
+    try expect(
+        !FocusTraceCalendarBounds.isSelectable(
+            previousDay,
+            minimumDate: earliest,
+            calendar: calendar
+        ),
+        "需求日历不能选择早于可用下界的日期"
+    )
+    try expect(
+        FocusTraceCalendarBounds.isSelectable(
+            earliest,
+            minimumDate: earliest,
+            calendar: calendar
+        ) && FocusTraceCalendarBounds.isSelectable(
+            futureDay,
+            minimumDate: earliest,
+            calendar: calendar
+        ),
+        "需求日历必须允许下界当天和未来日期"
+    )
+
+    let currentMonth = FocusTraceCalendarLayoutEngine.startOfMonth(
+        containing: earliest,
+        calendar: calendar
+    )
+    try expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: -1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == currentMonth,
+        "需求日历不能越过最早可选月份"
+    )
+    try expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: 1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: futureDay,
+            calendar: calendar
+        ),
+        "需求日历必须能进入未来月份"
     )
 }
 
@@ -2051,6 +2113,11 @@ suite.run("需求保持两态且工作流列表没有重复动作") {
         requirementsView.contains("调整时间、重要程度与工作流…"),
         "时间、重要程度和归属必须保留在次级详情路径"
     )
+    try expect(
+        requirementsView.contains("FocusTraceCompactDatePicker(")
+            && !requirementsView.contains(".datePickerStyle(.graphical)"),
+        "需求截止日期必须使用紧凑 FocusTrace 日历弹层，不能恢复系统内嵌大日历"
+    )
 
     let focusView = try contents(
         "Sources/FocusTrace/Views/FocusTrainingView.swift"
@@ -2174,6 +2241,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     for evidence in [
         "activationClosesPreviousAndIgnoresDuplicate",
         "calendarPopoverAnchorPressesAlternateExactlyOnce",
+        "requirementCalendarBoundsAllowFutureAndRespectEarliestDate",
         "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
         "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",
         "requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow",

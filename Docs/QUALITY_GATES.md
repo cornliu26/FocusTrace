@@ -31,7 +31,7 @@
 | CAP-01 | 应用切换闭合前一片段，重复激活不制造片段 | `activationClosesPreviousAndIgnoresDuplicate` |
 | CAP-02 | 锁屏、睡眠、唤醒和 loginwindow 不制造虚假活跃时间 | `sleepClosesAndWakeReopens`、`loginWindowIsTreatedAsSystemInactive` |
 | FLOW-01 | 菜单栏和主窗口共享唯一主要下一步 | `flowGuidanceAlwaysExposesOnlyTheNextRequiredAction` |
-| UX-01 | 时间轴和需求截止日期保持图形日历；时间轴日历一次点击打开、再次点击关闭 | `optimizedDailyUXContractRemainsStable`、`calendarPopoverAnchorPressesAlternateExactlyOnce` |
+| UX-01 | 时间轴和需求截止日期都使用紧凑图形日历弹层；入口第一次点击打开、再次点击关闭，需求日历允许未来日期且尊重已有日期下界 | `optimizedDailyUXContractRemainsStable`、`calendarPopoverAnchorPressesAlternateExactlyOnce`、`requirementCalendarBoundsAllowFutureAndRespectEarliestDate`、仓库交互回归 |
 | UX-02 | 状态栏紧凑、首次使用只有一个必要输入、侧栏图标稳定 | `optimizedDailyUXContractRemainsStable` |
 | UX-03 | 时间轴使用 Radix Colors 3.0 官方 token；当天前五分类按顺序着色，其余归入 Slate；文字独立于色块，相邻色块只用系统背景分隔，不为当前工作流添加深色描边 | `timelineSemanticPaletteSeparatesContextToolsAndRisk`、`timelineCurrentWorkflowDoesNotUseDarkSegmentOutlines`、`timelineCategoryColorsFollowRankAndCapAtFive`、`timelineApplicationRunsMergeAdjacentDominantBuckets`、仓库呈现回归 |
 | UX-04 | 状态栏、Dock、通知和菜单只复用一个主窗口；不暴露“新建窗口”和冗余设置窗口 | `mainWindowContractRemainsSingleInstance`、仓库场景回归 |

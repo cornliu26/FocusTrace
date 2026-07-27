@@ -169,7 +169,7 @@ func optimizedDailyUXContractRemainsStable() {
     )
     #expect(
         FocusTraceUXContract.requirementDateSelectionPresentation
-            == .graphicalCalendar
+            == .graphicalCalendarPopover
     )
     #expect(!FocusTraceUXContract.calendarPopoverAnimationsEnabled)
     #expect(FocusTraceUXContract.calendarRefreshGranularity == .day)
@@ -343,6 +343,61 @@ func calendarPopoverAnchorPressesAlternateExactlyOnce() {
     #expect(opened)
     #expect(!closed)
     #expect(!remainsClosed)
+}
+
+@Test
+func requirementCalendarBoundsAllowFutureAndRespectEarliestDate() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let earliest = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 27)
+    )!
+    let previousDay = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 26)
+    )!
+    let futureDay = calendar.date(
+        from: DateComponents(year: 2026, month: 8, day: 15)
+    )!
+
+    #expect(!FocusTraceCalendarBounds.isSelectable(
+        previousDay,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+    #expect(FocusTraceCalendarBounds.isSelectable(
+        earliest,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+    #expect(FocusTraceCalendarBounds.isSelectable(
+        futureDay,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+
+    let currentMonth = FocusTraceCalendarLayoutEngine.startOfMonth(
+        containing: earliest,
+        calendar: calendar
+    )
+    #expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: -1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == currentMonth
+    )
+    #expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: 1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: futureDay,
+            calendar: calendar
+        )
+    )
 }
 
 @Test
