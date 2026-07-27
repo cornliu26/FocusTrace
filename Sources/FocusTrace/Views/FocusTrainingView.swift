@@ -6,7 +6,6 @@ struct FocusTrainingView: View {
     @State private var showingNewTask = false
     @State private var editingTask: FocusTaskModel?
     @State private var workflowToComplete: FocusTaskModel?
-    @State private var workflowToDelete: FocusTaskModel?
     @State private var showCompletedWorkflows = false
     @State private var showWorkflowManagement = false
 
@@ -56,26 +55,6 @@ struct FocusTrainingView: View {
             }
         } message: {
             Text("会闭合当前区间并释放桌面绑定；30 秒内可以撤销。")
-        }
-        .confirmationDialog(
-            "删除这个工作流？",
-            isPresented: Binding(
-                get: { workflowToDelete != nil },
-                set: { if !$0 { workflowToDelete = nil } }
-            ),
-            titleVisibility: .visible
-        ) {
-            if let workflowToDelete {
-                Button("删除“\(workflowToDelete.title)”", role: .destructive) {
-                    state.deleteWorkflow(workflowToDelete.id)
-                    self.workflowToDelete = nil
-                }
-                Button("取消", role: .cancel) {
-                    self.workflowToDelete = nil
-                }
-            }
-        } message: {
-            Text(workflowDeletionMessage)
         }
     }
 
@@ -289,6 +268,9 @@ struct FocusTrainingView: View {
             ) {
             VStack(spacing: 0) {
                 ForEach(state.activeTasks) { task in
+                    let isCurrentWorkflow = state.isSpaceWorkflowModeEnabled
+                        ? state.currentSpaceWorkflowID == task.id
+                        : state.currentTaskID == task.id
                     HStack {
                         Button {
                             if state.isSpaceWorkflowModeEnabled {
@@ -298,8 +280,8 @@ struct FocusTrainingView: View {
                             }
                         } label: {
                             HStack {
-                                Image(systemName: task.id == state.currentTaskID ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(task.id == state.currentTaskID ? .green : .secondary)
+                                Image(systemName: isCurrentWorkflow ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(isCurrentWorkflow ? FocusTraceTheme.mint : .secondary)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(task.title).font(.headline)
                                     let bindingCount = state.verifiedSpaceBindingCount(for: task.id)
@@ -312,26 +294,17 @@ struct FocusTrainingView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .help(
+                            state.isSpaceWorkflowModeEnabled
+                                ? "将当前桌面绑定到“\(task.title)”"
+                                : "切换到“\(task.title)”"
+                        )
                         Spacer()
-                        if state.currentSpaceWorkflowID == task.id {
-                            Label("当前桌面", systemImage: "rectangle.fill.on.rectangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
-                        } else if state.currentSpaceWorkflowID == nil {
-                            Button {
-                                state.bindCurrentSpace(to: task.id)
-                            } label: {
-                                Label("绑定此桌面", systemImage: "rectangle.badge.plus")
-                            }
-                        }
                         Button("编辑") { editingTask = task }
                         Button {
                             workflowToComplete = task
                         } label: {
                             Label("完成", systemImage: "checkmark.circle")
-                        }
-                        Button("删除…", role: .destructive) {
-                            workflowToDelete = task
                         }
                     }
                     .padding(.vertical, 9)
@@ -372,10 +345,8 @@ struct FocusTrainingView: View {
                                     }
                                 }
                                 Spacer()
+                                Button("编辑") { editingTask = workflow }
                                 Button("重新打开") { state.reopenWorkflow(workflow.id) }
-                                Button("删除…", role: .destructive) {
-                                    workflowToDelete = workflow
-                                }
                             }
                             .padding(.vertical, 6)
                         }
@@ -385,21 +356,6 @@ struct FocusTrainingView: View {
             .padding(8)
             }
         }
-    }
-
-    private var workflowDeletionMessage: String {
-        guard let workflowToDelete,
-              let impact = state.workflowDeletionImpact(for: workflowToDelete.id)
-        else {
-            return "历史时间轴和训练记录会保留。"
-        }
-        let requirements = impact.unfinishedRequirementCount == 0
-            ? "没有未完成需求需要解绑"
-            : "\(impact.unfinishedRequirementCount) 条未完成需求会回到“未指定工作流”"
-        let bindings = impact.spaceBindingCount == 0
-            ? "没有桌面绑定"
-            : "\(impact.spaceBindingCount) 个桌面绑定会解除"
-        return "\(requirements)，\(bindings)。历史时间轴和训练记录会保留。"
     }
 
     private var privacyNote: some View {

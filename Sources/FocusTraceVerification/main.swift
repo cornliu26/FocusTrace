@@ -2019,7 +2019,7 @@ suite.run("JSON 导出可往返") {
     try expect(decoded.taskParkings.isEmpty, "空停车数组往返失败")
 }
 
-suite.run("需求日常操作保持两态且工作流删除入口可见") {
+suite.run("需求保持两态且工作流列表没有重复动作") {
     let root = URL(
         fileURLWithPath: FileManager.default.currentDirectoryPath,
         isDirectory: true
@@ -2056,12 +2056,23 @@ suite.run("需求日常操作保持两态且工作流删除入口可见") {
         "Sources/FocusTrace/Views/FocusTrainingView.swift"
     )
     try expect(
-        focusView.contains("Button(\"删除…\", role: .destructive)"),
-        "进行中和已结束工作流都必须有明确删除入口"
+        !focusView.contains("绑定此桌面")
+            && !focusView.contains("workflowToDelete"),
+        "工作流整行已经负责绑定，列表不能再展示重复绑定或删除动作"
     )
     try expect(
-        focusView.contains("历史时间轴和训练记录会保留"),
-        "删除确认必须明确历史数据保留边界"
+        focusView.contains("Button(\"编辑\")")
+            && focusView.contains("Label(\"完成\", systemImage: \"checkmark.circle\")"),
+        "进行中工作流列表右侧只保留编辑和完成"
+    )
+
+    let taskEditor = try contents(
+        "Sources/FocusTrace/Views/TaskEditor.swift"
+    )
+    try expect(
+        taskEditor.contains("Button(\"删除工作流…\", role: .destructive)")
+            && taskEditor.contains("历史时间轴和训练记录会保留"),
+        "删除必须收进编辑页并保留影响说明与二次确认"
     )
 
     let state = try contents("Sources/FocusTrace/ApplicationState.swift")

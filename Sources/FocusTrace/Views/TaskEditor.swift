@@ -12,6 +12,7 @@ struct TaskEditorSheet: View {
     @State private var selectedApps: Set<String>
     @State private var runningApps: [AppIdentity] = []
     @State private var showDetails: Bool
+    @State private var showDeleteConfirmation = false
 
     private var reusableTasks: [FocusTaskModel] {
         state.activeTasks.filter { $0.id != editingTask?.id && !$0.allowedBundleIDs.isEmpty }
@@ -98,8 +99,13 @@ struct TaskEditorSheet: View {
             }
 
             HStack {
-                Button("取消") { dismiss() }
+                if editingTask != nil {
+                    Button("删除工作流…", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                }
                 Spacer()
+                Button("取消") { dismiss() }
                 Button(editingTask == nil ? "创建工作流" : "保存") {
                     let didSave: Bool
                     if let editingTask {
@@ -138,6 +144,22 @@ struct TaskEditorSheet: View {
         .focusTraceScreen()
         .focusTraceVisualSystem()
         .onAppear { loadVisibleApps() }
+        .confirmationDialog(
+            "删除这个工作流？",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            if let editingTask {
+                Button("删除“\(editingTask.title)”", role: .destructive) {
+                    if state.deleteWorkflow(editingTask.id) {
+                        dismiss()
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(workflowDeletionMessage)
+        }
     }
 
     private var validationMessage: String? {
@@ -148,6 +170,21 @@ struct TaskEditorSheet: View {
             for: title,
             excluding: editingTask?.id
         )
+    }
+
+    private var workflowDeletionMessage: String {
+        guard let editingTask,
+              let impact = state.workflowDeletionImpact(for: editingTask.id)
+        else {
+            return "历史时间轴和训练记录会保留。"
+        }
+        let requirements = impact.unfinishedRequirementCount == 0
+            ? "没有未完成需求需要解绑"
+            : "\(impact.unfinishedRequirementCount) 条未完成需求会回到“未指定工作流”"
+        let bindings = impact.spaceBindingCount == 0
+            ? "没有桌面绑定"
+            : "\(impact.spaceBindingCount) 个桌面绑定会解除"
+        return "\(requirements)，\(bindings)。历史时间轴和训练记录会保留。"
     }
 
     private func binding(for bundleID: String) -> Binding<Bool> {
