@@ -184,6 +184,19 @@ func optimizedDailyUXContractRemainsStable() {
 }
 
 @Test
+func disclosureRowsUseLargeHitAreaAndToggleExactlyOnce() {
+    #expect(FocusTraceDisclosureInteraction.minimumHitTargetHeight >= 44)
+    let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: false
+    )
+    let closed = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: opened
+    )
+    #expect(opened)
+    #expect(!closed)
+}
+
+@Test
 func timelineSemanticPaletteSeparatesContextToolsAndRisk() {
     #expect(
         FocusTraceTimelinePalette.workflows.map(\.hexadecimalRGB)

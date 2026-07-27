@@ -35,6 +35,7 @@
 | UX-02 | 状态栏紧凑、首次使用只有一个必要输入、侧栏图标稳定 | `optimizedDailyUXContractRemainsStable` |
 | UX-03 | 时间轴使用 Radix Colors 3.0 官方 token；当天前五分类按顺序着色，其余归入 Slate；文字独立于色块，相邻色块只用系统背景分隔，不为当前工作流添加深色描边 | `timelineSemanticPaletteSeparatesContextToolsAndRisk`、`timelineCurrentWorkflowDoesNotUseDarkSegmentOutlines`、`timelineCategoryColorsFollowRankAndCapAtFive`、`timelineApplicationRunsMergeAdjacentDominantBuckets`、仓库呈现回归 |
 | UX-04 | 状态栏、Dock、通知和菜单只复用一个主窗口；不暴露“新建窗口”和冗余设置窗口 | `mainWindowContractRemainsSingleInstance`、仓库场景回归 |
+| UX-05 | 所有展开标题整行可点击，最小命中高度不低于 44pt；一次点击只切换一次展开状态 | `disclosureRowsUseLargeHitAreaAndToggleExactlyOnce`、仓库交互回归 |
 | REQ-01 | 新需求只进入收件箱，不自动绑定、切换或开始工作流 | `requirementCaptureStaysInInboxUntilExplicitlyPlanned` |
 | REQ-02 | 截止日期、重要程度和工作流归属彼此独立；旧版模糊安排不推断日期 | `requirementPlanningSeparatesDeadlineImportanceAndWorkflow`、`requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity` |
 | REQ-03 | 需求按逾期、今天、未来、无日期排序；到期提醒只发送一次且不在通知中显示需求标题 | `requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity`、`requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork`、仓库隐私回归 |

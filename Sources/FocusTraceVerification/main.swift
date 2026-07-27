@@ -269,6 +269,37 @@ suite.run("已优化的日常交互契约保持稳定") {
     )
 }
 
+suite.run("所有展开标题共享宽命中区域且一次只切换一次") {
+    try expect(
+        FocusTraceDisclosureInteraction.minimumHitTargetHeight >= 44,
+        "展开标题的最小命中高度不能低于 44pt"
+    )
+    let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: false
+    )
+    let closed = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: opened
+    )
+    try expect(opened && !closed, "展开标题一次点击只能切换一次状态")
+
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    let theme = try String(
+        contentsOf: root.appendingPathComponent(
+            "Sources/FocusTrace/Views/FocusTraceTheme.swift"
+        ),
+        encoding: .utf8
+    )
+    try expect(
+        theme.contains(
+            ".disclosureGroupStyle(FocusTraceWideDisclosureGroupStyle())"
+        ) && theme.contains(".contentShape(Rectangle())"),
+        "FocusTrace 视觉系统必须把宽命中样式应用到所有展开控件"
+    )
+}
+
 suite.run("需求日期弹层允许未来日期且尊重下界") {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -2231,8 +2262,8 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let quality = try contents("Docs/QUALITY_GATES.md")
     for contractID in [
-        "CAP-01", "UX-03", "UX-04", "REQ-01", "REQ-04", "FLOW-02", "PRIV-01",
-        "PERF-01", "PERF-04"
+        "CAP-01", "UX-03", "UX-04", "UX-05", "REQ-01", "REQ-04", "FLOW-02",
+        "PRIV-01", "PERF-01", "PERF-04"
     ] {
         try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
     }
@@ -2241,6 +2272,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     for evidence in [
         "activationClosesPreviousAndIgnoresDuplicate",
         "calendarPopoverAnchorPressesAlternateExactlyOnce",
+        "disclosureRowsUseLargeHitAreaAndToggleExactlyOnce",
         "requirementCalendarBoundsAllowFutureAndRespectEarliestDate",
         "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
         "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",
