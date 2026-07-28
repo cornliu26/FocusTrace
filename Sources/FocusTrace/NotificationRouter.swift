@@ -73,19 +73,6 @@ final class NotificationRouter: NSObject, UNUserNotificationCenterDelegate, @unc
         Task { try? await UNUserNotificationCenter.current().add(request) }
     }
 
-    func sendTargetReached(minutes: Int) {
-        let content = UNMutableNotificationContent()
-        content.title = "本轮专注目标已完成"
-        content.body = "你已经完成 \(minutes) 分钟。可以收尾并记录结果。"
-        content.sound = .default
-        let request = UNNotificationRequest(
-            identifier: "target-\(UUID().uuidString)",
-            content: content,
-            trigger: nil
-        )
-        Task { try? await UNUserNotificationCenter.current().add(request) }
-    }
-
     func sendTaskParkingReminder(id: UUID, taskName: String, resumeCue: String) {
         let content = UNMutableNotificationContent()
         content.title = "该回到「\(taskName)」了"

@@ -45,13 +45,25 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
     @Published private(set) var existingSpaceIsolationStatus = "现有桌面隔离：尚未开始"
     @Published private(set) var insertionRegressionStatus = "新增桌面回归：尚未开始"
     @Published private(set) var removalRegressionStatus = "删除桌面回归：尚未开始"
+    @Published private(set) var gateStatus = "切换门交互：尚未验收"
+    @Published private(set) var gateSelectionCount = 0
+    @Published private(set) var realSpaceGateStatus = "真实 Space 链路：尚未验收"
 
     let requiredSwitches = 30
     private let registry = SpaceAnchorRegistry()
+    private let realGateRegistry = SpaceAnchorRegistry()
     private let workspace = NSWorkspace.shared
+    private let gateController = SpaceSwitchGateController()
     private var startedAt = Date()
     private var resolutionTask: Task<Void, Never>?
     private var snapshotTask: Task<Void, Never>?
+    private var gateTimeoutTask: Task<Void, Never>?
+    private var realGateResolutionTask: Task<Void, Never>?
+    private var realGateTimeoutTask: Task<Void, Never>?
+    private var realGateOrigin: WorkflowSpaceResolution?
+    private var realGateJourney: SpaceSwitchJourney?
+    private weak var realGateWindow: NSWindow?
+    private var isRunningRealSpaceGateAcceptance = false
     private var isStarted = false
     private var initialSpaceIdentities: [WorkflowSpaceIdentity] = []
     private var insertedIdentity: WorkflowSpaceIdentity?
@@ -89,8 +101,16 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
         resolutionTask = nil
         snapshotTask?.cancel()
         snapshotTask = nil
+        gateTimeoutTask?.cancel()
+        gateTimeoutTask = nil
+        realGateResolutionTask?.cancel()
+        realGateResolutionTask = nil
+        realGateTimeoutTask?.cancel()
+        realGateTimeoutTask = nil
+        gateController.hide()
         workspace.notificationCenter.removeObserver(self)
         registry.releaseAll()
+        realGateRegistry.releaseAll()
         isStarted = false
     }
 
@@ -167,7 +187,118 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
         existingSpaceIsolationStatus = "现有桌面隔离：尚未开始"
         insertionRegressionStatus = "新增桌面回归：尚未开始"
         removalRegressionStatus = "删除桌面回归：尚未开始"
+        gateTimeoutTask?.cancel()
+        gateTimeoutTask = nil
+        gateController.hide()
+        gateStatus = "切换门交互：尚未验收"
+        gateSelectionCount = 0
+        realGateResolutionTask?.cancel()
+        realGateResolutionTask = nil
+        realGateTimeoutTask?.cancel()
+        realGateTimeoutTask = nil
+        realGateRegistry.releaseAll()
+        realGateOrigin = nil
+        realGateJourney = nil
+        realGateWindow = nil
+        isRunningRealSpaceGateAcceptance = false
+        realSpaceGateStatus = "真实 Space 链路：尚未验收"
         status = "请在第一个待验收桌面点击“绑定当前桌面”"
+    }
+
+    func showGateForAcceptance() {
+        gateTimeoutTask?.cancel()
+        let expiresAt = Date().addingTimeInterval(
+            SpaceSwitchGateEngine.decisionWindowSeconds
+        )
+        gateStatus = "切换门交互：弹窗已显示，等待按钮或 10 秒超时"
+        gateController.show(
+            originName: "验收工作流 A",
+            destinationName: "验收工作流 B",
+            expiresAt: expiresAt,
+            displayIdentifier: nil
+        ) { [weak self] reason in
+            guard let self else { return }
+            self.gateTimeoutTask?.cancel()
+            self.gateTimeoutTask = nil
+            self.gateSelectionCount += 1
+            self.gateStatus = "切换门交互：按钮回调成功（\(self.reasonName(reason))）· 共 \(self.gateSelectionCount) 次"
+            self.gateController.hide()
+        }
+        let selectionCount = gateSelectionCount
+        gateTimeoutTask = Task { [weak self] in
+            let remaining = max(0, expiresAt.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled, let self,
+                  self.gateSelectionCount == selectionCount else { return }
+            self.gateController.hide()
+            self.gateStatus = "切换门交互：10 秒超时已安全放行"
+        }
+    }
+
+    func simulateReturnToOrigin() {
+        let originID = UUID()
+        let destinationID = UUID()
+        let now = Date()
+        guard let pending = SpaceSwitchGateEngine.begin(
+            origin: .bound(workflowID: originID),
+            destination: .bound(workflowID: destinationID),
+            at: now,
+            isEnabled: true
+        ) else {
+            gateStatus = "切换门交互：无法创建回退验收上下文"
+            return
+        }
+        showGateForAcceptance()
+        guard SpaceSwitchGateEngine.observe(
+            .bound(workflowID: originID),
+            while: pending
+        ) == .returnedToOrigin else {
+            gateStatus = "切换门交互：回到原桌面未被识别"
+            return
+        }
+        gateTimeoutTask?.cancel()
+        gateTimeoutTask = nil
+        gateController.hide()
+        gateStatus = "切换门交互：滑回原桌面后已取消，不产生目标工作流归因"
+    }
+
+    func runRealSpaceGateAcceptance(using window: NSWindow?) {
+        guard !isRunningRealSpaceGateAcceptance else { return }
+        guard let window else {
+            realSpaceGateStatus = "真实 Space 链路：找不到验收窗口"
+            return
+        }
+        realGateRegistry.releaseAll()
+        let workflowID = UUID()
+        switch realGateRegistry.bindCurrentSpace(
+            workflowID: workflowID,
+            restorationID: "gate-space-acceptance-\(workflowID.uuidString)"
+        ) {
+        case .created, .alreadyBound:
+            break
+        case .occupied, .failed:
+            realSpaceGateStatus = "真实 Space 链路：无法在当前桌面建立隔离绑定"
+            return
+        }
+        realGateOrigin = .bound(workflowID: workflowID)
+        realGateJourney = nil
+        realGateWindow = window
+        isRunningRealSpaceGateAcceptance = true
+        realSpaceGateStatus = "真实 Space 链路：正在进入临时全屏桌面"
+        window.toggleFullScreen(nil)
+    }
+
+    private func reasonName(_ reason: SpaceSwitchReason) -> String {
+        switch reason {
+        case .reachedCheckpoint:
+            return "阶段已到"
+        case .waitingForResult:
+            return "等待结果"
+        case .forcedInterruption:
+            return "被迫中断"
+        case .unstructured:
+            return "未选择理由"
+        }
     }
 
     func openMissionControl() {
@@ -190,6 +321,10 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
 
     @objc private func spaceChanged(_ notification: Notification) {
         let eventAt = Date()
+        if isRunningRealSpaceGateAcceptance {
+            handleRealSpaceGateChange(at: eventAt)
+            return
+        }
         guard phase == .testing else {
             resolutionTask?.cancel()
             resolutionTask = Task { [weak self] in
@@ -247,6 +382,82 @@ private final class SpaceAcceptanceModel: NSObject, ObservableObject {
                     latency: Date().timeIntervalSince(eventAt)
                 )
             }
+        }
+    }
+
+    private func handleRealSpaceGateChange(at eventAt: Date) {
+        guard let origin = realGateOrigin,
+              let journey = SpaceSwitchJourneyEngine.beginOrExtend(
+                  realGateJourney,
+                  origin: origin,
+                  at: eventAt
+              ) else {
+            finishRealSpaceGateAcceptance(
+                status: "真实 Space 链路：无法保留最初工作流"
+            )
+            return
+        }
+        realGateJourney = journey
+        realSpaceGateStatus = "真实 Space 链路：正在等待最终桌面稳定"
+        realGateResolutionTask?.cancel()
+        realGateResolutionTask = Task { [weak self] in
+            try? await Task.sleep(
+                for: .seconds(SpaceSwitchJourneyEngine.settleDelaySeconds)
+            )
+            guard !Task.isCancelled, let self,
+                  self.isRunningRealSpaceGateAcceptance,
+                  let journey = self.realGateJourney else { return }
+            let destination = self.realGateRegistry.resolutionAfterSpaceChange()
+            let now = Date()
+            guard case let .presentGate(pending) = SpaceSwitchJourneyEngine.finish(
+                journey,
+                finalDestination: destination,
+                at: now,
+                isGateEnabled: true
+            ) else {
+                self.finishRealSpaceGateAcceptance(
+                    status: "真实 Space 链路：收到系统事件，但目标桌面未可靠解析"
+                )
+                return
+            }
+            self.realSpaceGateStatus = "真实 Space 链路：已收到系统事件并显示切换门"
+            self.gateController.show(
+                originName: "真实验收工作流",
+                destinationName: "临时全屏桌面",
+                expiresAt: pending.expiresAt,
+                displayIdentifier: nil
+            ) { [weak self] reason in
+                self?.finishRealSpaceGateAcceptance(
+                    status: "真实 Space 链路：通过（系统事件 → 弹窗 → \(self?.reasonName(reason) ?? reason.rawValue)）"
+                )
+            }
+            self.realGateTimeoutTask?.cancel()
+            self.realGateTimeoutTask = Task { [weak self] in
+                let remaining = max(0, pending.expiresAt.timeIntervalSinceNow)
+                try? await Task.sleep(for: .seconds(remaining))
+                guard !Task.isCancelled, let self else { return }
+                self.finishRealSpaceGateAcceptance(
+                    status: "真实 Space 链路：通过（系统事件 → 弹窗 → 10 秒安全放行）"
+                )
+            }
+        }
+    }
+
+    private func finishRealSpaceGateAcceptance(status: String) {
+        realGateResolutionTask?.cancel()
+        realGateResolutionTask = nil
+        realGateTimeoutTask?.cancel()
+        realGateTimeoutTask = nil
+        gateController.hide()
+        isRunningRealSpaceGateAcceptance = false
+        realGateOrigin = nil
+        realGateJourney = nil
+        realGateRegistry.releaseAll()
+        realSpaceGateStatus = status
+        guard let window = realGateWindow else { return }
+        realGateWindow = nil
+        if window.styleMask.contains(.fullScreen) {
+            window.toggleFullScreen(nil)
         }
     }
 
@@ -527,6 +738,40 @@ private struct AcceptanceView: View {
 
             Button("打开 Mission Control") { model.openMissionControl() }
 
+            Divider()
+
+            Text(model.gateStatus)
+                .font(.caption)
+                .foregroundStyle(
+                    model.gateStatus.contains("成功")
+                        || model.gateStatus.contains("安全放行")
+                        || model.gateStatus.contains("已取消")
+                        ? .green
+                        : .secondary
+                )
+                .accessibilityIdentifier("space-gate-acceptance-status")
+
+            HStack {
+                Button("显示真实切换门") { model.showGateForAcceptance() }
+                    .accessibilityIdentifier("show-real-space-gate")
+                Button("模拟滑回原桌面") { model.simulateReturnToOrigin() }
+                    .accessibilityIdentifier("simulate-space-gate-return")
+            }
+
+            Text(model.realSpaceGateStatus)
+                .font(.caption)
+                .foregroundStyle(
+                    model.realSpaceGateStatus.contains("通过")
+                        ? .green
+                        : .secondary
+                )
+                .accessibilityIdentifier("real-space-gate-status")
+
+            Button("自动验收真实 Space 切换") {
+                model.runRealSpaceGateAcceptance(using: viewWindow)
+            }
+            .accessibilityIdentifier("run-real-space-gate-acceptance")
+
             if let outputPath = model.outputPath {
                 Text("结果：\(outputPath)")
                     .font(.caption2.monospaced())
@@ -566,6 +811,6 @@ private struct FocusTraceSpaceAcceptanceApp: App {
         WindowGroup("FocusTrace 三桌面验收") {
             AcceptanceView(model: model)
         }
-        .defaultSize(width: 560, height: 360)
+        .defaultSize(width: 560, height: 500)
     }
 }

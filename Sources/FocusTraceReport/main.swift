@@ -100,7 +100,7 @@ private func previousIssuedReport(
         .compactMap { url -> AutomationReportArtifact? in
             guard let data = try? Data(contentsOf: url),
                   let report = try? decoder.decode(AutomationReportArtifact.self, from: data),
-                  report.schemaVersion == 2,
+                  (2...5).contains(report.schemaVersion),
                   report.reportDate < cutoff else { return nil }
             return report
         }

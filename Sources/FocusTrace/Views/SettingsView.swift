@@ -53,7 +53,7 @@ struct SettingsView: View {
                 ) {
                     VStack(alignment: .leading, spacing: 13) {
                         Toggle(
-                            "屏幕边缘专注护栏",
+                            "高频工作流切换确认",
                             isOn: $preferences.attentionCueEnabled
                         )
                         Stepper(
@@ -62,10 +62,10 @@ struct SettingsView: View {
                             in: 5...120,
                             step: 5
                         )
-                        Text("基线前三个工作日不会发送提醒。未由你确认的事件始终只算疑似分心。")
+                        Text("基线前三个工作日不会发送提醒。连续专注时不弹奖励或完成通知。未由你确认的事件始终只算疑似分心。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("护栏每 5 分钟给予一次坚持反馈；10 分钟内稳定切换 3 次工作流才提示，主动保存返回点和原始 Space 事件不计入。")
+                        Text("只在 10 分钟内第 3 次已绑定工作流切换时居中询问，之后冷却 10 分钟。连续找桌面会在最后一次变化稳定 1.2 秒后只记录最终工作流；10 秒未选择会自动放行。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

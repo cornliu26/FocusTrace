@@ -267,6 +267,7 @@ public enum DailyCoachEngine {
         let sessions: [FocusSessionRecord]
         let interruptions: [InterruptionRecord]
         let taskParkings: [TaskParkingRecord]
+        let workflowTransitions: [WorkflowTransitionRecord]
     }
 
     private static func slice(
@@ -292,6 +293,9 @@ public enum DailyCoachEngine {
         }
         let parkings = snapshot.taskParkings.filter {
             $0.parkedAt >= start && $0.parkedAt < end
+        }
+        let workflowTransitions = snapshot.workflowTransitions.filter {
+            $0.resolvedAt >= start && $0.resolvedAt < end
         }
         let summary = MetricsEngine.dailySummary(
             activities: activities,
@@ -328,7 +332,8 @@ public enum DailyCoachEngine {
             ),
             sessions: sessions,
             interruptions: interruptions,
-            taskParkings: parkings
+            taskParkings: parkings,
+            workflowTransitions: workflowTransitions
         )
     }
 
@@ -505,14 +510,25 @@ public enum DailyCoachEngine {
             )
         }
 
-        let workflowRateHigh = trend.workflowSwitchRateDeltaPercent.map { $0 >= 25 } == true
-            || slice.metrics.workflowSwitchesPerHour >= 6
-        if workflowRateHigh, slice.summary.workflowSwitchCount >= 3 {
+        let returnPointHandoffs = slice.workflowTransitions.filter {
+            WorkflowSwitchInterventionEngine.isFinalWorkflowSwitch($0)
+                && [.waitingForResult, .forcedInterruption].contains($0.reason)
+        }
+        if returnPointHandoffs.count >= 2, slice.taskParkings.isEmpty {
+            let waitingCount = returnPointHandoffs.filter {
+                $0.reason == .waitingForResult
+            }.count
+            let forcedCount = returnPointHandoffs.filter {
+                $0.reason == .forcedInterruption
+            }.count
             return DailyCoachRecommendation(
                 kind: .agentParkingDrill,
                 title: "练习一次“保存返回点—切换—回来”",
-                rationale: "工作流切换偏密集时，训练目标不是禁止切换，而是让每次切换都有明确的回来第一步。",
-                evidence: ["工作流切换 \(rounded(slice.metrics.workflowSwitchesPerHour)) 次/小时", trend.workflowSwitchRateDeltaPercent.map { "较近 7 日基线 \(signedPercent($0))" } ?? "趋势样本尚不足"],
+                rationale: "多次等待结果或被迫中断都没有保存返回点；需要验证的不是切换数量，而是回来能否立刻继续。",
+                evidence: [
+                    "等待结果 \(waitingCount) 次，被迫中断 \(forcedCount) 次",
+                    "当天保存返回点 0 次"
+                ],
                 confidence: confidence,
                 action: .parkWorkflow,
                 method: DailyTrainingMethod(
@@ -590,13 +606,15 @@ public enum DailyCoachEngine {
             guard current.metrics.parkingCount > 0 else {
                 return DailyCoachEvaluation(status: .notRun, title: "返回点流程尚未练习", evidence: "今天没有保存返回点的记录。")
             }
-            let improved = previousMetrics.map {
-                current.metrics.workflowSwitchesPerHour < $0.workflowSwitchesPerHour
-            } ?? true
+            let resumed = current.taskParkings.filter {
+                $0.resumedAt != nil
+            }.count
             return DailyCoachEvaluation(
-                status: improved ? .improved : .needsAdjustment,
-                title: improved ? "返回点流程已执行" : "已保存返回点，但切换密度未下降",
-                evidence: "今天保存返回点 \(current.metrics.parkingCount) 次，工作流切换 \(rounded(current.metrics.workflowSwitchesPerHour)) 次/小时。"
+                status: resumed > 0 ? .improved : .needsAdjustment,
+                title: resumed > 0
+                    ? "返回点流程已闭环"
+                    : "已保存返回点，但尚未返回",
+                evidence: "今天保存返回点 \(current.metrics.parkingCount) 次，已返回 \(resumed) 次。"
             )
         }
     }

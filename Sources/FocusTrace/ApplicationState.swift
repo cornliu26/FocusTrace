@@ -65,6 +65,7 @@ final class ApplicationState: ObservableObject {
     @Published private(set) var interruptions: [InterruptionModel] = []
     @Published private(set) var trainingPlans: [TrainingPlanModel] = []
     @Published private(set) var markers: [TimelineMarkerModel] = []
+    @Published private(set) var workflowTransitions: [WorkflowTransitionModel] = []
     @Published private(set) var taskParkings: [TaskParkingModel] = []
     @Published private(set) var workflowSpaceBindings: [WorkflowSpaceBindingModel] = []
     @Published private(set) var requirements: [RequirementItemModel] = []
@@ -96,8 +97,8 @@ final class ApplicationState: ObservableObject {
     private var focusDepartureTask: Task<Void, Never>?
     private var scheduleTask: Task<Void, Never>?
     private var spaceResolutionTask: Task<Void, Never>?
+    private var spaceSwitchGateTimeoutTask: Task<Void, Never>?
     private var spaceReconciliationTask: Task<Void, Never>?
-    private var attentionCueTask: Task<Void, Never>?
     private var workflowUndoTask: Task<Void, Never>?
     private var timelineDataRevision: UInt64 = 0
     private var timelineSnapshotSequence: UInt64 = 0
@@ -108,12 +109,10 @@ final class ApplicationState: ObservableObject {
     private let workspaceMonitor = WorkspaceMonitor()
     private let notificationRouter = NotificationRouter()
     private let spaceAnchorRegistry = SpaceAnchorRegistry()
-    private let attentionCueController = AttentionCueOverlayController()
-    private var attentionCueTaskID: UUID?
-    private var attentionCueContinuityStartedAt: Date?
-    private var lastRewardedMilestoneMinutes = 0
-    private var lastSwitchCueAt: Date?
-    private var lastSwitchCueLevel: AttentionCueLevel = .none
+    private let spaceSwitchGateController = SpaceSwitchGateController()
+    private var pendingSpaceSwitchJourney: SpaceSwitchJourney?
+    private var pendingSpaceSwitchGate: SpaceSwitchGateContext?
+    private var pendingWorkflowTransition: PendingWorkflowTransition?
     private var pendingRequestedFocusMinutes: Int?
 
     init(store: FocusTraceStore, preferences: AppPreferences = AppPreferences()) {
@@ -127,8 +126,8 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         scheduleTask?.cancel()
         spaceResolutionTask?.cancel()
+        spaceSwitchGateTimeoutTask?.cancel()
         spaceReconciliationTask?.cancel()
-        attentionCueTask?.cancel()
         workflowUndoTask?.cancel()
     }
 
@@ -208,6 +207,12 @@ final class ApplicationState: ObservableObject {
     }
 
     var spaceContextText: String {
+        if pendingSpaceSwitchJourney != nil {
+            return "正在确认最终桌面"
+        }
+        if pendingSpaceSwitchGate != nil {
+            return "等待确认桌面切换"
+        }
         guard isSpaceWorkflowModeEnabled else {
             return needsRebindBindings.isEmpty ? "桌面工作流未启用" : "桌面绑定待恢复"
         }
@@ -339,6 +344,15 @@ final class ApplicationState: ObservableObject {
         )
     }
 
+    var selectedInterventionAudit: WorkflowInterventionAudit {
+        let interval = dayInterval(for: selectedDate)
+        return WorkflowSwitchInterventionEngine.audit(
+            transitions: workflowTransitions.map(\.record),
+            range: interval.start..<interval.end,
+            now: now
+        )
+    }
+
     var selectedTimelineSnapshot: TimelineViewSnapshot {
         let calendar = Calendar.current
         let selectedDay = calendar.startOfDay(for: selectedDate)
@@ -399,12 +413,16 @@ final class ApplicationState: ObservableObject {
     var selectedCoachingAnalysis: DailyCoachingAnalysis {
         DailyCoachEngine.analyze(
             snapshot: FocusTraceLocalSnapshot(
+                tasks: tasks.map(\.record),
                 taskIntervals: taskIntervals.map(\.record),
                 activities: activities.map(\.record),
                 focusSessions: focusSessions.map(\.record),
                 interruptions: interruptions.map(\.record),
                 trainingPlans: trainingPlans.map(\.record),
-                taskParkings: taskParkings.map(\.record)
+                markers: markers.map(\.record),
+                workflowTransitions: workflowTransitions.map(\.record),
+                taskParkings: taskParkings.map(\.record),
+                requirements: requirements.map(\.record)
             ),
             reportDate: selectedDate,
             generatedAt: now
@@ -465,7 +483,6 @@ final class ApplicationState: ObservableObject {
         refreshCaptureForCurrentState()
         startScheduleObserver()
         startSpaceReconciliationObserver()
-        startAttentionCueObserver()
     }
 
     /// The menu-bar click is an explicit interaction on one concrete display.
@@ -473,6 +490,8 @@ final class ApplicationState: ObservableObject {
     /// to wait for the passive Space notification debounce or polling loop.
     func refreshSpaceContextForMenuPresentation() {
         guard spaceAnchorRegistry.isEnabled else { return }
+        guard pendingSpaceSwitchJourney == nil,
+              pendingSpaceSwitchGate == nil else { return }
 
         // An explicit interaction is newer and more precise than a pending
         // passive Space-change result. A stale delayed result must not replace
@@ -512,7 +531,12 @@ final class ApplicationState: ObservableObject {
     func setCapturePaused(_ paused: Bool) {
         preferences.capturePaused = paused
         if paused {
-            stopCurrentActivity(at: Date())
+            let date = Date()
+            clearPendingSpaceSwitchJourney()
+            if pendingSpaceSwitchGate != nil {
+                confirmPendingSpaceSwitch(reason: .unstructured, at: date)
+            }
+            stopCurrentActivity(at: date)
         } else {
             refreshCaptureForCurrentState()
         }
@@ -1275,10 +1299,18 @@ final class ApplicationState: ObservableObject {
 
     func shutdown() {
         let date = Date()
-        spaceResolutionTask?.cancel()
-        attentionCueTask?.cancel()
-        attentionCueTask = nil
-        attentionCueController.hide()
+        if let transition = pendingWorkflowTransition {
+            recordWorkflowTransition(
+                transition.resolved(
+                    at: date,
+                    destination: WorkflowTransitionEndpoint(kind: .unknown),
+                    outcome: .unresolved,
+                    reason: nil
+                )
+            )
+        }
+        clearPendingSpaceSwitchJourney()
+        clearPendingSpaceSwitchGate()
         workflowUndoTask?.cancel()
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
@@ -1344,6 +1376,9 @@ final class ApplicationState: ObservableObject {
         focusSessions.filter { interval.contains($0.startedAt) }.forEach { store.delete($0) }
         interruptions.filter { interval.contains($0.detectedAt) }.forEach { store.delete($0) }
         markers.filter { interval.contains($0.date) }.forEach { store.delete($0) }
+        workflowTransitions.filter { interval.contains($0.resolvedAt) }.forEach {
+            store.delete($0)
+        }
         taskParkings.filter { interval.contains($0.parkedAt) }.forEach { store.delete($0) }
         saveOrReport()
         reloadAll()
@@ -1356,6 +1391,7 @@ final class ApplicationState: ObservableObject {
         focusSessions.forEach { store.delete($0) }
         interruptions.forEach { store.delete($0) }
         markers.forEach { store.delete($0) }
+        workflowTransitions.forEach { store.delete($0) }
         taskParkings.forEach { store.delete($0) }
         trainingPlans.forEach { store.delete($0) }
         currentTaskID = nil
@@ -1479,6 +1515,26 @@ final class ApplicationState: ObservableObject {
     }
 
     private func handleSystemInactive(source: ActivityEventSource, at date: Date) {
+        if pendingSpaceSwitchGate != nil,
+           pendingSpaceSwitchJourney != nil {
+            if let transition = pendingWorkflowTransition {
+                recordWorkflowTransition(
+                    transition.resolved(
+                        at: date,
+                        destination: WorkflowTransitionEndpoint(kind: .unknown),
+                        outcome: .unresolved,
+                        reason: nil
+                    )
+                )
+            }
+            clearPendingSpaceSwitchJourney()
+            clearPendingSpaceSwitchGate()
+            applySpaceResolution(.unknown, at: date, source: .space)
+        }
+        clearPendingSpaceSwitchJourney()
+        if pendingSpaceSwitchGate != nil {
+            confirmPendingSpaceSwitch(reason: .unstructured, at: date)
+        }
         guard isSystemActive else {
             if source == .screenSleep {
                 insertMarkerIfNotRecent(.screenSlept, at: date, taskID: currentTaskID)
@@ -1735,15 +1791,7 @@ final class ApplicationState: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
                 self.updateClock(to: Date())
-                guard let focus = self.currentFocus else { return }
-                if self.pendingFocusDepartureAt == nil,
-                   focus.pausedAt == nil,
-                   !focus.targetNotificationSent,
-                   self.focusElapsedSeconds >= focus.targetSeconds {
-                    focus.targetNotificationSent = true
-                    self.notificationRouter.sendTargetReached(minutes: focus.targetSeconds / 60)
-                    self.saveOrReport()
-                }
+                guard self.currentFocus != nil else { return }
             }
         }
     }
@@ -1780,99 +1828,18 @@ final class ApplicationState: ObservableObject {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self,
                       self.spaceAnchorRegistry.isEnabled,
+                      self.pendingSpaceSwitchJourney == nil,
+                      self.pendingSpaceSwitchGate == nil,
                       let resolution = self.spaceAnchorRegistry.resolutionForChangedDisplay()
                 else { continue }
                 if resolution != self.spaceResolution {
-                    self.applySpaceResolution(resolution, at: Date(), source: .space)
+                    self.scheduleSpaceResolution(
+                        after: Date(),
+                        candidateDestination: resolution
+                    )
                 }
             }
         }
-    }
-
-    private func startAttentionCueObserver() {
-        attentionCueTask?.cancel()
-        attentionCueTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                self.refreshAttentionCue(at: Date())
-                try? await Task.sleep(for: .seconds(5))
-            }
-        }
-    }
-
-    private func refreshAttentionCue(at date: Date) {
-        guard preferences.attentionCueEnabled,
-              preferences.hasCompletedOnboarding,
-              !preferences.capturePaused,
-              isSystemActive,
-              shouldRecord(at: date),
-              let task = currentTask else {
-            attentionCueController.hide()
-            attentionCueTaskID = nil
-            attentionCueContinuityStartedAt = nil
-            lastRewardedMilestoneMinutes = 0
-            return
-        }
-
-        let taskIntervalRecords = taskIntervals.map(\.record)
-        if attentionCueTaskID != task.id {
-            attentionCueTaskID = task.id
-            attentionCueContinuityStartedAt = date
-            lastRewardedMilestoneMinutes = 0
-        }
-        let elapsed = max(0, date.timeIntervalSince(attentionCueContinuityStartedAt ?? date))
-        let displayIdentifier = spaceAnchorRegistry.lastResolvedIdentity?.displayIdentifier
-        attentionCueController.updateProgress(
-            taskName: task.title,
-            elapsedSeconds: elapsed,
-            displayIdentifier: displayIdentifier
-        )
-
-        let decision = AttentionCueEngine.switchDecision(
-            intervals: taskIntervalRecords,
-            parkings: taskParkings.map(\.record),
-            at: date
-        )
-        if shouldPresentSwitchCue(decision, at: date) {
-            lastSwitchCueAt = date
-            lastSwitchCueLevel = decision.level
-            attentionCueController.showSwitchWarning(
-                taskName: task.title,
-                switchCount: decision.switchCount,
-                strong: decision.level == .strong,
-                baselineComplete: baselineComplete,
-                displayIdentifier: displayIdentifier
-            )
-            return
-        }
-        if decision.level == .none {
-            lastSwitchCueLevel = .none
-        }
-
-        let milestone = AttentionCueEngine.continuityMilestoneMinutes(
-            elapsedSeconds: elapsed
-        )
-        guard milestone >= 5, milestone > lastRewardedMilestoneMinutes else { return }
-        lastRewardedMilestoneMinutes = milestone
-        attentionCueController.showReward(
-            taskName: task.title,
-            milestoneMinutes: milestone,
-            displayIdentifier: displayIdentifier
-        )
-    }
-
-    private func shouldPresentSwitchCue(
-        _ decision: AttentionCueDecision,
-        at date: Date
-    ) -> Bool {
-        guard decision.level != .none else { return false }
-        guard let lastSwitchCueAt else { return true }
-        if date.timeIntervalSince(lastSwitchCueAt) >= 10 * 60 {
-            return true
-        }
-        return decision.level == .strong
-            && lastSwitchCueLevel == .gentle
-            && date.timeIntervalSince(lastSwitchCueAt) >= 60
     }
 
     private func refreshCaptureForCurrentState() {
@@ -2119,34 +2086,454 @@ final class ApplicationState: ObservableObject {
         if changed { saveOrReport() }
     }
 
-    private func scheduleSpaceResolution(after eventDate: Date) {
+    private func scheduleSpaceResolution(
+        after eventDate: Date,
+        candidateDestination: WorkflowSpaceResolution? = nil
+    ) {
         guard spaceAnchorRegistry.isEnabled else { return }
-        let resolutionBeforeChange = spaceResolution
-        spaceResolution = .unknown
-        // Close the old workflow at the event boundary before debouncing the
-        // new Space. This prevents even a short transition from inheriting
-        // the previous workflow's attribution.
-        switchTask(to: nil, source: .space, at: eventDate)
-        spaceResolutionTask?.cancel()
-        spaceResolutionTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(600))
-            guard !Task.isCancelled, let self else { return }
-            if let resolution = self.spaceAnchorRegistry.resolutionForChangedDisplay() {
-                self.applySpaceResolution(
-                    resolution,
-                    at: max(eventDate, Date()),
-                    source: .space
-                )
-            } else if self.spaceResolution == .unknown {
-                // The Space may have switched away and back during Mission
-                // Control animation. With no net delta, restore the context
-                // that was valid at the event boundary.
-                self.applySpaceResolution(
-                    resolutionBeforeChange,
-                    at: max(eventDate, Date()),
-                    source: .space
+        let resolutionBeforeChange = pendingSpaceSwitchJourney?.origin
+            ?? pendingSpaceSwitchGate?.origin
+            ?? spaceResolution
+
+        let isContinuingVisibleGate = pendingSpaceSwitchGate != nil
+        if isContinuingVisibleGate {
+            // Keep the visible decision surface. A delayed or repeated macOS
+            // notification must not make the user's only action disappear.
+            spaceSwitchGateTimeoutTask?.cancel()
+            spaceSwitchGateTimeoutTask = nil
+            spaceSwitchGateController.beginResolvingDestination()
+        }
+
+        let wasAlreadyNavigating = pendingSpaceSwitchJourney != nil
+        guard let journey = SpaceSwitchJourneyEngine.beginOrExtend(
+            pendingSpaceSwitchJourney,
+            origin: resolutionBeforeChange,
+            candidateDestination: candidateDestination,
+            at: eventDate
+        ) else {
+            if let transition = pendingWorkflowTransition {
+                recordWorkflowTransition(
+                    transition.resolved(
+                        at: eventDate,
+                        destination: WorkflowTransitionEndpoint(
+                            kind: .unknown
+                        ),
+                        outcome: .unresolved,
+                        reason: nil
+                    )
                 )
             }
+            clearPendingSpaceSwitchJourney()
+            clearPendingSpaceSwitchGate()
+            applySpaceResolution(.unknown, at: eventDate, source: .space)
+            return
+        }
+        pendingSpaceSwitchJourney = journey
+        if !wasAlreadyNavigating && !isContinuingVisibleGate {
+            spaceResolution = .unknown
+            // Close the old workflow once at the start. Intermediate Spaces
+            // never open their own task interval.
+            switchTask(to: nil, source: .space, at: eventDate)
+        }
+
+        spaceResolutionTask?.cancel()
+        spaceResolutionTask = Task { [weak self] in
+            try? await Task.sleep(
+                for: .seconds(SpaceSwitchJourneyEngine.settleDelaySeconds)
+            )
+            guard !Task.isCancelled else { return }
+            self?.finishPendingSpaceSwitchJourney(at: Date())
+        }
+        objectWillChange.send()
+    }
+
+    private func finishPendingSpaceSwitchJourney(at date: Date) {
+        guard let journey = pendingSpaceSwitchJourney else { return }
+        let finalDestination = spaceAnchorRegistry.resolutionForChangedDisplay()
+            ?? journey.candidateDestination
+            ?? spaceAnchorRegistry.resolutionForInteraction()
+        let intervention = WorkflowSwitchInterventionEngine.decision(
+            history: workflowTransitions.map(\.record),
+            origin: WorkflowTransitionEndpoint(resolution: journey.origin),
+            destination: WorkflowTransitionEndpoint(
+                resolution: finalDestination
+            ),
+            at: date,
+            isEnabled: preferences.attentionCueEnabled
+                && preferences.hasCompletedOnboarding
+                && baselineComplete
+                && !preferences.capturePaused
+                && isSystemActive
+                && shouldRecord(at: date)
+        )
+
+        let outcome = SpaceSwitchJourneyEngine.finish(
+            journey,
+            finalDestination: finalDestination,
+            at: date,
+            isGateEnabled: intervention.shouldPrompt
+        )
+        if pendingSpaceSwitchGate != nil {
+            finishNavigationWhileGateVisible(
+                journey: journey,
+                finalDestination: finalDestination,
+                outcome: outcome,
+                at: date
+            )
+            return
+        }
+
+        switch outcome {
+        case .notSettled:
+            let remaining = max(
+                0,
+                SpaceSwitchJourneyEngine.settleDelaySeconds
+                    - date.timeIntervalSince(journey.lastChangedAt)
+            )
+            spaceResolutionTask?.cancel()
+            spaceResolutionTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(remaining))
+                guard !Task.isCancelled else { return }
+                self?.finishPendingSpaceSwitchJourney(at: Date())
+            }
+
+        case let .unresolved(resolution):
+            recordWorkflowTransition(
+                WorkflowTransitionRecord(
+                    navigationStartedAt: journey.startedAt,
+                    settledAt: date,
+                    resolvedAt: date,
+                    origin: WorkflowTransitionEndpoint(
+                        resolution: journey.origin
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        resolution: resolution
+                    ),
+                    outcome: .unresolved,
+                    reason: nil,
+                    navigationEventCount: journey.eventCount
+                )
+            )
+            clearPendingSpaceSwitchJourney()
+            applySpaceResolution(resolution, at: date, source: .space)
+
+        case let .unchanged(resolution):
+            recordWorkflowTransition(
+                WorkflowTransitionRecord(
+                    navigationStartedAt: journey.startedAt,
+                    settledAt: date,
+                    resolvedAt: date,
+                    origin: WorkflowTransitionEndpoint(
+                        resolution: journey.origin
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        resolution: resolution
+                    ),
+                    outcome: .cancelled,
+                    reason: nil,
+                    navigationEventCount: journey.eventCount
+                )
+            )
+            insertMarker(
+                .spaceSwitchCancelled,
+                at: date,
+                taskID: {
+                    guard case let .bound(workflowID) = journey.origin else {
+                        return nil
+                    }
+                    return workflowID
+                }()
+            )
+            clearPendingSpaceSwitchJourney()
+            applySpaceResolution(resolution, at: date, source: .space)
+
+        case let .applyWithoutGate(resolution):
+            recordWorkflowTransition(
+                WorkflowTransitionRecord(
+                    navigationStartedAt: journey.startedAt,
+                    settledAt: date,
+                    resolvedAt: date,
+                    origin: WorkflowTransitionEndpoint(
+                        resolution: journey.origin
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        resolution: resolution
+                    ),
+                    outcome: .automatic,
+                    reason: nil,
+                    navigationEventCount: journey.eventCount
+                )
+            )
+            clearPendingSpaceSwitchJourney()
+            applySpaceResolution(resolution, at: date, source: .space)
+
+        case let .presentGate(pending):
+            let transition = PendingWorkflowTransition(
+                navigationStartedAt: journey.startedAt,
+                origin: WorkflowTransitionEndpoint(
+                    resolution: journey.origin
+                ),
+                destination: WorkflowTransitionEndpoint(
+                    resolution: pending.destination
+                ),
+                settledAt: date,
+                interventionTrigger: intervention.trigger,
+                navigationEventCount: journey.eventCount
+            )
+            clearPendingSpaceSwitchJourney()
+            presentSpaceSwitchGate(pending, transition: transition)
+        }
+    }
+
+    private func finishNavigationWhileGateVisible(
+        journey: SpaceSwitchJourney,
+        finalDestination: WorkflowSpaceResolution,
+        outcome: SpaceSwitchJourneyOutcome,
+        at date: Date
+    ) {
+        switch outcome {
+        case .notSettled:
+            let remaining = max(
+                0,
+                SpaceSwitchJourneyEngine.settleDelaySeconds
+                    - date.timeIntervalSince(journey.lastChangedAt)
+            )
+            spaceResolutionTask?.cancel()
+            spaceResolutionTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(remaining))
+                guard !Task.isCancelled else { return }
+                self?.finishPendingSpaceSwitchJourney(at: Date())
+            }
+
+        case let .unresolved(resolution):
+            // Managed Space identity can lag behind the notification. Keep
+            // the already-visible gate stable for a short bounded retry
+            // period instead of flashing it away on a transient unknown.
+            if date.timeIntervalSince(journey.lastChangedAt) < 3 {
+                spaceResolutionTask?.cancel()
+                spaceResolutionTask = Task { [weak self] in
+                    try? await Task.sleep(for: .milliseconds(400))
+                    guard !Task.isCancelled else { return }
+                    self?.finishPendingSpaceSwitchJourney(at: Date())
+                }
+                return
+            }
+            if let transition = pendingWorkflowTransition {
+                recordWorkflowTransition(
+                    transition.resolved(
+                        at: date,
+                        destination: WorkflowTransitionEndpoint(
+                            resolution: resolution
+                        ),
+                        outcome: .unresolved,
+                        reason: nil
+                    )
+                )
+            }
+            clearPendingSpaceSwitchJourney()
+            clearPendingSpaceSwitchGate()
+            applySpaceResolution(resolution, at: date, source: .space)
+
+        case let .unchanged(resolution):
+            let originID = pendingSpaceSwitchGate.flatMap {
+                SpaceSwitchGateEngine.originWorkflowID(in: $0)
+            }
+            if let transition = pendingWorkflowTransition {
+                recordWorkflowTransition(
+                    transition.updating(
+                        destination: WorkflowTransitionEndpoint(
+                            resolution: resolution
+                        ),
+                        settledAt: date,
+                        additionalNavigationEvents: journey.eventCount
+                    ).resolved(
+                        at: date,
+                        outcome: .cancelled,
+                        reason: nil
+                    )
+                )
+            }
+            insertMarker(.spaceSwitchCancelled, at: date, taskID: originID)
+            clearPendingSpaceSwitchJourney()
+            clearPendingSpaceSwitchGate()
+            applySpaceResolution(resolution, at: date, source: .space)
+
+        case let .presentGate(candidate):
+            guard let refreshed = SpaceSwitchGateEngine.refreshed(
+                pendingSpaceSwitchGate ?? candidate,
+                destination: finalDestination,
+                at: date
+            ) else {
+                clearPendingSpaceSwitchJourney()
+                clearPendingSpaceSwitchGate()
+                applySpaceResolution(
+                    finalDestination,
+                    at: date,
+                    source: .space
+                )
+                return
+            }
+            if let transition = pendingWorkflowTransition {
+                pendingWorkflowTransition = transition.updating(
+                    destination: WorkflowTransitionEndpoint(
+                        resolution: finalDestination
+                    ),
+                    settledAt: date,
+                    additionalNavigationEvents: journey.eventCount
+                )
+            }
+            clearPendingSpaceSwitchJourney()
+            presentSpaceSwitchGate(
+                refreshed,
+                transition: pendingWorkflowTransition
+            )
+
+        case let .applyWithoutGate(resolution):
+            guard let current = pendingSpaceSwitchGate,
+                  let refreshed = SpaceSwitchGateEngine.refreshed(
+                    current,
+                    destination: resolution,
+                    at: date
+                  ) else {
+                clearPendingSpaceSwitchJourney()
+                clearPendingSpaceSwitchGate()
+                applySpaceResolution(resolution, at: date, source: .space)
+                return
+            }
+            if let transition = pendingWorkflowTransition {
+                pendingWorkflowTransition = transition.updating(
+                    destination: WorkflowTransitionEndpoint(
+                        resolution: resolution
+                    ),
+                    settledAt: date,
+                    additionalNavigationEvents: journey.eventCount
+                )
+            }
+            clearPendingSpaceSwitchJourney()
+            presentSpaceSwitchGate(
+                refreshed,
+                transition: pendingWorkflowTransition
+            )
+        }
+    }
+
+    private func clearPendingSpaceSwitchJourney() {
+        spaceResolutionTask?.cancel()
+        spaceResolutionTask = nil
+        pendingSpaceSwitchJourney = nil
+        objectWillChange.send()
+    }
+
+    private func presentSpaceSwitchGate(
+        _ pending: SpaceSwitchGateContext,
+        transition: PendingWorkflowTransition?
+    ) {
+        pendingSpaceSwitchGate = pending
+        pendingWorkflowTransition = transition
+        let displayIdentifier = spaceAnchorRegistry
+            .lastResolvedIdentity?
+            .displayIdentifier
+        spaceSwitchGateController.show(
+            originName: spaceSwitchGateName(for: pending.origin),
+            destinationName: spaceSwitchGateName(for: pending.destination),
+            expiresAt: pending.expiresAt,
+            displayIdentifier: displayIdentifier
+        ) { [weak self] reason in
+            self?.confirmPendingSpaceSwitch(reason: reason, at: Date())
+        }
+        spaceSwitchGateTimeoutTask?.cancel()
+        spaceSwitchGateTimeoutTask = Task { [weak self] in
+            let remaining = max(0, pending.expiresAt.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled, let self,
+                  let current = self.pendingSpaceSwitchGate,
+                  SpaceSwitchGateEngine.hasExpired(current, at: Date())
+            else { return }
+            self.confirmPendingSpaceSwitch(reason: .unstructured, at: Date())
+        }
+        objectWillChange.send()
+    }
+
+    private func confirmPendingSpaceSwitch(
+        reason: SpaceSwitchReason,
+        at date: Date
+    ) {
+        guard pendingSpaceSwitchJourney == nil,
+              let pending = pendingSpaceSwitchGate else { return }
+        let markerKind: TimelineMarkerKind
+        switch reason {
+        case .reachedCheckpoint:
+            markerKind = .spaceSwitchCheckpoint
+        case .waitingForResult:
+            markerKind = .spaceSwitchWaiting
+        case .forcedInterruption:
+            markerKind = .spaceSwitchInterrupted
+        case .unstructured:
+            markerKind = .spaceSwitchUnstructured
+        }
+        finishPendingSpaceSwitch(
+            with: markerKind,
+            reason: reason,
+            resolution: pending.destination,
+            at: date
+        )
+    }
+
+    private func finishPendingSpaceSwitch(
+        with markerKind: TimelineMarkerKind,
+        reason: SpaceSwitchReason,
+        resolution: WorkflowSpaceResolution,
+        at date: Date
+    ) {
+        let originWorkflowID = pendingSpaceSwitchGate.flatMap {
+            SpaceSwitchGateEngine.originWorkflowID(in: $0)
+        }
+        if let transition = pendingWorkflowTransition {
+            recordWorkflowTransition(
+                transition.resolved(
+                    at: date,
+                    outcome: reason == .unstructured
+                        ? .timedOut
+                        : .confirmed,
+                    reason: reason
+                )
+            )
+        }
+        clearPendingSpaceSwitchGate()
+        insertMarker(markerKind, at: date, taskID: originWorkflowID)
+        applySpaceResolution(resolution, at: date, source: .space)
+    }
+
+    private func clearPendingSpaceSwitchGate() {
+        spaceSwitchGateTimeoutTask?.cancel()
+        spaceSwitchGateTimeoutTask = nil
+        pendingSpaceSwitchGate = nil
+        pendingWorkflowTransition = nil
+        spaceSwitchGateController.hide()
+        objectWillChange.send()
+    }
+
+    private func recordWorkflowTransition(
+        _ record: WorkflowTransitionRecord
+    ) {
+        let model = WorkflowTransitionModel(record: record)
+        store.insert(model)
+        workflowTransitions.append(model)
+        saveOrReport()
+    }
+
+    private func spaceSwitchGateName(
+        for resolution: WorkflowSpaceResolution
+    ) -> String {
+        switch resolution {
+        case let .bound(workflowID):
+            return taskName(for: workflowID)
+        case .unbound:
+            return "未绑定桌面"
+        case .unknown:
+            return "正在识别"
+        case .conflict:
+            return "绑定冲突"
         }
     }
 
@@ -2174,7 +2561,7 @@ final class ApplicationState: ObservableObject {
 
         case .unknown:
             // Unknown is deliberately unattributed. This state is normally
-            // transient during the 600 ms Space-change debounce.
+            // transient during the 1.2-second Space navigation settle window.
             switchTask(to: nil, source: source, at: date)
 
         case let .conflict(workflowIDs):
@@ -2211,6 +2598,9 @@ final class ApplicationState: ObservableObject {
         focusSessions.filter { ($0.endedAt ?? $0.startedAt) < cutoff }.forEach { store.delete($0) }
         interruptions.filter { $0.detectedAt < cutoff }.forEach { store.delete($0) }
         markers.filter { $0.date < cutoff }.forEach { store.delete($0) }
+        workflowTransitions.filter { $0.resolvedAt < cutoff }.forEach {
+            store.delete($0)
+        }
         taskParkings.filter { max($0.resumedAt ?? .distantPast, $0.dismissedAt ?? $0.parkedAt) < cutoff }
             .forEach { store.delete($0) }
         saveOrReport()
@@ -2225,6 +2615,9 @@ final class ApplicationState: ObservableObject {
         interruptions = store.interruptions.sorted { $0.detectedAt < $1.detectedAt }
         trainingPlans = store.trainingPlans.sorted { $0.version < $1.version }
         markers = store.markers.sorted { $0.date < $1.date }
+        workflowTransitions = store.workflowTransitions.sorted {
+            $0.resolvedAt < $1.resolvedAt
+        }
         taskParkings = store.taskParkings.sorted { $0.parkedAt < $1.parkedAt }
         workflowSpaceBindings = store.workflowSpaceBindings.sorted { $0.boundAt < $1.boundAt }
         requirements = store.requirements.sorted { $0.capturedAt < $1.capturedAt }

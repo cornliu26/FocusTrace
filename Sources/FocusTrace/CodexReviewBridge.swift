@@ -56,7 +56,7 @@ final class CodexReviewBridge: ObservableObject {
                 AutomationReportArtifact.self,
                 from: Data(contentsOf: reportURL)
             )
-            guard report.schemaVersion == 2,
+            guard (2...5).contains(report.schemaVersion),
                   calendar.isDate(report.reportDate, inSameDayAs: date) else {
                 updateStatus(.invalid("聚合报告协议或日期不匹配"))
                 return
@@ -75,6 +75,7 @@ final class CodexReviewBridge: ObservableObject {
                   review.isConsistentWithBehaviorReliability(
                       report.dataQuality.isReliableForBehavior
                   ),
+                  review.isGrounded(in: report),
                   review.sourceReportID == report.reportID,
                   calendar.isDate(review.reportDate, inSameDayAs: report.reportDate) else {
                 updateStatus(.invalid("Codex 解读不是基于当前聚合报告，已停止展示"))
