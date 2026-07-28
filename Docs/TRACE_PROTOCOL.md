@@ -67,6 +67,7 @@ FocusTrace 不从跳转次数诊断注意力，也不把等待 Agent、到达检
 - `observationPlan`：固定采集边界、四类分析配额、当天与近 7 日来源，以及保守的提醒策略建议。
 
 原生跳转和两秒内的兼容标记只计一次。报告不包含 UUID、逐事件时间戳、原始应用行、Bundle ID、窗口标题、URL、输入内容、需求来源或返回点文字。
+`timedOut + unstructured` 在报告中只显示为“超时 / 未说明”，不能解释成用户没有计划或发生了分心。
 
 `observationPlan.allocations` 是分析精力分配，不是原始事件抽样率。FocusTrace 不会因为某天的复盘结论而少记一类应用事件，或自动扩大到窗口标题、URL、输入内容等敏感数据。
 

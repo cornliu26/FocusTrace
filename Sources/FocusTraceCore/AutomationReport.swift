@@ -721,8 +721,6 @@ public enum AutomationReportEngine {
             "- 协议：v\(report.transitionAudit.protocolVersion ?? 0)，数据来源 \(report.transitionAudit.dataSource ?? "legacyInferred")",
             "- 最终跳转：\(report.transitionAudit.finalSwitches ?? (report.transitionAudit.reasonedSwitches + report.transitionAudit.unreasonedSwitches)) 次",
             "- 主动说明 / 超时 / 自动：\(report.transitionAudit.explicitReasonSwitches ?? 0) / \(report.transitionAudit.timedOutSwitches ?? 0) / \(report.transitionAudit.automaticSwitches ?? 0) 次",
-            "- 已说明原因的最终跳转：\(report.transitionAudit.reasonedSwitches) 次",
-            "- 未说明原因的工作流跳转：\(report.transitionAudit.unreasonedSwitches) 次",
             "- 导航后回到原工作流：\(report.transitionAudit.cancelledNavigations) 次",
             "- 无法解析导航：\(report.transitionAudit.unresolvedNavigations ?? 0) 次",
             "- 主动原因覆盖率：\(report.transitionAudit.explicitReasonCoverage.map(formatPercent) ?? "暂无")",
@@ -899,7 +897,9 @@ public enum AutomationReportEngine {
             (.checkpoint, "到检查点"),
             (.waitingForResult, "等待结果"),
             (.forcedInterruption, "被迫打断"),
-            (.unstructured, "无明确计划")
+            // `unstructured` is also the compatibility value for an expired
+            // confirmation. It records missing input, not the user's intent.
+            (.unstructured, "未说明")
         ]
         let values = labels.compactMap { reason, label -> String? in
             guard let count = counts[reason.rawValue], count > 0 else { return nil }

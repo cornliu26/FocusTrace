@@ -2515,6 +2515,78 @@ suite.run("工作流跳转协议优先使用原生语义并去重旧标记") {
     try expect(result.audit.routes.first?.outcomeCounts?["confirmed"] == 1, "路线应暴露可验证结果")
 }
 
+suite.run("工作流跳转超时不臆测用户意图") {
+    let calendar = utcCalendar()
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let switchedAt = day.addingTimeInterval(9 * 3_600)
+    let report = AutomationReportEngine.makeReport(
+        snapshot: FocusTraceLocalSnapshot(
+            tasks: [
+                TaskRecord(id: workflowA, title: "工作流 A"),
+                TaskRecord(id: workflowB, title: "工作流 B")
+            ],
+            taskIntervals: [
+                TaskIntervalRecord(
+                    taskID: workflowB,
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    workflowSource: .space
+                )
+            ],
+            activities: [
+                ActivityRecord(
+                    app: AppIdentity(bundleID: "app", name: "App"),
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    taskID: workflowB,
+                    focusSessionID: nil,
+                    classification: .allowed
+                )
+            ],
+            workflowTransitions: [
+                WorkflowTransitionRecord(
+                    navigationStartedAt: switchedAt.addingTimeInterval(-2),
+                    settledAt: switchedAt.addingTimeInterval(-0.5),
+                    resolvedAt: switchedAt,
+                    origin: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowA
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowB
+                    ),
+                    outcome: .timedOut,
+                    reason: .unstructured,
+                    interventionTrigger: .frequentSwitchBurst,
+                    navigationEventCount: 1
+                )
+            ]
+        ),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(18 * 3_600),
+        calendar: calendar
+    )
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        timeZone: calendar.timeZone
+    )
+    try expect(
+        markdown.contains("主动说明 / 超时 / 自动：0 / 1 / 0 次"),
+        "超时必须和主动说明分开"
+    )
+    try expect(
+        markdown.contains("原因 未说明 1")
+            && !markdown.contains("无明确计划")
+            && !markdown.contains("已说明原因的最终跳转"),
+        "超时只能表达未说明，不能臆测用户没有计划"
+    )
+}
+
 suite.run("工作流跳转审计在固定大样本下不超过性能预算") {
     let calendar = utcCalendar()
     let day = calendar.date(

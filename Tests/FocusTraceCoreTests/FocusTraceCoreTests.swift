@@ -2583,6 +2583,72 @@ func workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers()
 }
 
 @Test
+func workflowTransitionTimeoutDoesNotInventUserIntent() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let switchedAt = day.addingTimeInterval(9 * 3_600)
+    let report = AutomationReportEngine.makeReport(
+        snapshot: FocusTraceLocalSnapshot(
+            tasks: [
+                TaskRecord(id: workflowA, title: "工作流 A"),
+                TaskRecord(id: workflowB, title: "工作流 B")
+            ],
+            taskIntervals: [
+                TaskIntervalRecord(
+                    taskID: workflowB,
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    workflowSource: .space
+                )
+            ],
+            activities: [
+                ActivityRecord(
+                    app: AppIdentity(bundleID: "app", name: "App"),
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    taskID: workflowB,
+                    focusSessionID: nil,
+                    classification: .allowed
+                )
+            ],
+            workflowTransitions: [
+                workflowTransition(
+                    at: switchedAt,
+                    origin: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowA
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowB
+                    ),
+                    outcome: .timedOut,
+                    trigger: .frequentSwitchBurst,
+                    reason: .unstructured
+                )
+            ]
+        ),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(18 * 3_600),
+        calendar: calendar
+    )
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        timeZone: calendar.timeZone
+    )
+
+    #expect(markdown.contains("主动说明 / 超时 / 自动：0 / 1 / 0 次"))
+    #expect(markdown.contains("原因 未说明 1"))
+    #expect(!markdown.contains("无明确计划"))
+    #expect(!markdown.contains("已说明原因的最终跳转"))
+}
+
+@Test
 func automationJSONIsStructuredAndAggregateOnly() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
