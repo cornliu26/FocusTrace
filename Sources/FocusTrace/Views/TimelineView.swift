@@ -119,9 +119,9 @@ struct TimelineView: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 12) {
             MetricCard(title: "应用切换", value: "\(summary.appSwitchCount)", detail: "前台应用变化")
             MetricCard(
-                title: "工作流 / 手动切换",
+                title: "工作流切换 / 手动指定",
                 value: "\(summary.workflowSwitchCount) / \(summary.taskSwitchCount)",
-                detail: "桌面识别 / 主动标记"
+                detail: "绑定桌面间变化 / 菜单选择"
             )
             MetricCard(title: "疑似 / 确认分心", value: "\(summary.suspectedDistractionCount) / \(summary.confirmedDistractionCount)", detail: "可在回顾中修正")
             MetricCard(
@@ -175,6 +175,7 @@ struct TimelineView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showRawActivities)
             .padding(4)
         }
     }
@@ -251,7 +252,7 @@ struct TimelineChart: View, Equatable {
                         .font(.callout.weight(.medium))
                     Text(occupiedBuckets.isEmpty
                          ? "工作时段开始后会在这里形成概览"
-                         : "有记录的区间平均 \(averageSwitches, specifier: "%.1f") 次应用切换 · Space 切换 \(spaceSwitchCount) 次")
+                         : "有记录的区间平均 \(averageSwitches, specifier: "%.1f") 次应用切换 · 桌面变化 \(spaceSwitchCount) 次（不等于分心）")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -314,7 +315,7 @@ struct TimelineChart: View, Equatable {
             }
             if !eventBuckets.isEmpty {
                 HStack {
-                    Text("关键事件").frame(width: 50, alignment: .leading)
+                    Text("工作节点").frame(width: 50, alignment: .leading)
                     track(height: 24) { width in
                         ForEach(eventBuckets) { bucket in
                             let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
@@ -379,7 +380,7 @@ struct TimelineChart: View, Equatable {
                 legend("适中 3–5", fragmentationColor(.steady))
                 legend("密集 6–10", fragmentationColor(.fragmented))
                 legend("很密集 11+", fragmentationColor(.intense))
-                Text("关键事件按 15 分钟合并")
+                Text("工作节点：切换理由、保存/恢复、专注状态和屏幕状态；相邻事件按 15 分钟合并")
                 Spacer()
             }
             .font(.caption)
@@ -549,13 +550,18 @@ struct TimelineChart: View, Equatable {
         case .taskResumed: return .green
         case .focusPaused: return .orange
         case .focusResumed: return .green
+        case .spaceSwitchCheckpoint: return FocusTraceTheme.mint
+        case .spaceSwitchWaiting: return FocusTraceTheme.sky
+        case .spaceSwitchInterrupted: return FocusTraceTheme.amber
+        case .spaceSwitchUnstructured: return FocusTraceTheme.coral
+        case .spaceSwitchCancelled: return .secondary
         default: return .secondary
         }
     }
 
     private func markerText(_ kind: TimelineMarkerKind) -> String {
         switch kind {
-        case .activeSpaceChanged: return "切换 Space"
+        case .activeSpaceChanged: return "Mac 桌面发生变化"
         case .screenSlept: return "屏幕休眠"
         case .screenWoke: return "屏幕唤醒"
         case .sessionBecameInactive: return "会话锁定"
@@ -567,11 +573,18 @@ struct TimelineChart: View, Equatable {
         case .taskResumed: return "恢复工作流"
         case .focusPaused: return "跨桌面暂停专注"
         case .focusResumed: return "返回后恢复专注"
+        case .spaceSwitchCheckpoint: return "阶段已到后切换"
+        case .spaceSwitchWaiting: return "等待结果时切换"
+        case .spaceSwitchInterrupted: return "被迫中断后切换"
+        case .spaceSwitchUnstructured: return "未选择理由的切换"
+        case .spaceSwitchCancelled: return "滑回并取消切换"
         }
     }
 
     private func representativeKind(_ kinds: [TimelineMarkerKind]) -> TimelineMarkerKind {
         let priority: [TimelineMarkerKind] = [
+            .spaceSwitchInterrupted, .spaceSwitchUnstructured,
+            .spaceSwitchCheckpoint, .spaceSwitchWaiting, .spaceSwitchCancelled,
             .reminderSent, .focusPaused, .focusResumed, .taskParked, .taskResumed,
             .workflowChanged, .taskChanged,
             .sessionBecameInactive, .screenSlept, .sessionBecameActive, .screenWoke
@@ -600,6 +613,11 @@ struct TimelineChart: View, Equatable {
         case .taskResumed: return "play.circle.fill"
         case .focusPaused: return "pause.circle.fill"
         case .focusResumed: return "play.circle.fill"
+        case .spaceSwitchCheckpoint: return "checkmark.circle.fill"
+        case .spaceSwitchWaiting: return "hourglass.circle.fill"
+        case .spaceSwitchInterrupted: return "exclamationmark.bubble.fill"
+        case .spaceSwitchUnstructured: return "questionmark.circle.fill"
+        case .spaceSwitchCancelled: return "arrow.uturn.backward.circle.fill"
         }
     }
 

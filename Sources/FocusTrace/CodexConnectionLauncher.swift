@@ -134,8 +134,8 @@ private struct CodexWorkspaceInstaller {
         return workspaceURL
     }
 
-    /// Existing scheduled tasks keep their working directory, so updating the
-    /// generated instructions and validator upgrades the next run in place.
+    /// Existing scheduled tasks keep their working directory, so refreshing all
+    /// generated instructions and tools upgrades the next run in place.
     /// Reports and user preferences are deliberately left untouched.
     func refreshExistingWorkspaceIfPresent() throws {
         let applicationSupportURL = fileManager.urls(
@@ -152,10 +152,14 @@ private struct CodexWorkspaceInstaller {
 
         let scriptsURL = workspaceURL
             .appendingPathComponent("Scripts", isDirectory: true)
-        try fileManager.createDirectory(
-            at: scriptsURL,
-            withIntermediateDirectories: true
-        )
+        let toolsURL = workspaceURL
+            .appendingPathComponent("Tools", isDirectory: true)
+        for directory in [scriptsURL, toolsURL] {
+            try fileManager.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+        }
         try write(
             CodexWorkspaceContract.agentsInstructions,
             to: workspaceURL.appendingPathComponent("AGENTS.md")
@@ -164,6 +168,17 @@ private struct CodexWorkspaceInstaller {
             CodexWorkspaceContract.workspaceReadme,
             to: workspaceURL.appendingPathComponent("README.md")
         )
+        let generateScriptURL = scriptsURL
+            .appendingPathComponent("generate-daily-report.sh")
+        try write(CodexWorkspaceContract.reportScript, to: generateScriptURL)
+        try makeExecutable(generateScriptURL)
+        let reportToolURL = toolsURL.appendingPathComponent("FocusTraceReport")
+        try installBundledFile(
+            named: "FocusTraceReport",
+            subdirectory: "CodexBridge",
+            to: reportToolURL
+        )
+        try makeExecutable(reportToolURL)
         let reviewInstallerURL = scriptsURL
             .appendingPathComponent("install-codex-review.py")
         try installBundledFile(

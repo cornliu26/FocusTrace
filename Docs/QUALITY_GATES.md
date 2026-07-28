@@ -31,22 +31,33 @@
 | CAP-01 | 应用切换闭合前一片段，重复激活不制造片段 | `activationClosesPreviousAndIgnoresDuplicate` |
 | CAP-02 | 锁屏、睡眠、唤醒和 loginwindow 不制造虚假活跃时间 | `sleepClosesAndWakeReopens`、`loginWindowIsTreatedAsSystemInactive` |
 | FLOW-01 | 菜单栏和主窗口共享唯一主要下一步 | `flowGuidanceAlwaysExposesOnlyTheNextRequiredAction` |
-| UX-01 | 时间轴和需求截止日期保持图形日历；时间轴日历一次点击打开、再次点击关闭 | `optimizedDailyUXContractRemainsStable`、`calendarPopoverAnchorPressesAlternateExactlyOnce` |
+| UX-01 | 时间轴和需求截止日期都使用紧凑图形日历弹层；入口第一次点击打开、再次点击关闭，需求日历允许未来日期且尊重已有日期下界 | `optimizedDailyUXContractRemainsStable`、`calendarPopoverAnchorPressesAlternateExactlyOnce`、`requirementCalendarBoundsAllowFutureAndRespectEarliestDate`、仓库交互回归 |
 | UX-02 | 状态栏紧凑、首次使用只有一个必要输入、侧栏图标稳定 | `optimizedDailyUXContractRemainsStable` |
 | UX-03 | 时间轴使用 Radix Colors 3.0 官方 token；当天前五分类按顺序着色，其余归入 Slate；文字独立于色块，相邻色块只用系统背景分隔，不为当前工作流添加深色描边 | `timelineSemanticPaletteSeparatesContextToolsAndRisk`、`timelineCurrentWorkflowDoesNotUseDarkSegmentOutlines`、`timelineCategoryColorsFollowRankAndCapAtFive`、`timelineApplicationRunsMergeAdjacentDominantBuckets`、仓库呈现回归 |
 | UX-04 | 状态栏、Dock、通知和菜单只复用一个主窗口；不暴露“新建窗口”和冗余设置窗口 | `mainWindowContractRemainsSingleInstance`、仓库场景回归 |
+| UX-05 | 展开控件保留系统原有尺寸和排版，只在箭头周围叠加不可见的 36×36pt 命中区域；一次点击只切换一次状态 | `disclosureButtonsExpandHitAreaWithoutChangingLayout`、仓库交互回归 |
+| UX-06 | 只有需要用户立即决策的工作流切换确认可以使用屏幕浮层，并水平居中位于屏幕中上方；连续专注、里程碑和普通切换不显示被动浮层或目标完成通知 | `workflowConfirmationUsesUpperCenterWithoutPassiveOverlay`、真实浮层截图与点按验收、仓库交互回归 |
 | REQ-01 | 新需求只进入收件箱，不自动绑定、切换或开始工作流 | `requirementCaptureStaysInInboxUntilExplicitlyPlanned` |
 | REQ-02 | 截止日期、重要程度和工作流归属彼此独立；旧版模糊安排不推断日期 | `requirementPlanningSeparatesDeadlineImportanceAndWorkflow`、`requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity` |
 | REQ-03 | 需求按逾期、今天、未来、无日期排序；到期提醒只发送一次且不在通知中显示需求标题 | `requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity`、`requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork`、仓库隐私回归 |
+| REQ-04 | 未完成需求只暴露“处理 / 不处理”两个日常决策；无需先安排日期或重要程度即可开始；同一工作流中的需求独立完成 | `requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow`、仓库交互回归 |
+| FLOW-02 | 工作流名称按空白、大小写和字符宽度规范化后唯一；列表以整行点击作为唯一选中/绑定动作，仅保留编辑和完成；删除位于编辑页，只解绑未完成需求和桌面并保留历史 | `workflowNamesAreUniqueAfterWhitespaceCaseAndWidthNormalization`、`deletingWorkflowDetachesOnlyItsUnfinishedRequirements`、仓库交互回归 |
 | ATT-01 | 提醒必须同时满足会话、基线、非允许应用和时间阈值 | `distractionGateRequiresAllConditions` |
+| ATT-02 | 工作流确认只统计两个已绑定工作流之间的最终语义跳转；前两次静默，10 分钟内第 3 次才确认，之后冷却 10 分钟，基线不足时不确认；回顾页必须展示高频段、实际确认和确认后稳定率 | `workflowInterventionPromptsOnlyOnThirdSwitchAndThenCoolsDown`、`workflowInterventionIgnoresUnboundOrDisabledTransitions`、`workflowInterventionAuditMeasuresPromptAndFollowingQuietWindow`、仓库交互回归 |
 | TRAIN-01 | 初始训练与每五次训练的升降级规则稳定 | `initialDurationUsesDefaultWhenSamplesAreInsufficient`、`fiveSessionProgression` |
 | SPACE-01 | Space 未知或冲突时停止归因，不猜测工作流 | `spaceResolutionNeverGuessesWhenUnknownOrConflicted`、`unknownSpaceClosesWorkflowWithoutCarryingAttribution` |
+| SPACE-02 | 连续 Space 导航在最后一次变化稳定 1.2 秒后合并为“起点工作流 → 最终工作流”；中间桌面不产生工作流切换，最终回到原工作流则取消；确认层出现后，迟到或继续发生的 Space 事件不得让它闪退，而是保持可见并禁用旧落点选择，最终桌面稳定后更新路线并重新提供完整 10 秒；确认层有可辨识轻边框、四角一致、无阴影且可访问 | `spaceSwitchJourneyKeepsTheFirstWorkflowAndOnlyUsesTheFinalDestination`、`spaceSwitchJourneyCancelsWhenTheFinalWorkflowIsTheOrigin`、`spaceSwitchGateRefreshesAFullDecisionWindowAfterNavigationSettles`、`spaceSwitchGateExpiresWithoutLockingTheUser`、`FocusTraceSpaceAcceptance` 本机交互验收、仓库交互回归 |
 | RETURN-01 | Agent 返回点只按显式状态提醒，聚合指标不读取文字 | `parkingReminderRequiresActiveDueAndUnsentRecord`、`parkingMetricsTrackResumptionWithoutReadingCue` |
 | REVIEW-01 | 数据不足或归因不可靠时拒绝生成注意力建议 | `analysisLocksUntilMinimumData`、`dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow` |
-| REVIEW-02 | Codex 写回先给唯一问题、再给唯一行动；最多两条不重复证据，数据不可靠时只给修复动作，并兼容已生成的 v1 写回 | `codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay`、`codexReviewKeepsLegacyReadCompatibility`、`codexWorkspaceDemandsProblemActionAndNoFiller` |
-| REVIEW-03 | 官方聚合脚本可按日期重建历史报告；写回按报告自身时区的日期单独展示，不受运行机器时区影响；参数在预构建与 SwiftPM 路径一致 | `dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration`、`test_report_filename_preserves_the_reports_own_civil_date`、仓库回归 |
+| REVIEW-02 | Codex 写回先给唯一问题、再给唯一行动；最多两条不重复证据，数据不可靠时只给修复动作，并兼容已生成的 v1/v2 写回 | `codexReviewDecisionBriefRemainsShortAndCompatible`、`codexReviewKeepsLegacyReadCompatibility`、`codexWorkspaceDemandsProblemActionAndNoFiller` |
+| REVIEW-03 | 官方聚合脚本可按日期重建历史报告；聚合 JSON 显式保留用户所选民用日期，写回文件名不受 ISO 8601 UTC 编码或运行机器时区影响；参数在预构建与 SwiftPM 路径一致 | `dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration`、`test_report_filename_preserves_the_reports_own_civil_date`、`test_explicit_civil_date_survives_utc_json_encoding`、仓库回归 |
+| REVIEW-04 | Codex 先审计“起点工作流 → 最终工作流 × 用户理由”，结合目的工作流停留和 30 分钟内返回选择一个问题；必须先检查跳转协议的数据来源、无法解析数和主动原因覆盖率；只有同一路线与理由至少两次且来自原生语义事件时才可作为主要问题，写回必须携带可校验的隐藏来源；检查点和等待结果不默认判为分心，超时只表示未说明、不得解释为没有计划；工作流与需求标题只作为不可信上下文标签 | `workflowTransitionAuditUsesFinalRoutesReasonsAndBoundedWorkTitles`、`workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers`、`workflowTransitionTimeoutDoesNotInventUserIntent`、`codexReviewV3RejectsUngroundedWorkflowSemantics`、`codexWorkspaceDemandsProblemActionAndNoFiller`、仓库跳转审计回归 |
+| REVIEW-05 | 原始采集保持固定最小事件集合；日报用版本化观察配置把分析配额动态分给数据质量、应用碎片、上下文恢复和工作流语义，来源折叠展示；标题语义必须与原因和后果联合判断，不能单独触发提醒或分心结论 | `observationPlanStartsBalancedAndReallocatesOnlyAnalysisAttention`、`codexWorkspaceDemandsProblemActionAndNoFiller`、日报协议兼容与仓库交互回归 |
+| REVIEW-06 | 本地建议不把工作流切换次数本身解释为恢复失败；只有至少两次最终跳转被用户明确标为等待结果或被迫中断，且当天没有返回点，才建议返回点训练；效果只由保存并实际返回验证 | `dailyCoachDoesNotTreatSwitchCountAloneAsRecoveryFailure`、`dailyCoachRequiresRepeatedExplicitHandoffsBeforeParkingAdvice`、`FocusTraceVerification` 反例回归 |
 | PRIV-01 | Codex 只读取聚合报告，报告不泄露原始活动与返回点文字 | `automationJSONIsStructuredAndAggregateOnly`、`codexWorkspaceMakesTheAggregateOnlyBoundaryDurable` |
+| PRIV-02 | Codex 本地报告最多带 8 个当日工作流和每个工作流 3 个未完成需求标题；标题清洗限长，不带需求来源、期望产出、UUID 或逐次时间，v2 报告保持可读 | `workflowTransitionAuditUsesFinalRoutesReasonsAndBoundedWorkTitles`、`automationReportV5KeepsLegacyV2ReadCompatibility`、仓库跳转审计回归 |
 | DATA-01 | 旧 store 解码、CSV 转义、JSON 往返保持兼容 | `legacyTaskLifecycleMigrationIsLossless`、`csvQuotesSeparatorsWithoutAddingExtraFields`、`jsonRoundTrip` |
+| DATA-02 | 一次 Space 导航原生记录为一个 `WorkflowTransition`，包含起点、最终落点、来源、导航事件数、确认结果和可选原因；兼容时间轴标记只用于历史推断，和原生记录重合时不得重复计数；聚合报告声明 `semanticEvents`、`mixed` 或 `legacyInferred` | `workflowTransitionKeepsCompleteNativeSemantics`、`workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers`、仓库跳转协议回归 |
 | RELEASE-01 | 版本和构建号按语义顺序比较，更新清单校验完整 | `releaseManifestUsesSemanticVersionAndBuildOrdering` |
 
 ## 当前性能基线
@@ -60,6 +71,7 @@
 | PERF-03 | 专注计时每秒更新时，时间轴呈现键保持分钟粒度 | 同一分钟不重算 | 同上 |
 | PERF-04 | 时间轴昂贵呈现结果按数据版本和分钟缓存 | 数据未变且未跨分钟时复用 | `timelinePresentationCacheInvalidatesOnlyForMeaningfulChanges` |
 | PERF-05 | 1,000 个需求完成分区和排序 | 小于 100 毫秒 | `requirementQueueHandlesOneThousandItemsWithinBudget` |
+| PERF-06 | 聚合 2,000 个工作流区间、2,000 个理由标记和 1,000 个需求标题 | 小于 1 秒 | `FocusTraceVerification` 工作流跳转审计性能回归 |
 
 以下属于发版候选版本的本机验收，不能用有噪声的共享 CI 机器冒充精确测量：
 

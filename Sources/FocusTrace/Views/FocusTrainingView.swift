@@ -261,13 +261,13 @@ struct FocusTrainingView: View {
         GroupBox {
             DisclosureGroup(
                 "管理工作流与允许应用",
-                isExpanded: Binding(
-                    get: { showWorkflowManagement || state.activeTasks.isEmpty },
-                    set: { showWorkflowManagement = $0 }
-                )
+                isExpanded: workflowManagementExpansion
             ) {
             VStack(spacing: 0) {
                 ForEach(state.activeTasks) { task in
+                    let isCurrentWorkflow = state.isSpaceWorkflowModeEnabled
+                        ? state.currentSpaceWorkflowID == task.id
+                        : state.currentTaskID == task.id
                     HStack {
                         Button {
                             if state.isSpaceWorkflowModeEnabled {
@@ -277,8 +277,8 @@ struct FocusTrainingView: View {
                             }
                         } label: {
                             HStack {
-                                Image(systemName: task.id == state.currentTaskID ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(task.id == state.currentTaskID ? .green : .secondary)
+                                Image(systemName: isCurrentWorkflow ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(isCurrentWorkflow ? FocusTraceTheme.mint : .secondary)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(task.title).font(.headline)
                                     let bindingCount = state.verifiedSpaceBindingCount(for: task.id)
@@ -291,18 +291,12 @@ struct FocusTrainingView: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .help(
+                            state.isSpaceWorkflowModeEnabled
+                                ? "将当前桌面绑定到“\(task.title)”"
+                                : "切换到“\(task.title)”"
+                        )
                         Spacer()
-                        if state.currentSpaceWorkflowID == task.id {
-                            Label("当前桌面", systemImage: "rectangle.fill.on.rectangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.blue)
-                        } else if state.currentSpaceWorkflowID == nil {
-                            Button {
-                                state.bindCurrentSpace(to: task.id)
-                            } label: {
-                                Label("绑定此桌面", systemImage: "rectangle.badge.plus")
-                            }
-                        }
                         Button("编辑") { editingTask = task }
                         Button {
                             workflowToComplete = task
@@ -327,34 +321,51 @@ struct FocusTrainingView: View {
                 }
                 .padding(.top, 12)
 
-                if !state.completedWorkflows.isEmpty {
+                if !state.inactiveWorkflows.isEmpty {
                     Divider().padding(.vertical, 10)
                     DisclosureGroup(
-                        "已完成工作流（\(state.completedWorkflows.count)）",
+                        "已结束工作流（\(state.inactiveWorkflows.count)）",
                         isExpanded: $showCompletedWorkflows
                     ) {
-                        ForEach(state.completedWorkflows) { workflow in
+                        ForEach(state.inactiveWorkflows) { workflow in
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(workflow.title)
-                                    if let completedAt = workflow.completedAt {
+                                    if workflow.workflowLifecycle == .archived {
+                                        Text("已归档")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    } else if let completedAt = workflow.completedAt {
                                         Text("完成于 \(completedAt.formatted(date: .abbreviated, time: .shortened))")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
+                                Button("编辑") { editingTask = workflow }
                                 Button("重新打开") { state.reopenWorkflow(workflow.id) }
-                                Button("归档") { state.archiveTask(workflow.id) }
                             }
                             .padding(.vertical, 6)
                         }
                     }
+                    .focusTraceDisclosureHitTarget(
+                        isExpanded: $showCompletedWorkflows
+                    )
                 }
             }
             .padding(8)
             }
+            .focusTraceDisclosureHitTarget(
+                isExpanded: workflowManagementExpansion
+            )
         }
+    }
+
+    private var workflowManagementExpansion: Binding<Bool> {
+        Binding(
+            get: { showWorkflowManagement || state.activeTasks.isEmpty },
+            set: { showWorkflowManagement = $0 }
+        )
     }
 
     private var privacyNote: some View {

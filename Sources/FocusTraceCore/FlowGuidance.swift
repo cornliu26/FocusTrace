@@ -52,8 +52,8 @@ public enum FlowGuidanceEngine {
         }
         guard let currentWorkflowTitle else {
             return FlowGuidance(
-                title: "这个桌面还没有工作流",
-                detail: "选择一次并绑定；以后切到这个桌面会自动恢复，不用重复选择。",
+                title: "这个桌面还没有工作流，切换门尚未生效",
+                detail: "绑定后，离开或进入工作流桌面时才会询问切换理由。",
                 buttonTitle: "选择并绑定当前桌面",
                 action: .bindWorkflow
             )

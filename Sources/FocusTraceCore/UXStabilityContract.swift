@@ -7,7 +7,8 @@ public enum FocusTraceDateSelectionPresentation: String, Codable, Sendable {
 }
 
 public enum FocusTraceRequirementDateSelectionPresentation: String, Codable, Sendable {
-    case graphicalCalendar = "focusTrace.requirementDateSelector.graphicalCalendar"
+    case graphicalCalendarPopover =
+        "focusTrace.requirementDateSelector.graphicalCalendarPopover"
 }
 
 public enum FocusTraceCalendarPopoverEvent: Sendable {
@@ -29,11 +30,82 @@ public enum FocusTraceCalendarPopoverState {
     }
 }
 
+public enum FocusTraceCalendarBounds {
+    public static func isSelectable(
+        _ date: Date,
+        minimumDate: Date? = nil,
+        maximumDate: Date? = nil,
+        calendar: Calendar = .current
+    ) -> Bool {
+        let day = calendar.startOfDay(for: date)
+        if let minimumDate,
+           day < calendar.startOfDay(for: minimumDate) {
+            return false
+        }
+        if let maximumDate,
+           day > calendar.startOfDay(for: maximumDate) {
+            return false
+        }
+        return true
+    }
+
+    public static func movedMonth(
+        from month: Date,
+        by offset: Int,
+        minimumDate: Date? = nil,
+        maximumDate: Date? = nil,
+        calendar: Calendar = .current
+    ) -> Date {
+        let currentMonth = FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: month,
+            calendar: calendar
+        )
+        guard let moved = calendar.date(
+            byAdding: .month,
+            value: offset,
+            to: currentMonth
+        ) else {
+            return currentMonth
+        }
+        var result = FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: moved,
+            calendar: calendar
+        )
+        if let minimumDate {
+            result = max(
+                result,
+                FocusTraceCalendarLayoutEngine.startOfMonth(
+                    containing: minimumDate,
+                    calendar: calendar
+                )
+            )
+        }
+        if let maximumDate {
+            result = min(
+                result,
+                FocusTraceCalendarLayoutEngine.startOfMonth(
+                    containing: maximumDate,
+                    calendar: calendar
+                )
+            )
+        }
+        return result
+    }
+}
+
+public enum FocusTraceDisclosureInteraction {
+    public static let hitTargetSize = 36.0
+
+    public static func stateAfterHeaderPress(isExpanded: Bool) -> Bool {
+        !isExpanded
+    }
+}
+
 public enum FocusTraceUXContract {
     public static let dateSelectionPresentation: FocusTraceDateSelectionPresentation =
         .graphicalCalendarPopover
     public static let requirementDateSelectionPresentation:
-        FocusTraceRequirementDateSelectionPresentation = .graphicalCalendar
+        FocusTraceRequirementDateSelectionPresentation = .graphicalCalendarPopover
     public static let calendarPopoverAnimationsEnabled = false
     public static let calendarRefreshGranularity = Calendar.Component.day
     public static let calendarPrewarmMonthOffsets = [-1, 0, 1]

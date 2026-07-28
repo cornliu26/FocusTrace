@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-REVIEW_FIELDS = {
+REVIEW_FIELDS_V2 = {
     "schemaVersion",
     "sourceReportID",
     "reportDate",
@@ -22,7 +22,29 @@ REVIEW_FIELDS = {
     "evidence",
     "nextCheck",
 }
+REVIEW_FIELDS_V3 = REVIEW_FIELDS_V2 | {"analysisAudit"}
 REVIEW_STATUSES = {"behaviorFinding", "dataQualityBlocked"}
+ANALYSIS_SOURCES = {
+    "dataQuality",
+    "workflowRoute",
+    "previousRecommendation",
+    "normalizedTrend",
+    "phaseTwo",
+    "localRecommendation",
+}
+CONTEXT_RELATIONS = {
+    "sameDeliverableToolChange",
+    "adjacentDeliverables",
+    "differentGoals",
+    "insufficientEvidence",
+    "notApplicable",
+}
+ROUTE_REASONS = {
+    "checkpoint",
+    "waitingForResult",
+    "forcedInterruption",
+    "unstructured",
+}
 FILLER_PHRASES = {
     "总体来看",
     "值得注意",
@@ -60,15 +82,151 @@ def normalized_text(value: str) -> str:
     return "".join(character.lower() for character in value if character.isalnum())
 
 
+def report_civil_date(report: dict[str, Any]) -> str:
+    explicit = report.get("reportCivilDate")
+    if explicit is None:
+        return parse_iso8601(require_text(report, "reportDate", 64)).strftime(
+            "%Y-%m-%d"
+        )
+    if not isinstance(explicit, str):
+        raise ValueError("reportCivilDate 必须是 yyyy-MM-dd")
+    try:
+        parsed = dt.date.fromisoformat(explicit)
+    except ValueError as error:
+        raise ValueError("reportCivilDate 必须是 yyyy-MM-dd") from error
+    if parsed.isoformat() != explicit:
+        raise ValueError("reportCivilDate 必须是 yyyy-MM-dd")
+    return explicit
+
+
+def validate_analysis_audit(
+    report: dict[str, Any],
+    review: dict[str, Any],
+    reliable: bool,
+) -> None:
+    if review["schemaVersion"] == 2:
+        return
+    audit = review.get("analysisAudit")
+    if not isinstance(audit, dict) or set(audit) != {
+        "source",
+        "selectedRoute",
+        "contextRelation",
+    }:
+        raise ValueError("analysisAudit 字段不匹配")
+    source = audit.get("source")
+    relation = audit.get("contextRelation")
+    if source not in ANALYSIS_SOURCES:
+        raise ValueError("analysisAudit.source 无效")
+    if relation not in CONTEXT_RELATIONS:
+        raise ValueError("analysisAudit.contextRelation 无效")
+
+    selected_route = audit.get("selectedRoute")
+    no_route = selected_route is None and relation == "notApplicable"
+    if source == "dataQuality":
+        if reliable or not no_route:
+            raise ValueError("数据质量结论必须来自不可靠报告且不能选择路线")
+        return
+    if not reliable:
+        raise ValueError("数据不可靠时只能选择 dataQuality")
+    if source == "localRecommendation":
+        if not no_route or not isinstance(report.get("recommendation"), dict):
+            raise ValueError("本地建议来源与聚合报告不匹配")
+        return
+    if source == "previousRecommendation":
+        previous = report.get("previousRecommendationEvaluation")
+        if (
+            not no_route
+            or not isinstance(previous, dict)
+            or previous.get("status") not in {"needsAdjustment", "notRun"}
+        ):
+            raise ValueError("上一项建议没有可行动的失败证据")
+        return
+    if source == "normalizedTrend":
+        trend = report.get("trend")
+        trend_fields = {
+            "appSwitchRateDeltaPercent",
+            "workflowSwitchRateDeltaPercent",
+            "attributedRatioDeltaPoints",
+            "medianFocusDeltaMinutes",
+        }
+        if (
+            not no_route
+            or not isinstance(trend, dict)
+            or not isinstance(trend.get("baselineDays"), int)
+            or trend["baselineDays"] < 2
+            or not any(trend.get(field) is not None for field in trend_fields)
+        ):
+            raise ValueError("标准化趋势缺少两个可比工作日或有效变化")
+        return
+    if source == "phaseTwo":
+        phase_two = report.get("phaseTwo")
+        if (
+            not no_route
+            or not isinstance(phase_two, dict)
+            or phase_two.get("status") != "ready"
+            or not (
+                phase_two.get("insights")
+                or phase_two.get("suggestionTitle")
+            )
+        ):
+            raise ValueError("阶段 2 尚无可引用洞察")
+        return
+
+    if not isinstance(selected_route, dict) or set(selected_route) != {
+        "fromWorkflow",
+        "toWorkflow",
+        "reason",
+    }:
+        raise ValueError("工作流路线字段不匹配")
+    if relation == "notApplicable":
+        raise ValueError("工作流路线必须记录上下文关系")
+    from_workflow = selected_route.get("fromWorkflow")
+    to_workflow = selected_route.get("toWorkflow")
+    reason = selected_route.get("reason")
+    if (
+        not isinstance(from_workflow, str)
+        or not from_workflow.strip()
+        or not isinstance(to_workflow, str)
+        or not to_workflow.strip()
+        or reason not in ROUTE_REASONS
+    ):
+        raise ValueError("工作流路线内容无效")
+    transition_audit = report.get("transitionAudit")
+    if (
+        not isinstance(transition_audit, dict)
+        or transition_audit.get("dataSource") not in {"semanticEvents", "mixed"}
+    ):
+        raise ValueError("工作流路线缺少原生语义事件")
+    routes = transition_audit.get("routes")
+    if not isinstance(routes, list):
+        raise ValueError("聚合报告缺少工作流路线")
+    for route in routes:
+        if (
+            isinstance(route, dict)
+            and route.get("fromWorkflow") == from_workflow
+            and route.get("toWorkflow") == to_workflow
+        ):
+            reason_counts = route.get("reasonCounts")
+            if (
+                isinstance(reason_counts, dict)
+                and isinstance(reason_counts.get(reason), int)
+                and reason_counts[reason] >= 2
+            ):
+                return
+    raise ValueError("所选工作流路线或理由没有至少两次聚合证据")
+
+
 def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
-    if report.get("schemaVersion") != 2:
-        raise ValueError("聚合报告 schemaVersion 不是 2")
-    if set(review) != REVIEW_FIELDS:
-        unexpected = sorted(set(review) - REVIEW_FIELDS)
-        missing = sorted(REVIEW_FIELDS - set(review))
+    if report.get("schemaVersion") not in {2, 3, 4, 5}:
+        raise ValueError("聚合报告 schemaVersion 必须是 2、3、4 或 5")
+    schema_version = review.get("schemaVersion")
+    if schema_version not in {2, 3}:
+        raise ValueError("Codex 写回 schemaVersion 必须是 2 或 3")
+    expected_fields = REVIEW_FIELDS_V3 if schema_version == 3 else REVIEW_FIELDS_V2
+    if set(review) != expected_fields:
+        unexpected = sorted(set(review) - expected_fields)
+        missing = sorted(expected_fields - set(review))
         raise ValueError(f"Codex 写回字段不匹配；缺少 {missing}，多出 {unexpected}")
-    if review.get("schemaVersion") != 2:
-        raise ValueError("Codex 写回 schemaVersion 必须是 2")
 
     report_id = require_text(report, "reportID", 160)
     source_report_id = require_text(review, "sourceReportID", 160)
@@ -134,7 +292,8 @@ def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
     ):
         raise ValueError("阶段 2 未解锁时不能用解锁进度填充每日结论")
 
-    return parse_iso8601(report_date).strftime("%Y-%m-%d")
+    validate_analysis_audit(report, review, reliable)
+    return report_civil_date(report)
 
 
 def write_atomically(path: Path, payload: dict[str, Any]) -> None:

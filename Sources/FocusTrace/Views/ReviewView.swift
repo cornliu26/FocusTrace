@@ -7,6 +7,7 @@ struct ReviewView: View {
     @StateObject private var codexLauncher = CodexConnectionLauncher()
     @State private var showPlanHistory = false
     @State private var showLocalEvidence = false
+    @State private var showObservationPlan = false
     @State private var showDailyDetails = false
 
     var body: some View {
@@ -14,6 +15,7 @@ struct ReviewView: View {
             VStack(alignment: .leading, spacing: 18) {
                 reviewHeader
                 localAnalysis
+                interventionEffectiveness
                 codexAnalysis
                 if hasUnresolvedReview {
                     unresolvedReview
@@ -28,6 +30,70 @@ struct ReviewView: View {
         .task(id: state.selectedDate) {
             codexLauncher.refreshExistingWorkspaceIfPresent()
             await codexBridge.observe(for: state.selectedDate)
+        }
+    }
+
+    private var interventionEffectiveness: some View {
+        let audit = state.selectedInterventionAudit
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 13) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
+                        .font(.title3)
+                        .foregroundStyle(FocusTraceTheme.mint)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("只在高频切换段请求确认")
+                            .font(.headline)
+                        Text("普通切换静默记录；10 分钟内第 3 次已绑定工作流切换才在屏幕中上方确认，之后冷却 10 分钟。")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible()), count: 4),
+                    spacing: 10
+                ) {
+                    MetricCard(
+                        title: "高频切换段",
+                        value: "\(audit.frequentSwitchEpisodes)",
+                        detail: "达到确认门槛"
+                    )
+                    MetricCard(
+                        title: "实际确认",
+                        value: "\(audit.promptsShown)",
+                        detail: "最多每 10 分钟一次"
+                    )
+                    MetricCard(
+                        title: "主动说明",
+                        value: "\(audit.confirmedPrompts)",
+                        detail: audit.promptsShown > 0
+                            ? percent(audit.confirmationRate ?? 0)
+                            : "暂无确认"
+                    )
+                    MetricCard(
+                        title: "确认后稳定",
+                        value: audit.quietAfterPromptRate.map(percent) ?? "—",
+                        detail: audit.assessedPrompts > 0
+                            ? "后续 10 分钟未再切换"
+                            : "等待完整观察窗"
+                    )
+                }
+
+                Label(interventionStatus(audit), systemImage: interventionStatusIcon(audit))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(8)
+        } label: {
+            HStack {
+                Label("切换干预是否值得", systemImage: "waveform.path.ecg")
+                Spacer()
+                Text("仅聚合语义跳转")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -52,6 +118,11 @@ struct ReviewView: View {
     private var localAnalysis: some View {
         let analysis = state.selectedCoachingAnalysis
         let recommendation = analysis.recommendation
+        let observationPlan = ObservationPlanEngine.makePlan(
+            coaching: analysis,
+            summary: state.selectedSummary,
+            interventionAudit: state.selectedInterventionAudit
+        )
         return GroupBox {
             VStack(alignment: .leading, spacing: 14) {
                 if !analysis.quality.warnings.isEmpty {
@@ -160,6 +231,9 @@ struct ReviewView: View {
                     }
                     .padding(.top, 10)
                 }
+                .focusTraceDisclosureHitTarget(isExpanded: $showLocalEvidence)
+
+                observationPlanDisclosure(observationPlan)
             }
             .padding(8)
         } label: {
@@ -171,6 +245,74 @@ struct ReviewView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func observationPlanDisclosure(
+        _ plan: DailyObservationPlan
+    ) -> some View {
+        let primary = plan.primaryAllocation
+        return DisclosureGroup(
+            isExpanded: $showObservationPlan
+        ) {
+            VStack(alignment: .leading, spacing: 11) {
+                Text("这里配置的是分析精力，不会抽样或丢弃原始时间轴。")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                ForEach(plan.allocations, id: \.lens) { allocation in
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Text(observationLensTitle(allocation.lens))
+                                .font(.callout.weight(.semibold))
+                            Spacer()
+                            Text("\(allocation.percent)%")
+                                .font(.callout.monospacedDigit().weight(.semibold))
+                        }
+                        ProgressView(
+                            value: Double(allocation.percent),
+                            total: 100
+                        )
+                        .tint(observationLensColor(allocation.lens))
+                        Text(allocation.reason)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Divider()
+
+                Label(
+                    plan.source == .initialDefault
+                        ? "来源：均衡初始配置"
+                        : "来源：当天聚合 + 近 7 个可比工作日（当前可比 \(plan.lookbackWorkdays) 天）",
+                    systemImage: "doc.text.magnifyingglass"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                Label(
+                    plan.interventionRecommendation,
+                    systemImage: "bell.badge"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.top, 10)
+        } label: {
+            HStack {
+                Text(
+                    "今天重点观察："
+                        + observationLensTitle(
+                            primary?.lens ?? .dataQuality
+                        )
+                )
+                Spacer()
+                Text("\(primary?.percent ?? 25)% · 配置 v\(plan.version)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .focusTraceDisclosureHitTarget(isExpanded: $showObservationPlan)
     }
 
     @ViewBuilder
@@ -383,6 +525,7 @@ struct ReviewView: View {
                 }
                 .padding(.top, 12)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showDailyDetails)
             .padding(8)
         } label: {
             Text("数据证据")
@@ -503,6 +646,7 @@ struct ReviewView: View {
             }
             .padding(8)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showPlanHistory)
         }
     }
 
@@ -526,6 +670,62 @@ struct ReviewView: View {
 
     private func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
+    }
+
+    private func observationLensTitle(_ lens: ObservationLens) -> String {
+        switch lens {
+        case .dataQuality:
+            return "数据质量"
+        case .fragmentation:
+            return "应用碎片"
+        case .contextRecovery:
+            return "上下文恢复"
+        case .workflowSemantics:
+            return "工作流语义"
+        }
+    }
+
+    private func observationLensColor(_ lens: ObservationLens) -> Color {
+        switch lens {
+        case .dataQuality:
+            return FocusTraceTheme.amber
+        case .fragmentation:
+            return FocusTraceTheme.sky
+        case .contextRecovery:
+            return FocusTraceTheme.mint
+        case .workflowSemantics:
+            return FocusTraceTheme.coral
+        }
+    }
+
+    private func interventionStatus(
+        _ audit: WorkflowInterventionAudit
+    ) -> String {
+        if !state.baselineComplete,
+           Calendar.current.isDateInToday(state.selectedDate) {
+            return "仍在基线期：今天只记录，不弹出确认。"
+        }
+        if audit.frequentSwitchEpisodes == 0 {
+            return "今天没有进入高频切换段，FocusTrace 不会为了正常切换打断你。"
+        }
+        if audit.promptsShown == 0 {
+            return "检测到高频切换段，但没有策略确认记录；旧数据或当时未启用确认不会被补算。"
+        }
+        guard let quietRate = audit.quietAfterPromptRate else {
+            return "确认后的 10 分钟观察窗尚未结束，暂不判断这次干预是否有效。"
+        }
+        return quietRate >= 0.5
+            ? "确认后多数观察窗恢复稳定；继续观察，不增加弹出频率。"
+            : "确认后仍常继续切换；当前干预效果不足，不应提高弹出频率。"
+    }
+
+    private func interventionStatusIcon(
+        _ audit: WorkflowInterventionAudit
+    ) -> String {
+        guard let rate = audit.quietAfterPromptRate else {
+            return "info.circle"
+        }
+        return rate >= 0.5 ? "checkmark.circle" : "exclamationmark.circle"
     }
 
     private func trendText(_ value: Double?) -> String {

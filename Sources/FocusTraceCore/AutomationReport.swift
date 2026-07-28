@@ -4,31 +4,45 @@ import Foundation
 /// domain records rather than persistence implementation types so local tools
 /// can share the analysis rules without importing AppKit or SwiftUI.
 public struct FocusTraceLocalSnapshot: Decodable, Sendable {
+    public let tasks: [TaskRecord]
     public let taskIntervals: [TaskIntervalRecord]
     public let activities: [ActivityRecord]
     public let focusSessions: [FocusSessionRecord]
     public let interruptions: [InterruptionRecord]
     public let trainingPlans: [TrainingPlanRecord]
+    public let markers: [TimelineMarkerRecord]
+    public let workflowTransitions: [WorkflowTransitionRecord]
     public let taskParkings: [TaskParkingRecord]
+    public let requirements: [RequirementRecord]
 
     public init(
+        tasks: [TaskRecord] = [],
         taskIntervals: [TaskIntervalRecord] = [],
         activities: [ActivityRecord] = [],
         focusSessions: [FocusSessionRecord] = [],
         interruptions: [InterruptionRecord] = [],
         trainingPlans: [TrainingPlanRecord] = [],
-        taskParkings: [TaskParkingRecord] = []
+        markers: [TimelineMarkerRecord] = [],
+        workflowTransitions: [WorkflowTransitionRecord] = [],
+        taskParkings: [TaskParkingRecord] = [],
+        requirements: [RequirementRecord] = []
     ) {
+        self.tasks = tasks
         self.taskIntervals = taskIntervals
         self.activities = activities
         self.focusSessions = focusSessions
         self.interruptions = interruptions
         self.trainingPlans = trainingPlans
+        self.markers = markers
+        self.workflowTransitions = workflowTransitions
         self.taskParkings = taskParkings
+        self.requirements = requirements
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        tasks = try container.decodeIfPresent([PersistedTask].self, forKey: .tasks)?
+            .map(\.record) ?? []
         taskIntervals = try container.decodeIfPresent([PersistedTaskInterval].self, forKey: .taskIntervals)?
             .map(\.record) ?? []
         activities = try container.decodeIfPresent([PersistedActivity].self, forKey: .activities)?
@@ -39,8 +53,18 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
             .map(\.record) ?? []
         trainingPlans = try container.decodeIfPresent([PersistedTrainingPlan].self, forKey: .trainingPlans)?
             .map(\.record) ?? []
+        markers = try container.decodeIfPresent([PersistedTimelineMarker].self, forKey: .markers)?
+            .map(\.record) ?? []
+        workflowTransitions = try container.decodeIfPresent(
+            [PersistedWorkflowTransition].self,
+            forKey: .workflowTransitions
+        )?.map(\.record) ?? []
         taskParkings = try container.decodeIfPresent([PersistedTaskParking].self, forKey: .taskParkings)?
             .map(\.record) ?? []
+        requirements = try container.decodeIfPresent(
+            [PersistedRequirement].self,
+            forKey: .requirements
+        )?.map(\.record) ?? []
     }
 
     public static func load(from url: URL) throws -> FocusTraceLocalSnapshot {
@@ -55,17 +79,22 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case tasks
         case taskIntervals
         case activities
         case focusSessions
         case interruptions
         case trainingPlans
+        case markers
+        case workflowTransitions
         case taskParkings
+        case requirements
     }
 }
 
 public struct AutomationDailyReport: Equatable, Sendable {
     public let reportDate: Date
+    public let reportCivilDate: String
     public let generatedAt: Date
     public let summary: DailySummary
     public let trainingCount: Int
@@ -75,9 +104,13 @@ public struct AutomationDailyReport: Equatable, Sendable {
     public let currentPlan: TrainingPlanRecord
     public let analysis: AnalysisResult
     public let coaching: DailyCoachingAnalysis
+    public let workflowContexts: [AutomationWorkflowContextArtifact]
+    public let transitionAudit: AutomationWorkflowTransitionAuditArtifact
+    public let observationPlan: DailyObservationPlan
 
     public init(
         reportDate: Date,
+        reportCivilDate: String,
         generatedAt: Date,
         summary: DailySummary,
         trainingCount: Int,
@@ -86,9 +119,13 @@ public struct AutomationDailyReport: Equatable, Sendable {
         totalCompletedSessions: Int,
         currentPlan: TrainingPlanRecord,
         analysis: AnalysisResult,
-        coaching: DailyCoachingAnalysis
+        coaching: DailyCoachingAnalysis,
+        workflowContexts: [AutomationWorkflowContextArtifact],
+        transitionAudit: AutomationWorkflowTransitionAuditArtifact,
+        observationPlan: DailyObservationPlan
     ) {
         self.reportDate = reportDate
+        self.reportCivilDate = reportCivilDate
         self.generatedAt = generatedAt
         self.summary = summary
         self.trainingCount = trainingCount
@@ -98,6 +135,9 @@ public struct AutomationDailyReport: Equatable, Sendable {
         self.currentPlan = currentPlan
         self.analysis = analysis
         self.coaching = coaching
+        self.workflowContexts = workflowContexts
+        self.transitionAudit = transitionAudit
+        self.observationPlan = observationPlan
     }
 }
 
@@ -143,6 +183,7 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let reportID: String
     public let reportDate: Date
+    public let reportCivilDate: String?
     public let generatedAt: Date
     public let counts: AutomationDailyCounts
     public let normalized: DailyNormalizedMetrics
@@ -152,11 +193,15 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     public let recommendation: DailyCoachRecommendation
     public let phaseTwo: AutomationPhaseTwoArtifact
     public let currentPlan: AutomationPlanArtifact
+    public let workflowContexts: [AutomationWorkflowContextArtifact]?
+    public let transitionAudit: AutomationWorkflowTransitionAuditArtifact?
+    public let observationPlan: DailyObservationPlan?
 
     public init(report: AutomationDailyReport) {
-        schemaVersion = 2
+        schemaVersion = 5
         reportID = "focustrace-\(Int(report.reportDate.timeIntervalSince1970))-\(Int(report.generatedAt.timeIntervalSince1970))"
         reportDate = report.reportDate
+        reportCivilDate = report.reportCivilDate
         generatedAt = report.generatedAt
         counts = AutomationDailyCounts(
             appSwitches: report.summary.appSwitchCount,
@@ -174,6 +219,9 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
         trend = report.coaching.trend
         previousRecommendationEvaluation = report.coaching.previousRecommendationEvaluation
         recommendation = report.coaching.recommendation
+        workflowContexts = report.workflowContexts
+        transitionAudit = report.transitionAudit
+        observationPlan = report.observationPlan
         currentPlan = AutomationPlanArtifact(
             version: report.currentPlan.version,
             focusMinutes: report.currentPlan.focusMinutes,
@@ -218,6 +266,55 @@ public enum CodexReviewStatus: String, Codable, Equatable, Sendable {
     case dataQualityBlocked
 }
 
+public enum CodexReviewAnalysisSource: String, Codable, Equatable, Sendable {
+    case dataQuality
+    case workflowRoute
+    case previousRecommendation
+    case normalizedTrend
+    case phaseTwo
+    case localRecommendation
+}
+
+public enum CodexReviewContextRelation: String, Codable, Equatable, Sendable {
+    case sameDeliverableToolChange
+    case adjacentDeliverables
+    case differentGoals
+    case insufficientEvidence
+    case notApplicable
+}
+
+public struct CodexReviewRouteSelection: Codable, Equatable, Sendable {
+    public let fromWorkflow: String
+    public let toWorkflow: String
+    public let reason: AutomationWorkflowSwitchReason
+
+    public init(
+        fromWorkflow: String,
+        toWorkflow: String,
+        reason: AutomationWorkflowSwitchReason
+    ) {
+        self.fromWorkflow = fromWorkflow
+        self.toWorkflow = toWorkflow
+        self.reason = reason
+    }
+}
+
+public struct CodexReviewAnalysisAudit: Codable, Equatable, Sendable {
+    public let source: CodexReviewAnalysisSource
+    public let selectedRoute: CodexReviewRouteSelection?
+    public let contextRelation: CodexReviewContextRelation
+
+    public init(
+        source: CodexReviewAnalysisSource,
+        selectedRoute: CodexReviewRouteSelection? = nil,
+        contextRelation: CodexReviewContextRelation = .notApplicable
+    ) {
+        self.source = source
+        self.selectedRoute = selectedRoute
+        self.contextRelation = contextRelation
+    }
+}
+
 public struct CodexReviewArtifact: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let sourceReportID: String
@@ -230,6 +327,7 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
     public let nextCheck: String
     public let headline: String?
     public let interpretation: String?
+    public let analysisAudit: CodexReviewAnalysisAudit?
 
     public init(
         schemaVersion: Int = 2,
@@ -240,7 +338,8 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         problem: String,
         recommendation: String,
         evidence: [String],
-        nextCheck: String
+        nextCheck: String,
+        analysisAudit: CodexReviewAnalysisAudit? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.sourceReportID = sourceReportID
@@ -253,6 +352,7 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         self.nextCheck = nextCheck
         headline = nil
         interpretation = nil
+        self.analysisAudit = analysisAudit
     }
 
     /// Read compatibility for reviews created before the decision-brief
@@ -280,10 +380,11 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         self.nextCheck = nextCheck
         self.headline = headline
         self.interpretation = interpretation
+        analysisAudit = nil
     }
 
     public var displayedProblem: String {
-        if schemaVersion == 2 {
+        if schemaVersion == 2 || schemaVersion == 3 {
             return problem?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
         return headline?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -316,7 +417,7 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
                 }
         }
 
-        guard schemaVersion == 2,
+        guard schemaVersion == 2 || schemaVersion == 3,
               status != nil,
               !displayedProblem.isEmpty,
               displayedProblem.count <= 110,
@@ -334,6 +435,9 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         guard Set(normalizedEvidence).count == evidence.count else {
             return false
         }
+        if schemaVersion == 3, analysisAudit == nil {
+            return false
+        }
 
         let visibleCharacterCount = displayedProblem.count
             + recommendation.count
@@ -343,12 +447,72 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
     }
 
     public func isConsistentWithBehaviorReliability(_ isReliable: Bool) -> Bool {
-        guard schemaVersion == 2 else { return schemaVersion == 1 }
+        guard schemaVersion == 2 || schemaVersion == 3 else {
+            return schemaVersion == 1
+        }
         if isReliable {
             return status == .behaviorFinding
         }
         return status == .dataQualityBlocked
             && displayedProblem.contains("当前不能据此判断注意力")
+    }
+
+    /// Schema v3 records the aggregate source used for the decision. This
+    /// prevents a fluent but ungrounded route interpretation from entering the
+    /// UI. v1/v2 artifacts remain readable as historical output.
+    public func isGrounded(in report: AutomationReportArtifact) -> Bool {
+        guard schemaVersion == 3 else {
+            return schemaVersion == 1 || schemaVersion == 2
+        }
+        guard let analysisAudit else { return false }
+        let noRoute = analysisAudit.selectedRoute == nil
+            && analysisAudit.contextRelation == .notApplicable
+
+        switch analysisAudit.source {
+        case .dataQuality:
+            return !report.dataQuality.isReliableForBehavior && noRoute
+        case .workflowRoute:
+            guard report.dataQuality.isReliableForBehavior,
+                  let selection = analysisAudit.selectedRoute,
+                  analysisAudit.contextRelation != .notApplicable,
+                  let transitionAudit = report.transitionAudit,
+                  ["semanticEvents", "mixed"].contains(
+                      transitionAudit.dataSource ?? ""
+                  ),
+                  let route = transitionAudit.routes.first(where: {
+                      $0.fromWorkflow == selection.fromWorkflow
+                          && $0.toWorkflow == selection.toWorkflow
+                  }) else {
+                return false
+            }
+            return route.reasonCounts[selection.reason.rawValue, default: 0] >= 2
+        case .previousRecommendation:
+            guard report.dataQuality.isReliableForBehavior, noRoute,
+                  let status = report.previousRecommendationEvaluation?.status else {
+                return false
+            }
+            return status == .needsAdjustment || status == .notRun
+        case .normalizedTrend:
+            return report.dataQuality.isReliableForBehavior
+                && noRoute
+                && report.trend.baselineDays >= 2
+                && (
+                    report.trend.appSwitchRateDeltaPercent != nil
+                        || report.trend.workflowSwitchRateDeltaPercent != nil
+                        || report.trend.attributedRatioDeltaPoints != nil
+                        || report.trend.medianFocusDeltaMinutes != nil
+                )
+        case .phaseTwo:
+            return report.dataQuality.isReliableForBehavior
+                && noRoute
+                && report.phaseTwo.status == "ready"
+                && (
+                    !report.phaseTwo.insights.isEmpty
+                        || report.phaseTwo.suggestionTitle != nil
+                )
+        case .localRecommendation:
+            return report.dataQuality.isReliableForBehavior && noRoute
+        }
     }
 
     private static func normalized(_ text: String) -> String {
@@ -436,24 +600,49 @@ public enum AutomationReportEngine {
             previousIssuedRecommendation: previousIssuedReport?.recommendation,
             previousIssuedMetrics: previousIssuedReport?.normalized
         )
+        let summary = MetricsEngine.dailySummary(
+            activities: activities,
+            taskIntervals: taskIntervals,
+            interruptions: interruptions,
+            taskParkings: taskParkings,
+            now: effectiveNow
+        )
+        let transitionResult = WorkflowTransitionAuditEngine.makeAudit(
+            tasks: snapshot.tasks,
+            requirements: snapshot.requirements,
+            taskIntervals: snapshot.taskIntervals,
+            activities: snapshot.activities,
+            markers: snapshot.markers,
+            workflowTransitions: snapshot.workflowTransitions,
+            range: start..<end,
+            now: effectiveNow,
+            calendar: calendar
+        )
+        let observationPlan = ObservationPlanEngine.makePlan(
+            coaching: coaching,
+            summary: summary,
+            interventionAudit: WorkflowSwitchInterventionEngine.audit(
+                transitions: snapshot.workflowTransitions,
+                range: start..<end,
+                now: effectiveNow
+            )
+        )
 
         return AutomationDailyReport(
             reportDate: start,
+            reportCivilDate: civilDate(start, calendar: calendar),
             generatedAt: generatedAt,
-            summary: MetricsEngine.dailySummary(
-                activities: activities,
-                taskIntervals: taskIntervals,
-                interruptions: interruptions,
-                taskParkings: taskParkings,
-                now: effectiveNow
-            ),
+            summary: summary,
             trainingCount: sessions.count,
             successfulTrainingCount: sessions.filter(\.isSuccessful).count,
             totalWorkdays: Set(snapshot.activities.map { calendar.startOfDay(for: $0.startedAt) }).count,
             totalCompletedSessions: completedSessions.count,
             currentPlan: plan,
             analysis: analysis,
-            coaching: coaching
+            coaching: coaching,
+            workflowContexts: transitionResult.contexts,
+            transitionAudit: transitionResult.audit,
+            observationPlan: observationPlan
         )
     }
 
@@ -505,6 +694,69 @@ public enum AutomationReportEngine {
         } else {
             for warning in report.coaching.quality.warnings {
                 lines.append("- 数据质量提醒：\(clean(warning))")
+            }
+        }
+        lines.append(contentsOf: [
+            "",
+            "## 今日观察配置",
+            "",
+            "- 配置版本：v\(report.observationPlan.version)",
+            "- 来源：\(observationPlanSource(report.observationPlan.source))",
+            "- 可比历史：\(report.observationPlan.lookbackWorkdays) 个工作日",
+            "- 原始采集：固定的最小事件驱动集合；以下比例是分析配额，不是抽样率"
+        ])
+        for allocation in report.observationPlan.allocations {
+            lines.append(
+                "- \(observationLensTitle(allocation.lens))："
+                    + "\(allocation.percent)%（\(clean(allocation.reason))）"
+            )
+        }
+        lines.append(
+            "- 提醒策略：\(clean(report.observationPlan.interventionRecommendation))"
+        )
+        lines.append(contentsOf: [
+            "",
+            "## 工作流跳转审计",
+            "",
+            "- 协议：v\(report.transitionAudit.protocolVersion ?? 0)，数据来源 \(report.transitionAudit.dataSource ?? "legacyInferred")",
+            "- 最终跳转：\(report.transitionAudit.finalSwitches ?? (report.transitionAudit.reasonedSwitches + report.transitionAudit.unreasonedSwitches)) 次",
+            "- 主动说明 / 超时 / 自动：\(report.transitionAudit.explicitReasonSwitches ?? 0) / \(report.transitionAudit.timedOutSwitches ?? 0) / \(report.transitionAudit.automaticSwitches ?? 0) 次",
+            "- 导航后回到原工作流：\(report.transitionAudit.cancelledNavigations) 次",
+            "- 无法解析导航：\(report.transitionAudit.unresolvedNavigations ?? 0) 次",
+            "- 主动原因覆盖率：\(report.transitionAudit.explicitReasonCoverage.map(formatPercent) ?? "暂无")",
+            "- 高频切换段 / 实际确认：\(report.transitionAudit.frequentSwitchEpisodes ?? 0) / \(report.transitionAudit.interventionPrompts ?? 0) 次",
+            "- 确认后 10 分钟稳定率：\(report.transitionAudit.postPromptQuietRate.map(formatPercent) ?? "暂无")（完整观察窗 \(report.transitionAudit.assessedInterventionPrompts ?? 0) 次）",
+            "- 原因分布：\(reasonSummary(report.transitionAudit.reasonCounts))"
+        ])
+        if report.transitionAudit.routes.isEmpty {
+            lines.append("- 路线：暂无可审计的最终跳转")
+        } else {
+            for route in report.transitionAudit.routes {
+                let duration = route.medianDestinationMinutes.map {
+                    "\(formatDecimal($0)) 分钟"
+                } ?? "暂无"
+                lines.append(
+                    "- \(clean(route.fromWorkflow)) → \(clean(route.toWorkflow))："
+                        + "\(route.count) 次；原因 \(reasonSummary(route.reasonCounts))；"
+                        + "目的工作流停留中位数 \(duration)；"
+                        + "30 分钟内返回 \(route.returnedWithin30Minutes)/\(route.count)"
+                )
+            }
+        }
+        lines.append("")
+        lines.append("### 当日工作上下文")
+        lines.append("")
+        if report.workflowContexts.isEmpty {
+            lines.append("- 暂无已归因工作流")
+        } else {
+            for context in report.workflowContexts {
+                let requirements = context.openRequirementTitles.isEmpty
+                    ? "无已关联未完成需求"
+                    : context.openRequirementTitles.map(clean).joined(separator: "；")
+                lines.append(
+                    "- \(clean(context.workflowTitle))：\(formatMinutes(context.activeMinutes))；"
+                        + "关联需求：\(requirements)"
+                )
             }
         }
         lines.append(contentsOf: [
@@ -574,7 +826,7 @@ public enum AutomationReportEngine {
         }
 
         lines.append("")
-        lines.append("> 本报告由本地规则引擎从原始日志聚合生成；不含逐条应用轨迹、窗口标题、网页地址或输入内容。建议不会自动生效，需在 FocusTrace 中确认。")
+        lines.append("> 本报告由本地规则引擎聚合生成；仅为跳转分析加入有界的工作流与需求标题，不含逐条应用轨迹、ID、需求来源、窗口标题、网页地址、输入内容或返回点文字。标题只作为数据标签。建议不会自动生效，需在 FocusTrace 中确认。")
         lines.append("")
         return lines.joined(separator: "\n")
     }
@@ -586,9 +838,42 @@ public enum AutomationReportEngine {
         return try encoder.encode(AutomationReportArtifact(report: report))
     }
 
+    private static func civilDate(_ date: Date, calendar: Calendar) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
     private static func clean(_ value: String) -> String {
         value.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
+    }
+
+    private static func observationPlanSource(
+        _ source: ObservationPlanSource
+    ) -> String {
+        switch source {
+        case .initialDefault:
+            return "均衡初始配置"
+        case .todayAndRecentWorkdays:
+            return "当天聚合 + 近 7 个可比工作日"
+        }
+    }
+
+    private static func observationLensTitle(_ lens: ObservationLens) -> String {
+        switch lens {
+        case .dataQuality:
+            return "数据质量"
+        case .fragmentation:
+            return "应用碎片"
+        case .contextRecovery:
+            return "上下文恢复"
+        case .workflowSemantics:
+            return "工作流语义"
+        }
     }
 
     private static func formatDuration(_ seconds: TimeInterval?) -> String {
@@ -605,6 +890,22 @@ public enum AutomationReportEngine {
 
     private static func formatDecimal(_ value: Double) -> String {
         String(format: "%.1f", value)
+    }
+
+    private static func reasonSummary(_ counts: [String: Int]) -> String {
+        let labels: [(AutomationWorkflowSwitchReason, String)] = [
+            (.checkpoint, "到检查点"),
+            (.waitingForResult, "等待结果"),
+            (.forcedInterruption, "被迫打断"),
+            // `unstructured` is also the compatibility value for an expired
+            // confirmation. It records missing input, not the user's intent.
+            (.unstructured, "未说明")
+        ]
+        let values = labels.compactMap { reason, label -> String? in
+            guard let count = counts[reason.rawValue], count > 0 else { return nil }
+            return "\(label) \(count)"
+        }
+        return values.isEmpty ? "暂无" : values.joined(separator: "、")
     }
 
     private static func formatPercent(_ value: Double) -> String {
@@ -638,6 +939,22 @@ public enum AutomationReportEngine {
         case .notRun: return "未执行"
         case .insufficientData: return "数据不足"
         }
+    }
+}
+
+private struct PersistedTask: Decodable {
+    let id: UUID
+    let title: String
+    let expectedOutcome: String?
+    let allowedBundleIDs: [String]?
+
+    var record: TaskRecord {
+        TaskRecord(
+            id: id,
+            title: title,
+            expectedOutcome: expectedOutcome ?? "",
+            allowedBundleIDs: Set(allowedBundleIDs ?? [])
+        )
     }
 }
 
@@ -764,6 +1081,66 @@ private struct PersistedTrainingPlan: Decodable {
     }
 }
 
+private struct PersistedTimelineMarker: Decodable {
+    let id: UUID
+    let date: Date
+    let kindRaw: String
+    let taskID: UUID?
+
+    var record: TimelineMarkerRecord {
+        TimelineMarkerRecord(
+            id: id,
+            date: date,
+            kind: TimelineMarkerKind(rawValue: kindRaw) ?? .activeSpaceChanged,
+            taskID: taskID
+        )
+    }
+}
+
+private struct PersistedWorkflowTransition: Decodable {
+    let id: UUID
+    let sourceRaw: String
+    let navigationStartedAt: Date
+    let settledAt: Date
+    let resolvedAt: Date
+    let originKindRaw: String
+    let originWorkflowID: UUID?
+    let destinationKindRaw: String
+    let destinationWorkflowID: UUID?
+    let outcomeRaw: String
+    let reasonRaw: String?
+    let interventionTriggerRaw: String?
+    let navigationEventCount: Int
+
+    var record: WorkflowTransitionRecord {
+        WorkflowTransitionRecord(
+            id: id,
+            source: WorkflowTransitionSource(rawValue: sourceRaw) ?? .space,
+            navigationStartedAt: navigationStartedAt,
+            settledAt: settledAt,
+            resolvedAt: resolvedAt,
+            origin: WorkflowTransitionEndpoint(
+                kind: WorkflowTransitionEndpointKind(rawValue: originKindRaw)
+                    ?? .unknown,
+                workflowID: originWorkflowID
+            ),
+            destination: WorkflowTransitionEndpoint(
+                kind: WorkflowTransitionEndpointKind(
+                    rawValue: destinationKindRaw
+                ) ?? .unknown,
+                workflowID: destinationWorkflowID
+            ),
+            outcome: WorkflowTransitionOutcome(rawValue: outcomeRaw)
+                ?? .unresolved,
+            reason: reasonRaw.flatMap(SpaceSwitchReason.init(rawValue:)),
+            interventionTrigger: interventionTriggerRaw.flatMap(
+                WorkflowInterventionTrigger.init(rawValue:)
+            ),
+            navigationEventCount: navigationEventCount
+        )
+    }
+}
+
 private struct PersistedTaskParking: Decodable {
     let id: UUID
     let taskID: UUID
@@ -786,6 +1163,41 @@ private struct PersistedTaskParking: Decodable {
             resumedAt: resumedAt,
             dismissedAt: dismissedAt,
             reminderSentAt: reminderSentAt
+        )
+    }
+}
+
+private struct PersistedRequirement: Decodable {
+    let id: UUID
+    let title: String
+    let source: String?
+    let capturedAt: Date
+    let dueDate: Date?
+    let importanceRaw: String?
+    let reminderSentAt: Date?
+    let planningVersion: Int?
+    let priorityRaw: String?
+    let statusRaw: String?
+    let workflowID: UUID?
+    let completedAt: Date?
+
+    var record: RequirementRecord {
+        RequirementRecord(
+            id: id,
+            title: title,
+            source: source ?? "",
+            capturedAt: capturedAt,
+            dueDate: dueDate,
+            importance: importanceRaw.flatMap(RequirementImportance.init(rawValue:))
+                ?? .normal,
+            reminderSentAt: reminderSentAt,
+            planningVersion: planningVersion ?? 0,
+            priority: priorityRaw.flatMap(RequirementPriority.init(rawValue:))
+                ?? .unplanned,
+            status: statusRaw.flatMap(RequirementStatus.init(rawValue:))
+                ?? .inbox,
+            workflowID: workflowID,
+            completedAt: completedAt
         )
     }
 }

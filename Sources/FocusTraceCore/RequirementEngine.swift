@@ -206,6 +206,60 @@ public enum RequirementEngine {
         return result
     }
 
+    public static func started(
+        _ requirement: RequirementRecord,
+        in workflowID: UUID
+    ) -> RequirementRecord {
+        var result = requirement
+        result.workflowID = workflowID
+        result.status = .active
+        result.completedAt = nil
+        return result
+    }
+
+    public static func completed(
+        _ requirement: RequirementRecord,
+        at date: Date = Date()
+    ) -> RequirementRecord {
+        var result = requirement
+        result.status = .completed
+        result.completedAt = date
+        return result
+    }
+
+    public static func paused(_ requirement: RequirementRecord) -> RequirementRecord {
+        var result = requirement
+        result.status = result.planningVersion >= 1 && result.priority == .unplanned
+            ? .planned
+            : .inbox
+        return result
+    }
+
+    public static func archived(_ requirement: RequirementRecord) -> RequirementRecord {
+        var result = requirement
+        result.status = .archived
+        return result
+    }
+
+    public static func detachedFromWorkflow(
+        _ requirement: RequirementRecord,
+        workflowID: UUID
+    ) -> RequirementRecord {
+        guard requirement.workflowID == workflowID,
+              ![RequirementStatus.completed, .archived].contains(requirement.status)
+        else {
+            return requirement
+        }
+        var result = requirement
+        result.workflowID = nil
+        if result.status == .active {
+            result.status = result.planningVersion >= 1 && result.priority == .unplanned
+                ? .planned
+                : .inbox
+        }
+        return result
+    }
+
     public static func needsPlanning(_ requirement: RequirementRecord) -> Bool {
         requirement.status == .inbox
             || requirement.planningVersion < 1

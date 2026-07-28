@@ -7,6 +7,8 @@ struct RequirementsView: View {
     @State private var showingCapture = false
     @State private var requirementToConvert: RequirementItemModel?
     @State private var requirementToPlan: RequirementItemModel?
+    @State private var requirementToChooseWorkflow: RequirementItemModel?
+    @State private var requirementToDecline: RequirementItemModel?
     @State private var showCompleted = false
 
     var body: some View {
@@ -41,8 +43,8 @@ struct RequirementsView: View {
                         requirements: requirements(in: .dueToday)
                     )
                     requirementSection(
-                        title: "待整理",
-                        subtitle: "分别确认截止日期、重要程度和工作流",
+                        title: "待决定",
+                        subtitle: "处理，或明确不处理",
                         requirements: requirements(in: .needsPlanning)
                     )
                     requirementSection(
@@ -72,12 +74,19 @@ struct RequirementsView: View {
                                     },
                                     onCreateWorkflow: {
                                         requirementToConvert = requirement
+                                    },
+                                    onProcess: {
+                                        process(requirement)
+                                    },
+                                    onDecline: {
+                                        requirementToDecline = requirement
                                     }
                                 )
                             }
                         }
                         .padding(.top, 10)
                     }
+                    .focusTraceDisclosureHitTarget(isExpanded: $showCompleted)
                     .padding(14)
                     .background(
                         FocusTraceTheme.cardFill(colorScheme),
@@ -92,10 +101,39 @@ struct RequirementsView: View {
             QuickRequirementCaptureSheet(state: state)
         }
         .sheet(item: $requirementToConvert) { requirement in
-            RequirementConversionSheet(state: state, requirement: requirement)
+            RequirementConversionSheet(
+                state: state,
+                requirement: requirement
+            )
         }
         .sheet(item: $requirementToPlan) { requirement in
             RequirementPlanningSheet(state: state, requirement: requirement)
+        }
+        .sheet(item: $requirementToChooseWorkflow) { requirement in
+            RequirementWorkflowSelectionSheet(
+                state: state,
+                requirement: requirement
+            )
+        }
+        .confirmationDialog(
+            "不处理这条需求？",
+            isPresented: Binding(
+                get: { requirementToDecline != nil },
+                set: { if !$0 { requirementToDecline = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let requirementToDecline {
+                Button("不处理“\(requirementToDecline.title)”", role: .destructive) {
+                    state.archiveRequirement(requirementToDecline.id)
+                    self.requirementToDecline = nil
+                }
+                Button("取消", role: .cancel) {
+                    self.requirementToDecline = nil
+                }
+            }
+        } message: {
+            Text("它会离开需求箱，但不会完成或删除所属工作流。")
         }
     }
 
@@ -113,7 +151,7 @@ struct RequirementsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("需求箱")
                     .font(.system(.title2, design: .rounded, weight: .bold))
-                Text("先收下，再分别确认什么时候做、有多重要、在哪个工作流处理。")
+                Text("先收下；准备做时点“处理”，时间和归属可以在详情里补。")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -152,6 +190,12 @@ struct RequirementsView: View {
                         },
                         onCreateWorkflow: {
                             requirementToConvert = requirement
+                        },
+                        onProcess: {
+                            process(requirement)
+                        },
+                        onDecline: {
+                            requirementToDecline = requirement
                         }
                     )
                 }
@@ -179,6 +223,115 @@ struct RequirementsView: View {
             ) == section
         }
     }
+
+    private func process(_ requirement: RequirementItemModel) {
+        let activeWorkflowIDs = Set(state.activeTasks.map(\.id))
+        if let workflowID = requirement.workflowID,
+           activeWorkflowIDs.contains(workflowID) {
+            state.startRequirement(requirement.id, in: workflowID)
+        } else if let currentWorkflowID = state.currentTaskID,
+                  activeWorkflowIDs.contains(currentWorkflowID) {
+            state.startRequirement(requirement.id, in: currentWorkflowID)
+        } else if state.activeTasks.count == 1,
+                  let onlyWorkflowID = state.activeTasks.first?.id {
+            state.startRequirement(requirement.id, in: onlyWorkflowID)
+        } else {
+            requirementToChooseWorkflow = requirement
+        }
+    }
+}
+
+private struct RequirementWorkflowSelectionSheet: View {
+    @ObservedObject var state: ApplicationState
+    let requirement: RequirementItemModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var showingWorkflowCreator = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("在哪个工作流处理？")
+                    .font(.title2.bold())
+                Text("一个工作流可以承接多条需求；这里只选择上下文，不要求先排日期。")
+                    .foregroundStyle(.secondary)
+            }
+
+            Text(requirement.title)
+                .font(.callout.weight(.medium))
+                .padding(11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    FocusTraceTheme.sky.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+
+            if state.activeTasks.isEmpty {
+                ContentUnavailableView(
+                    "还没有工作流",
+                    systemImage: "rectangle.on.rectangle.slash",
+                    description: Text("创建一个工作流后，这条需求会直接进入处理状态。")
+                )
+                .frame(maxWidth: .infinity, minHeight: 130)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(state.activeTasks) { workflow in
+                        Button {
+                            if state.startRequirement(
+                                requirement.id,
+                                in: workflow.id
+                            ) {
+                                dismiss()
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: "rectangle.on.rectangle")
+                                    .foregroundStyle(FocusTraceTheme.sky)
+                                Text(workflow.title)
+                                    .font(.headline)
+                                Spacer()
+                                Image(systemName: "arrow.right")
+                                    .foregroundStyle(.secondary)
+                            }
+                            .contentShape(Rectangle())
+                            .padding(.vertical, 10)
+                        }
+                        .buttonStyle(.plain)
+                        if workflow.id != state.activeTasks.last?.id {
+                            Divider()
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .background(
+                    Color.primary.opacity(0.04),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+            }
+
+            HStack {
+                Button("取消") { dismiss() }
+                Spacer()
+                Button("新建工作流来处理", systemImage: "plus") {
+                    showingWorkflowCreator = true
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+            }
+        }
+        .padding(22)
+        .frame(width: 500)
+        .focusTraceScreen()
+        .focusTraceVisualSystem()
+        .sheet(isPresented: $showingWorkflowCreator) {
+            RequirementConversionSheet(
+                state: state,
+                requirement: requirement,
+                startAfterCreation: true,
+                onCreated: {
+                    dismiss()
+                }
+            )
+        }
+    }
 }
 
 private struct RequirementCard: View {
@@ -186,6 +339,8 @@ private struct RequirementCard: View {
     let requirement: RequirementItemModel
     let onPlan: () -> Void
     let onCreateWorkflow: () -> Void
+    let onProcess: () -> Void
+    let onDecline: () -> Void
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -229,63 +384,36 @@ private struct RequirementCard: View {
                 }
 
                 HStack(spacing: 9) {
-                    if requirement.status != .completed {
-                        Button(
-                            RequirementEngine.needsPlanning(requirement.record)
-                                ? "整理"
-                                : "调整"
-                        ) {
-                            onPlan()
-                        }
-                        .buttonStyle(.borderless)
-                    }
                     Spacer()
                     if requirement.status == .active {
-                        Label("正在处理", systemImage: "bolt.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(FocusTraceTheme.sky)
-                    } else if !RequirementEngine.needsPlanning(requirement.record),
-                              requirement.workflowID != nil {
-                        Button("开始处理") {
-                            state.startRequirement(requirement.id)
+                        Button("完成需求") {
+                            state.completeRequirement(requirement.id)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
-                    } else if !RequirementEngine.needsPlanning(requirement.record),
-                              let currentWorkflowID = state.currentTaskID,
-                              requirement.status != .completed {
-                        Button("在当前工作流处理") {
-                            state.startRequirement(
-                                requirement.id,
-                                in: currentWorkflowID
-                            )
-                        }
+                    } else if requirement.status != .completed {
+                        Button("处理") { onProcess() }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
                     }
                     if requirement.status != .completed {
-                        Button {
-                            state.completeRequirement(requirement.id)
-                        } label: {
-                            Image(systemName: "checkmark")
-                        }
+                        Button("不处理", role: .destructive) { onDecline() }
                         .buttonStyle(.borderless)
-                        .help("标记完成")
                     }
-                    Menu {
-                        if requirement.status != .completed {
-                            Button("升级为新工作流…") {
+                    if requirement.status != .completed {
+                        Menu {
+                            Button("调整时间、重要程度与工作流…") {
+                                onPlan()
+                            }
+                            Button("创建新工作流承接…") {
                                 onCreateWorkflow()
                             }
+                        } label: {
+                            Image(systemName: "ellipsis")
                         }
-                        Button("归档为不做", role: .destructive) {
-                            state.archiveRequirement(requirement.id)
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis")
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
                     }
-                    .menuStyle(.borderlessButton)
-                    .fixedSize()
                 }
             }
         }
@@ -401,6 +529,7 @@ struct QuickRequirementCaptureSheet: View {
                     .textFieldStyle(.roundedBorder)
                     .padding(.top, 8)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showSource)
             .font(.callout)
 
             HStack {
@@ -473,20 +602,11 @@ private struct RequirementPlanningSheet: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Toggle("有明确截止日期", isOn: $hasDeadline)
                     if hasDeadline {
-                        DatePicker(
+                        FocusTraceCompactDatePicker(
                             "截止日期",
                             selection: $deadline,
-                            in: earliestDeadline...,
-                            displayedComponents: .date
+                            minimumDate: earliestDeadline
                         )
-                        .datePickerStyle(.graphical)
-                        .labelsHidden()
-                        .accessibilityIdentifier(
-                            FocusTraceUXContract
-                                .requirementDateSelectionPresentation
-                                .rawValue
-                        )
-                        .frame(maxWidth: .infinity)
                     } else {
                         Text("没有时间承诺的需求仍会保留，但不会触发到期提醒。")
                             .font(.caption)
@@ -559,12 +679,21 @@ private struct RequirementPlanningSheet: View {
 private struct RequirementConversionSheet: View {
     @ObservedObject var state: ApplicationState
     let requirement: RequirementItemModel
+    let startAfterCreation: Bool
+    let onCreated: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var workflowTitle: String
 
-    init(state: ApplicationState, requirement: RequirementItemModel) {
+    init(
+        state: ApplicationState,
+        requirement: RequirementItemModel,
+        startAfterCreation: Bool = false,
+        onCreated: @escaping () -> Void = {}
+    ) {
         self.state = state
         self.requirement = requirement
+        self.startAfterCreation = startAfterCreation
+        self.onCreated = onCreated
         _workflowTitle = State(
             initialValue: RequirementEngine.suggestedWorkflowTitle(
                 from: requirement.title
@@ -576,7 +705,11 @@ private struct RequirementConversionSheet: View {
         VStack(alignment: .leading, spacing: 15) {
             Text("转成新工作流")
                 .font(.title2.bold())
-            Text("这里只创建工作流，不会立刻绑定桌面。等你点击“开始处理”时再进入它。")
+            Text(
+                startAfterCreation
+                    ? "创建后会直接开始处理；这条需求不会影响同一工作流中的其他需求。"
+                    : "这里只创建工作流，不会立刻绑定桌面。等你点击“处理”时再进入它。"
+            )
                 .foregroundStyle(.secondary)
             Text(requirement.title)
                 .font(.callout)
@@ -590,15 +723,33 @@ private struct RequirementConversionSheet: View {
                 Button("取消") { dismiss() }
                 Spacer()
                 Button("创建工作流") {
-                    if state.convertRequirementToWorkflow(
+                    if let workflowID = state.convertRequirementToWorkflow(
                         requirement.id,
                         workflowTitle: workflowTitle
-                    ) != nil {
+                    ) {
+                        if startAfterCreation {
+                            state.startRequirement(
+                                requirement.id,
+                                in: workflowID
+                            )
+                        }
+                        onCreated()
                         dismiss()
                     }
                 }
                 .buttonStyle(FocusTracePrimaryButtonStyle())
-                .disabled(workflowTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    state.workflowNameValidationMessage(
+                        for: workflowTitle
+                    ) != nil
+                )
+            }
+            if let validationMessage = state.workflowNameValidationMessage(
+                for: workflowTitle
+            ) {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
         .padding(22)

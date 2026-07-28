@@ -68,6 +68,25 @@ func flowGuidanceAlwaysExposesOnlyTheNextRequiredAction() {
 }
 
 @Test
+func workflowConfirmationUsesUpperCenterWithoutPassiveOverlay() {
+    let visibleFrame = CGRect(x: 0, y: 25, width: 1_440, height: 875)
+    let decision = FocusTraceConfirmationLayout.frame(
+        in: visibleFrame,
+        size: CGSize(
+            width: FocusTraceConfirmationLayout.panelWidth,
+            height: FocusTraceConfirmationLayout.panelHeight
+        )
+    )
+
+    #expect(decision.midX == visibleFrame.midX)
+    #expect(
+        decision.maxY
+            == visibleFrame.maxY - FocusTraceConfirmationLayout.topInset
+    )
+    #expect(decision.midY > visibleFrame.midY)
+}
+
+@Test
 func toolSuggestionsPreferTheWorkflowMostUsedRealApps() {
     let taskID = UUID()
     let otherTaskID = UUID()
@@ -169,7 +188,7 @@ func optimizedDailyUXContractRemainsStable() {
     )
     #expect(
         FocusTraceUXContract.requirementDateSelectionPresentation
-            == .graphicalCalendar
+            == .graphicalCalendarPopover
     )
     #expect(!FocusTraceUXContract.calendarPopoverAnimationsEnabled)
     #expect(FocusTraceUXContract.calendarRefreshGranularity == .day)
@@ -181,6 +200,19 @@ func optimizedDailyUXContractRemainsStable() {
     #expect(FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath")
     #expect(FocusTraceUXContract.timelinePaletteName == "radix-cool-v4")
     #expect(!FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled)
+}
+
+@Test
+func disclosureButtonsExpandHitAreaWithoutChangingLayout() {
+    #expect(FocusTraceDisclosureInteraction.hitTargetSize == 36)
+    let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: false
+    )
+    let closed = FocusTraceDisclosureInteraction.stateAfterHeaderPress(
+        isExpanded: opened
+    )
+    #expect(opened)
+    #expect(!closed)
 }
 
 @Test
@@ -346,6 +378,61 @@ func calendarPopoverAnchorPressesAlternateExactlyOnce() {
 }
 
 @Test
+func requirementCalendarBoundsAllowFutureAndRespectEarliestDate() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let earliest = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 27)
+    )!
+    let previousDay = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 26)
+    )!
+    let futureDay = calendar.date(
+        from: DateComponents(year: 2026, month: 8, day: 15)
+    )!
+
+    #expect(!FocusTraceCalendarBounds.isSelectable(
+        previousDay,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+    #expect(FocusTraceCalendarBounds.isSelectable(
+        earliest,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+    #expect(FocusTraceCalendarBounds.isSelectable(
+        futureDay,
+        minimumDate: earliest,
+        calendar: calendar
+    ))
+
+    let currentMonth = FocusTraceCalendarLayoutEngine.startOfMonth(
+        containing: earliest,
+        calendar: calendar
+    )
+    #expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: -1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == currentMonth
+    )
+    #expect(
+        FocusTraceCalendarBounds.movedMonth(
+            from: currentMonth,
+            by: 1,
+            minimumDate: earliest,
+            calendar: calendar
+        ) == FocusTraceCalendarLayoutEngine.startOfMonth(
+            containing: futureDay,
+            calendar: calendar
+        )
+    )
+}
+
+@Test
 func requirementCaptureStaysInInboxUntilExplicitlyPlanned() throws {
     let captured = try #require(RequirementEngine.captured(
         title: "  张三口头说：补上失败告警  ",
@@ -416,6 +503,88 @@ func requirementPlanningSeparatesDeadlineImportanceAndWorkflow() throws {
             calendar: calendar
         ) == .upcoming
     )
+}
+
+@Test
+func requirementCanStartWithoutPlanningAndCompletesIndependentlyInsideWorkflow() throws {
+    let workflowID = UUID()
+    let first = try #require(RequirementEngine.captured(title: "补上失败告警"))
+    let second = try #require(RequirementEngine.captured(title: "补充运行手册"))
+    let attachedFirst = RequirementEngine.attached(first, to: workflowID)
+    let attachedSecond = RequirementEngine.attached(second, to: workflowID)
+
+    let started = RequirementEngine.started(attachedFirst, in: workflowID)
+    #expect(RequirementEngine.needsPlanning(started))
+    #expect(started.status == .active)
+    #expect(started.workflowID == workflowID)
+
+    let completed = RequirementEngine.completed(
+        started,
+        at: Date(timeIntervalSince1970: 100)
+    )
+    #expect(completed.status == .completed)
+    #expect(completed.workflowID == workflowID)
+    #expect(attachedSecond.status == .inbox)
+    #expect(attachedSecond.workflowID == workflowID)
+}
+
+@Test
+func deletingWorkflowDetachesOnlyItsUnfinishedRequirements() throws {
+    let workflowID = UUID()
+    let otherWorkflowID = UUID()
+    let active = RequirementEngine.started(
+        try #require(RequirementEngine.captured(title: "正在做")),
+        in: workflowID
+    )
+    let completed = RequirementEngine.completed(
+        RequirementEngine.attached(
+            try #require(RequirementEngine.captured(title: "已经做完")),
+            to: workflowID
+        )
+    )
+    let unrelated = RequirementEngine.attached(
+        try #require(RequirementEngine.captured(title: "其他工作流")),
+        to: otherWorkflowID
+    )
+
+    let detached = RequirementEngine.detachedFromWorkflow(
+        active,
+        workflowID: workflowID
+    )
+    #expect(detached.workflowID == nil)
+    #expect(detached.status == .inbox)
+    #expect(
+        RequirementEngine.detachedFromWorkflow(
+            completed,
+            workflowID: workflowID
+        ) == completed
+    )
+    #expect(
+        RequirementEngine.detachedFromWorkflow(
+            unrelated,
+            workflowID: workflowID
+        ) == unrelated
+    )
+}
+
+@Test
+func workflowNamesAreUniqueAfterWhitespaceCaseAndWidthNormalization() {
+    #expect(
+        WorkflowNamePolicy.normalizedTitle("  发布   FocusTrace  ")
+            == "发布 FocusTrace"
+    )
+    #expect(!WorkflowNamePolicy.isAvailable(
+        "发布  focustrace",
+        among: ["发布 FocusTrace"]
+    ))
+    #expect(!WorkflowNamePolicy.isAvailable(
+        "Ｆｏｃｕｓ Ｔｒａｃｅ",
+        among: ["focus trace"]
+    ))
+    #expect(WorkflowNamePolicy.isAvailable(
+        "发布 FocusTrace 2",
+        among: ["发布 FocusTrace"]
+    ))
 }
 
 @Test
@@ -817,103 +986,586 @@ func fiveSessionProgression() {
     #expect(TrainingEngine.progression(currentMinutes: 15, lastFive: threeSuccesses) == .maintain(minutes: 15))
 }
 
+private func workflowTransition(
+    at date: Date,
+    origin: WorkflowTransitionEndpoint,
+    destination: WorkflowTransitionEndpoint,
+    outcome: WorkflowTransitionOutcome = .automatic,
+    trigger: WorkflowInterventionTrigger? = nil,
+    reason: SpaceSwitchReason? = nil
+) -> WorkflowTransitionRecord {
+    WorkflowTransitionRecord(
+        navigationStartedAt: date.addingTimeInterval(-2),
+        settledAt: date.addingTimeInterval(-0.5),
+        resolvedAt: date,
+        origin: origin,
+        destination: destination,
+        outcome: outcome,
+        reason: reason ?? (outcome == .confirmed ? .reachedCheckpoint : nil),
+        interventionTrigger: trigger,
+        navigationEventCount: 1
+    )
+}
+
 @Test
-func attentionCueCountsOnlyStableUnplannedTaskSwitches() {
+func workflowInterventionPromptsOnlyOnThirdSwitchAndThenCoolsDown() {
     let start = Date(timeIntervalSince1970: 80_000)
-    let taskA = UUID()
-    let taskB = UUID()
-    let taskC = UUID()
-    let taskD = UUID()
-    let intervals = [
-        TaskIntervalRecord(taskID: taskA, startedAt: start, endedAt: start.addingTimeInterval(40)),
-        TaskIntervalRecord(taskID: taskB, startedAt: start.addingTimeInterval(40), endedAt: start.addingTimeInterval(80)),
-        TaskIntervalRecord(taskID: taskC, startedAt: start.addingTimeInterval(80), endedAt: start.addingTimeInterval(120)),
-        TaskIntervalRecord(taskID: taskD, startedAt: start.addingTimeInterval(120), endedAt: nil),
-    ]
-    let now = start.addingTimeInterval(160)
-
-    #expect(AttentionCueEngine.stableTaskSwitchCount(
-        intervals: intervals,
-        parkings: [],
-        at: now
-    ) == 3)
-
-    let parking = TaskParkingRecord(
-        taskID: taskA,
-        parkedAt: start.addingTimeInterval(40),
-        resumeCue: "等待 Agent 完成",
-        switchedToTaskID: taskB
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowA
     )
-    #expect(AttentionCueEngine.stableTaskSwitchCount(
-        intervals: intervals,
-        parkings: [parking],
-        at: now
-    ) == 2)
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowB
+    )
+    let first = workflowTransition(
+        at: start,
+        origin: endpointA,
+        destination: endpointB
+    )
+    let second = workflowTransition(
+        at: start.addingTimeInterval(120),
+        origin: endpointB,
+        destination: endpointA
+    )
+
+    #expect(!WorkflowSwitchInterventionEngine.decision(
+        history: [],
+        origin: endpointA,
+        destination: endpointB,
+        at: start,
+        isEnabled: true
+    ).shouldPrompt)
+    #expect(!WorkflowSwitchInterventionEngine.decision(
+        history: [first],
+        origin: endpointB,
+        destination: endpointA,
+        at: start.addingTimeInterval(120),
+        isEnabled: true
+    ).shouldPrompt)
+
+    let thirdDecision = WorkflowSwitchInterventionEngine.decision(
+        history: [first, second],
+        origin: endpointA,
+        destination: endpointB,
+        at: start.addingTimeInterval(240),
+        isEnabled: true
+    )
+    #expect(thirdDecision.shouldPrompt)
+    #expect(thirdDecision.trigger == .frequentSwitchBurst)
+
+    let prompted = workflowTransition(
+        at: start.addingTimeInterval(240),
+        origin: endpointA,
+        destination: endpointB,
+        outcome: .confirmed,
+        trigger: .frequentSwitchBurst
+    )
+    #expect(!WorkflowSwitchInterventionEngine.decision(
+        history: [first, second, prompted],
+        origin: endpointB,
+        destination: endpointA,
+        at: start.addingTimeInterval(300),
+        isEnabled: true
+    ).shouldPrompt)
 }
 
 @Test
-func attentionCueIgnoresTaskThatDidNotStayThirtySeconds() {
-    let start = Date(timeIntervalSince1970: 81_000)
-    let taskA = UUID()
-    let taskB = UUID()
-    let intervals = [
-        TaskIntervalRecord(taskID: taskA, startedAt: start, endedAt: start.addingTimeInterval(60)),
-        TaskIntervalRecord(taskID: taskB, startedAt: start.addingTimeInterval(60), endedAt: nil),
-    ]
-    #expect(AttentionCueEngine.stableTaskSwitchCount(
-        intervals: intervals,
-        parkings: [],
-        at: start.addingTimeInterval(89)
-    ) == 0)
+func workflowInterventionIgnoresUnboundOrDisabledTransitions() {
+    let workflow = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: UUID()
+    )
+    let unbound = WorkflowTransitionEndpoint(kind: .unbound)
+    #expect(!WorkflowSwitchInterventionEngine.decision(
+        history: [],
+        origin: workflow,
+        destination: unbound,
+        at: Date(),
+        isEnabled: true
+    ).shouldPrompt)
+    #expect(!WorkflowSwitchInterventionEngine.decision(
+        history: [],
+        origin: workflow,
+        destination: WorkflowTransitionEndpoint(
+            kind: .workflow,
+            workflowID: UUID()
+        ),
+        at: Date(),
+        isEnabled: false
+    ).shouldPrompt)
 }
 
 @Test
-func attentionCueUsesGentleAndStrongThresholds() {
+func workflowInterventionAuditMeasuresPromptAndFollowingQuietWindow() {
     let start = Date(timeIntervalSince1970: 82_000)
-    let tasks = (0..<6).map { _ in UUID() }
-    let intervals = tasks.enumerated().map { index, taskID in
-        TaskIntervalRecord(
-            taskID: taskID,
-            startedAt: start.addingTimeInterval(Double(index * 30)),
-            endedAt: index == tasks.count - 1
-                ? nil
-                : start.addingTimeInterval(Double((index + 1) * 30))
-        )
-    }
-
-    let gentle = AttentionCueEngine.switchDecision(
-        intervals: Array(intervals.prefix(4)),
-        parkings: [],
-        at: start.addingTimeInterval(120)
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: UUID()
     )
-    #expect(gentle.level == .gentle)
-    #expect(gentle.switchCount == 3)
-
-    let strong = AttentionCueEngine.switchDecision(
-        intervals: intervals,
-        parkings: [],
-        at: start.addingTimeInterval(180)
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: UUID()
     )
-    #expect(strong.level == .strong)
-    #expect(strong.switchCount == 5)
+    let transitions = [
+        workflowTransition(at: start, origin: endpointA, destination: endpointB),
+        workflowTransition(
+            at: start.addingTimeInterval(60),
+            origin: endpointB,
+            destination: endpointA
+        ),
+        workflowTransition(
+            at: start.addingTimeInterval(120),
+            origin: endpointA,
+            destination: endpointB,
+            outcome: .confirmed,
+            trigger: .frequentSwitchBurst
+        ),
+    ]
+    let audit = WorkflowSwitchInterventionEngine.audit(
+        transitions: transitions,
+        range: start..<start.addingTimeInterval(3_600),
+        now: start.addingTimeInterval(900)
+    )
+    #expect(audit.frequentSwitchEpisodes == 1)
+    #expect(audit.promptsShown == 1)
+    #expect(audit.confirmedPrompts == 1)
+    #expect(audit.quietAfterPromptRate == 1)
+}
+
+private func observationAnalysis(
+    recordedMinutes: Double,
+    reliable: Bool,
+    baselineDays: Int = 3,
+    appSwitchDelta: Double? = nil,
+    workflowSwitchDelta: Double? = nil
+) -> DailyCoachingAnalysis {
+    DailyCoachingAnalysis(
+        metrics: DailyNormalizedMetrics(
+            recordedMinutes: recordedMinutes,
+            attributedMinutes: reliable ? recordedMinutes : 0,
+            attributedRatio: reliable ? 1 : 0,
+            appSwitchesPerHour: 2,
+            workflowSwitchesPerHour: 1,
+            medianFocusMinutes: 15,
+            trainingCount: 1,
+            successfulTrainingCount: 1,
+            feedbackCompletionRatio: 1,
+            parkingCount: 0
+        ),
+        quality: DailyDataQuality(
+            isReliableForBehavior: reliable,
+            warnings: reliable ? [] : ["工作流归因不足"]
+        ),
+        trend: DailyTrendComparison(
+            baselineDays: baselineDays,
+            appSwitchRateDeltaPercent: appSwitchDelta,
+            workflowSwitchRateDeltaPercent: workflowSwitchDelta,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        recommendation: DailyCoachRecommendation(
+            kind: .maintainRound,
+            title: "保持",
+            rationale: "测试",
+            evidence: [],
+            confidence: .medium,
+            action: .none,
+            method: DailyTrainingMethod(
+                title: "测试",
+                steps: [],
+                successMeasure: "测试"
+            )
+        ),
+        previousRecommendationEvaluation: nil
+    )
+}
+
+private func observationSummary(
+    parkings: Int = 0,
+    resumed: Int = 0,
+    resumeLatency: TimeInterval? = nil
+) -> DailySummary {
+    DailySummary(
+        appSwitchCount: 0,
+        taskSwitchCount: 0,
+        workflowSwitchCount: 0,
+        suspectedDistractionCount: 0,
+        confirmedDistractionCount: 0,
+        averageReturnLatency: nil,
+        medianFocusStreak: nil,
+        taskParkingCount: parkings,
+        resumedTaskCount: resumed,
+        averageTaskResumeLatency: resumeLatency,
+        appDurations: [:],
+        taskDurations: [:]
+    )
+}
+
+private func observationAudit(
+    episodes: Int = 0,
+    assessed: Int = 0,
+    quiet: Int = 0
+) -> WorkflowInterventionAudit {
+    WorkflowInterventionAudit(
+        frequentSwitchEpisodes: episodes,
+        promptsShown: assessed,
+        confirmedPrompts: assessed,
+        timedOutPrompts: 0,
+        assessedPrompts: assessed,
+        quietAfterPromptCount: quiet
+    )
 }
 
 @Test
-func attentionCueContinuitySurvivesShortSameTaskRefreshGap() {
-    let start = Date(timeIntervalSince1970: 83_000)
-    let task = UUID()
-    let now = start.addingTimeInterval(601)
-    let intervals = [
-        TaskIntervalRecord(taskID: task, startedAt: start, endedAt: start.addingTimeInterval(300)),
-        TaskIntervalRecord(taskID: task, startedAt: start.addingTimeInterval(301), endedAt: nil),
-    ]
-    let elapsed = AttentionCueEngine.continuousTaskSeconds(
-        intervals: intervals,
-        taskID: task,
-        at: now
+func observationPlanStartsBalancedAndReallocatesOnlyAnalysisAttention() {
+    let initial = ObservationPlanEngine.makePlan(
+        coaching: observationAnalysis(recordedMinutes: 0, reliable: false),
+        summary: observationSummary(),
+        interventionAudit: observationAudit()
     )
-    #expect(elapsed == 601)
-    #expect(AttentionCueEngine.continuityMilestoneMinutes(elapsedSeconds: elapsed) == 10)
+    #expect(initial.source == .initialDefault)
+    #expect(initial.allocations.map(\.percent) == [25, 25, 25, 25])
+    #expect(initial.rawCollectionMode == .minimalEventDrivenFixed)
+
+    let unreliable = ObservationPlanEngine.makePlan(
+        coaching: observationAnalysis(recordedMinutes: 60, reliable: false),
+        summary: observationSummary(),
+        interventionAudit: observationAudit()
+    )
+    #expect(unreliable.primaryAllocation?.lens == .dataQuality)
+    #expect(unreliable.primaryAllocation?.percent == 70)
+
+    let semantic = ObservationPlanEngine.makePlan(
+        coaching: observationAnalysis(recordedMinutes: 60, reliable: true),
+        summary: observationSummary(),
+        interventionAudit: observationAudit(episodes: 1)
+    )
+    #expect(semantic.primaryAllocation?.lens == .workflowSemantics)
+    #expect(semantic.allocations.reduce(0) { $0 + $1.percent } == 100)
+
+    let recovery = ObservationPlanEngine.makePlan(
+        coaching: observationAnalysis(recordedMinutes: 60, reliable: true),
+        summary: observationSummary(parkings: 2, resumed: 1),
+        interventionAudit: observationAudit()
+    )
+    #expect(recovery.primaryAllocation?.lens == .contextRecovery)
+
+    let weakPrompt = ObservationPlanEngine.makePlan(
+        coaching: observationAnalysis(recordedMinutes: 60, reliable: true),
+        summary: observationSummary(),
+        interventionAudit: observationAudit(
+            episodes: 5,
+            assessed: 5,
+            quiet: 1
+        )
+    )
+    #expect(weakPrompt.interventionRecommendation.contains("不增加弹窗"))
+}
+
+@Test
+func workflowInterventionConfigurationIsExplicitAndInjectable() {
+    let start = Date(timeIntervalSince1970: 84_000)
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: UUID()
+    )
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: UUID()
+    )
+    let configuration = WorkflowInterventionConfiguration(
+        version: 99,
+        windowSeconds: 300,
+        switchThreshold: 2,
+        cooldownSeconds: 600,
+        minimumBaselineWorkdays: 3,
+        minimumAssessmentWindows: 5
+    )
+    let first = workflowTransition(
+        at: start,
+        origin: endpointA,
+        destination: endpointB
+    )
+    let decision = WorkflowSwitchInterventionEngine.decision(
+        history: [first],
+        origin: endpointB,
+        destination: endpointA,
+        at: start.addingTimeInterval(60),
+        isEnabled: true,
+        configuration: configuration
+    )
+    #expect(decision.shouldPrompt)
+    #expect(WorkflowInterventionConfiguration.initial.switchThreshold == 3)
+}
+
+@Test
+func spaceSwitchGateRequiresMeaningfulVerifiedDeparture() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let now = Date(timeIntervalSince1970: 90_000)
+
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .bound(workflowID: workflowB),
+        at: now,
+        isEnabled: true
+    ) != nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .unbound,
+        at: now,
+        isEnabled: true
+    ) != nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .bound(workflowID: workflowA),
+        at: now,
+        isEnabled: true
+    ) == nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .unbound,
+        destination: .bound(workflowID: workflowB),
+        at: now,
+        isEnabled: true
+    ) != nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .unbound,
+        destination: .unbound,
+        at: now,
+        isEnabled: true
+    ) == nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .unknown,
+        at: now,
+        isEnabled: true
+    ) == nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .conflict(workflowIDs: [workflowA, workflowB]),
+        at: now,
+        isEnabled: true
+    ) == nil)
+    #expect(SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .bound(workflowID: workflowB),
+        at: now,
+        isEnabled: false
+    ) == nil)
+}
+
+@Test
+func spaceSwitchJourneyKeepsTheFirstWorkflowAndOnlyUsesTheFinalDestination() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let workflowC = UUID()
+    let start = Date(timeIntervalSince1970: 90_500)
+
+    let first = SpaceSwitchJourneyEngine.beginOrExtend(
+        nil,
+        origin: .bound(workflowID: workflowA),
+        at: start
+    )!
+    let throughB = SpaceSwitchJourneyEngine.beginOrExtend(
+        first,
+        origin: .unknown,
+        candidateDestination: .bound(workflowID: workflowB),
+        at: start.addingTimeInterval(0.4)
+    )!
+    let finalC = SpaceSwitchJourneyEngine.beginOrExtend(
+        throughB,
+        origin: .unknown,
+        candidateDestination: .bound(workflowID: workflowC),
+        at: start.addingTimeInterval(0.8)
+    )!
+
+    #expect(finalC.origin == .bound(workflowID: workflowA))
+    #expect(finalC.candidateDestination == .bound(workflowID: workflowC))
+    #expect(finalC.startedAt == start)
+    #expect(finalC.lastChangedAt == start.addingTimeInterval(0.8))
+    #expect(finalC.eventCount == 3)
+    #expect(
+        SpaceSwitchJourneyEngine.finish(
+            finalC,
+            finalDestination: .bound(workflowID: workflowC),
+            at: start.addingTimeInterval(1.9),
+            isGateEnabled: true
+        ) == .notSettled
+    )
+
+    guard case let .presentGate(pending) = SpaceSwitchJourneyEngine.finish(
+        finalC,
+        finalDestination: .bound(workflowID: workflowC),
+        at: start.addingTimeInterval(2.0),
+        isGateEnabled: true
+    ) else {
+        Issue.record("最后一次变化稳定 1.2 秒后应只为最终工作流弹一次")
+        return
+    }
+    #expect(pending.origin == .bound(workflowID: workflowA))
+    #expect(pending.destination == .bound(workflowID: workflowC))
+    #expect(pending.startedAt == start.addingTimeInterval(2.0))
+}
+
+@Test
+func spaceSwitchJourneyCancelsWhenTheFinalWorkflowIsTheOrigin() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let start = Date(timeIntervalSince1970: 90_700)
+    let journey = SpaceSwitchJourneyEngine.beginOrExtend(
+        nil,
+        origin: .bound(workflowID: workflowA),
+        candidateDestination: .bound(workflowID: workflowB),
+        at: start
+    )!
+
+    #expect(
+        SpaceSwitchJourneyEngine.finish(
+            journey,
+            finalDestination: .bound(workflowID: workflowA),
+            at: start.addingTimeInterval(1.2),
+            isGateEnabled: true
+        ) == .unchanged(.bound(workflowID: workflowA))
+    )
+    #expect(
+        SpaceSwitchJourneyEngine.finish(
+            journey,
+            finalDestination: .bound(workflowID: workflowB),
+            at: start.addingTimeInterval(1.2),
+            isGateEnabled: false
+        ) == .applyWithoutGate(.bound(workflowID: workflowB))
+    )
+}
+
+@Test
+func spaceSwitchGateReturnsToOriginAndUpdatesDestinationSafely() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let workflowC = UUID()
+    let now = Date(timeIntervalSince1970: 91_000)
+    let pending = SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .bound(workflowID: workflowB),
+        at: now,
+        isEnabled: true
+    )!
+
+    #expect(SpaceSwitchGateEngine.observe(
+        .bound(workflowID: workflowA),
+        while: pending
+    ) == .returnedToOrigin)
+    #expect(SpaceSwitchGateEngine.observe(
+        .bound(workflowID: workflowB),
+        while: pending
+    ) == .stayedOnDestination)
+    #expect(SpaceSwitchGateEngine.observe(
+        .unknown,
+        while: pending
+    ) == .cannotResolve(.unknown))
+
+    let changed = SpaceSwitchGateEngine.observe(
+        .bound(workflowID: workflowC),
+        while: pending
+    )
+    guard case let .destinationChanged(updated) = changed else {
+        Issue.record("切到第三个桌面时应更新目标，而不是丢失最初工作流")
+        return
+    }
+    #expect(updated.origin == pending.origin)
+    #expect(updated.destination == .bound(workflowID: workflowC))
+    #expect(updated.startedAt == pending.startedAt)
+    #expect(updated.expiresAt == pending.expiresAt)
+}
+
+@Test
+func spaceSwitchGateExpiresWithoutLockingTheUser() {
+    let now = Date(timeIntervalSince1970: 92_000)
+    let pending = SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: UUID()),
+        destination: .unbound,
+        at: now,
+        isEnabled: true
+    )!
+
+    #expect(!SpaceSwitchGateEngine.hasExpired(
+        pending,
+        at: now.addingTimeInterval(9.9)
+    ))
+    #expect(SpaceSwitchGateEngine.hasExpired(
+        pending,
+        at: now.addingTimeInterval(10)
+    ))
+    #expect(
+        pending.expiresAt.timeIntervalSince(pending.startedAt)
+            == SpaceSwitchGateEngine.decisionWindowSeconds
+    )
+}
+
+@Test
+func spaceSwitchGateRefreshesAFullDecisionWindowAfterNavigationSettles() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let workflowC = UUID()
+    let start = Date(timeIntervalSince1970: 92_500)
+    let pending = SpaceSwitchGateEngine.begin(
+        origin: .bound(workflowID: workflowA),
+        destination: .bound(workflowID: workflowB),
+        at: start,
+        isEnabled: true
+    )!
+    let settledAt = start.addingTimeInterval(4)
+    let refreshed = SpaceSwitchGateEngine.refreshed(
+        pending,
+        destination: .bound(workflowID: workflowC),
+        at: settledAt
+    )
+
+    #expect(refreshed?.origin == .bound(workflowID: workflowA))
+    #expect(refreshed?.destination == .bound(workflowID: workflowC))
+    #expect(refreshed?.startedAt == settledAt)
+    #expect(
+        refreshed?.expiresAt
+            == settledAt.addingTimeInterval(
+                SpaceSwitchGateEngine.decisionWindowSeconds
+            )
+    )
+    #expect(SpaceSwitchGateEngine.refreshed(
+        pending,
+        destination: .bound(workflowID: workflowA),
+        at: settledAt
+    ) == nil)
+}
+
+@Test
+func workflowTransitionKeepsCompleteNativeSemantics() {
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let start = Date(timeIntervalSince1970: 93_000)
+    let pending = PendingWorkflowTransition(
+        navigationStartedAt: start,
+        origin: WorkflowTransitionEndpoint(
+            resolution: .bound(workflowID: workflowA)
+        ),
+        destination: WorkflowTransitionEndpoint(
+            resolution: .bound(workflowID: workflowB)
+        ),
+        settledAt: start.addingTimeInterval(1.2),
+        navigationEventCount: 3
+    )
+    let record = pending.resolved(
+        at: start.addingTimeInterval(5),
+        outcome: .confirmed,
+        reason: .waitingForResult
+    )
+
+    #expect(record.origin.workflowID == workflowA)
+    #expect(record.destination.workflowID == workflowB)
+    #expect(record.outcome == .confirmed)
+    #expect(record.reason == .waitingForResult)
+    #expect(record.navigationEventCount == 3)
 }
 
 @Test
@@ -1633,6 +2285,375 @@ func dailyCoachEvaluatesTheExactPreviouslyIssuedRecommendation() {
 }
 
 @Test
+func dailyCoachDoesNotTreatSwitchCountAloneAsRecoveryFailure() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28, hour: 9)
+    )!
+    let task = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let session = FocusSessionRecord(
+        taskID: task,
+        startedAt: day,
+        endedAt: day.addingTimeInterval(15 * 60),
+        targetSeconds: 15 * 60,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0
+    )
+    var intervals: [TaskIntervalRecord] = []
+    for index in 0..<8 {
+        let startedAt = day.addingTimeInterval(Double(index) * 7 * 60)
+        let endedAt = day.addingTimeInterval(Double(index + 1) * 7 * 60)
+        intervals.append(
+            TaskIntervalRecord(
+                taskID: task,
+                startedAt: startedAt,
+                endedAt: endedAt,
+                workflowSource: .space
+            )
+        )
+    }
+    let result = DailyCoachEngine.analyze(
+        snapshot: FocusTraceLocalSnapshot(
+            taskIntervals: intervals,
+            activities: [
+                ActivityRecord(
+                    app: app,
+                    startedAt: day,
+                    endedAt: day.addingTimeInterval(60 * 60),
+                    taskID: task,
+                    focusSessionID: session.id,
+                    classification: .allowed
+                )
+            ],
+            focusSessions: [session],
+            trainingPlans: [
+                TrainingPlanRecord(
+                    version: 1,
+                    focusMinutes: 15,
+                    reason: "default"
+                )
+            ]
+        ),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+
+    #expect(result.quality.isReliableForBehavior)
+    #expect(result.metrics.workflowSwitchesPerHour >= 6)
+    #expect(result.recommendation.kind != DailyCoachKind.agentParkingDrill)
+}
+
+@Test
+func dailyCoachRequiresRepeatedExplicitHandoffsBeforeParkingAdvice() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28, hour: 9)
+    )!
+    let taskA = UUID()
+    let taskB = UUID()
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: taskA
+    )
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: taskB
+    )
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let session = FocusSessionRecord(
+        taskID: taskA,
+        startedAt: day,
+        endedAt: day.addingTimeInterval(15 * 60),
+        targetSeconds: 15 * 60,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0
+    )
+    let transitions = [
+        workflowTransition(
+            at: day.addingTimeInterval(20 * 60),
+            origin: endpointA,
+            destination: endpointB,
+            outcome: .confirmed,
+            reason: .waitingForResult
+        ),
+        workflowTransition(
+            at: day.addingTimeInterval(40 * 60),
+            origin: endpointB,
+            destination: endpointA,
+            outcome: .confirmed,
+            reason: .forcedInterruption
+        )
+    ]
+    let snapshot = FocusTraceLocalSnapshot(
+        activities: [
+            ActivityRecord(
+                app: app,
+                startedAt: day,
+                endedAt: day.addingTimeInterval(60 * 60),
+                taskID: taskA,
+                focusSessionID: session.id,
+                classification: .allowed
+            )
+        ],
+        focusSessions: [session],
+        trainingPlans: [
+            TrainingPlanRecord(
+                version: 1,
+                focusMinutes: 15,
+                reason: "default"
+            )
+        ],
+        workflowTransitions: transitions
+    )
+    let result = DailyCoachEngine.analyze(
+        snapshot: snapshot,
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+
+    #expect(result.recommendation.kind == .agentParkingDrill)
+    #expect(result.recommendation.evidence.contains("等待结果 1 次，被迫中断 1 次"))
+    #expect(!result.recommendation.evidence.joined().contains("次/小时"))
+
+    let issued = result.recommendation
+    let completed = DailyCoachEngine.analyze(
+        snapshot: FocusTraceLocalSnapshot(
+            activities: snapshot.activities,
+            focusSessions: snapshot.focusSessions,
+            trainingPlans: snapshot.trainingPlans,
+            workflowTransitions: transitions,
+            taskParkings: [
+                TaskParkingRecord(
+                    taskID: taskA,
+                    parkedAt: day.addingTimeInterval(25 * 60),
+                    resumeCue: "private",
+                    resumedAt: day.addingTimeInterval(35 * 60)
+                )
+            ]
+        ),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar,
+        previousIssuedRecommendation: issued,
+        previousIssuedMetrics: result.metrics
+    )
+    #expect(completed.previousRecommendationEvaluation?.status == .improved)
+    #expect(completed.previousRecommendationEvaluation?.evidence.contains("已返回 1 次") == true)
+}
+
+@Test
+func workflowTransitionAuditUsesFinalRoutesReasonsAndBoundedWorkTitles() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 27)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let at: (Int, Int) -> Date = { hour, minute in
+        day.addingTimeInterval(Double(hour * 3_600 + minute * 60))
+    }
+    let tasks = [
+        TaskRecord(id: workflowA, title: "主召回\n性能优化"),
+        TaskRecord(id: workflowB, title: "Codex 对话")
+    ]
+    let intervals = [
+        TaskIntervalRecord(taskID: workflowA, startedAt: at(9, 0), endedAt: at(9, 10), workflowSource: .manual),
+        TaskIntervalRecord(taskID: workflowB, startedAt: at(9, 10), endedAt: at(9, 14), workflowSource: .space),
+        TaskIntervalRecord(taskID: workflowA, startedAt: at(9, 14), endedAt: at(9, 30), workflowSource: .space),
+        TaskIntervalRecord(taskID: workflowB, startedAt: at(10, 0), endedAt: at(10, 20), workflowSource: .space)
+    ]
+    let markers = [
+        TimelineMarkerRecord(date: at(9, 10), kind: .spaceSwitchUnstructured, taskID: workflowA),
+        TimelineMarkerRecord(date: at(9, 14), kind: .spaceSwitchCheckpoint, taskID: workflowB),
+        TimelineMarkerRecord(date: at(10, 0), kind: .spaceSwitchInterrupted, taskID: workflowA),
+        TimelineMarkerRecord(date: at(11, 0), kind: .spaceSwitchCancelled, taskID: workflowA)
+    ]
+    let requirements = [
+        RequirementRecord(title: "修复\n召回耗时", source: "SECRET_SOURCE", capturedAt: at(7, 0), status: .planned, workflowID: workflowA),
+        RequirementRecord(title: "校验尾延迟", capturedAt: at(7, 1), status: .active, workflowID: workflowA),
+        RequirementRecord(title: "补齐压测", capturedAt: at(7, 2), status: .planned, workflowID: workflowA),
+        RequirementRecord(title: "第四个不会进入提示词", capturedAt: at(7, 3), status: .planned, workflowID: workflowA),
+        RequirementRecord(title: "已完成内容", capturedAt: at(7, 4), status: .completed, workflowID: workflowA)
+    ]
+
+    let result = WorkflowTransitionAuditEngine.makeAudit(
+        tasks: tasks,
+        requirements: requirements,
+        taskIntervals: intervals,
+        activities: [
+            ActivityRecord(app: AppIdentity(bundleID: "a", name: "A"), startedAt: at(9, 0), endedAt: at(9, 10), taskID: workflowA, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: AppIdentity(bundleID: "b", name: "B"), startedAt: at(9, 10), endedAt: at(9, 14), taskID: workflowB, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: AppIdentity(bundleID: "a", name: "A"), startedAt: at(9, 14), endedAt: at(9, 30), taskID: workflowA, focusSessionID: nil, classification: .allowed),
+            ActivityRecord(app: AppIdentity(bundleID: "b", name: "B"), startedAt: at(10, 0), endedAt: at(10, 20), taskID: workflowB, focusSessionID: nil, classification: .allowed)
+        ],
+        markers: markers,
+        range: day..<day.addingTimeInterval(24 * 3_600),
+        now: at(18, 0),
+        calendar: calendar
+    )
+
+    #expect(result.audit.reasonedSwitches == 3)
+    #expect(result.audit.unreasonedSwitches == 0)
+    #expect(result.audit.cancelledNavigations == 1)
+    let route = try #require(result.audit.routes.first {
+        $0.fromWorkflow == "主召回 性能优化" && $0.toWorkflow == "Codex 对话"
+    })
+    #expect(route.count == 2)
+    #expect(route.reasonCounts["unstructured"] == 1)
+    #expect(route.reasonCounts["forcedInterruption"] == 1)
+    #expect(route.medianDestinationMinutes == 12)
+    #expect(route.returnedWithin30Minutes == 1)
+    let context = try #require(result.contexts.first {
+        $0.workflowTitle == "主召回 性能优化"
+    })
+    #expect(context.activeMinutes == 26)
+    #expect(
+        context.openRequirementTitles == [
+            "校验尾延迟",
+            "修复 召回耗时",
+            "补齐压测"
+        ]
+    )
+    #expect(!context.openRequirementTitles.contains("第四个不会进入提示词"))
+    #expect(!context.openRequirementTitles.contains("已完成内容"))
+}
+
+@Test
+func workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let switchedAt = day.addingTimeInterval(9 * 3_600)
+    let result = WorkflowTransitionAuditEngine.makeAudit(
+        tasks: [
+            TaskRecord(id: workflowA, title: "等待 Agent"),
+            TaskRecord(id: workflowB, title: "处理需求")
+        ],
+        requirements: [],
+        taskIntervals: [
+            TaskIntervalRecord(
+                taskID: workflowB,
+                startedAt: switchedAt,
+                endedAt: switchedAt.addingTimeInterval(12 * 60),
+                workflowSource: .space
+            )
+        ],
+        markers: [
+            TimelineMarkerRecord(
+                date: switchedAt,
+                kind: .spaceSwitchWaiting,
+                taskID: workflowA
+            )
+        ],
+        workflowTransitions: [
+            WorkflowTransitionRecord(
+                navigationStartedAt: switchedAt.addingTimeInterval(-2),
+                settledAt: switchedAt.addingTimeInterval(-0.5),
+                resolvedAt: switchedAt,
+                origin: WorkflowTransitionEndpoint(
+                    resolution: .bound(workflowID: workflowA)
+                ),
+                destination: WorkflowTransitionEndpoint(
+                    resolution: .bound(workflowID: workflowB)
+                ),
+                outcome: .confirmed,
+                reason: .waitingForResult,
+                navigationEventCount: 3
+            )
+        ],
+        range: day..<day.addingTimeInterval(24 * 3_600),
+        now: day.addingTimeInterval(18 * 3_600),
+        calendar: calendar
+    )
+
+    #expect(result.audit.protocolVersion == 2)
+    #expect(result.audit.dataSource == "semanticEvents")
+    #expect(result.audit.finalSwitches == 1)
+    #expect(result.audit.explicitReasonSwitches == 1)
+    #expect(result.audit.explicitReasonCoverage == 1)
+    #expect(result.audit.routes.first?.count == 1)
+    #expect(result.audit.routes.first?.outcomeCounts?["confirmed"] == 1)
+}
+
+@Test
+func workflowTransitionTimeoutDoesNotInventUserIntent() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let switchedAt = day.addingTimeInterval(9 * 3_600)
+    let report = AutomationReportEngine.makeReport(
+        snapshot: FocusTraceLocalSnapshot(
+            tasks: [
+                TaskRecord(id: workflowA, title: "工作流 A"),
+                TaskRecord(id: workflowB, title: "工作流 B")
+            ],
+            taskIntervals: [
+                TaskIntervalRecord(
+                    taskID: workflowB,
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    workflowSource: .space
+                )
+            ],
+            activities: [
+                ActivityRecord(
+                    app: AppIdentity(bundleID: "app", name: "App"),
+                    startedAt: switchedAt,
+                    endedAt: switchedAt.addingTimeInterval(10 * 60),
+                    taskID: workflowB,
+                    focusSessionID: nil,
+                    classification: .allowed
+                )
+            ],
+            workflowTransitions: [
+                workflowTransition(
+                    at: switchedAt,
+                    origin: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowA
+                    ),
+                    destination: WorkflowTransitionEndpoint(
+                        kind: .workflow,
+                        workflowID: workflowB
+                    ),
+                    outcome: .timedOut,
+                    trigger: .frequentSwitchBurst,
+                    reason: .unstructured
+                )
+            ]
+        ),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(18 * 3_600),
+        calendar: calendar
+    )
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        timeZone: calendar.timeZone
+    )
+
+    #expect(markdown.contains("主动说明 / 超时 / 自动：0 / 1 / 0 次"))
+    #expect(markdown.contains("原因 未说明 1"))
+    #expect(!markdown.contains("无明确计划"))
+    #expect(!markdown.contains("已说明原因的最终跳转"))
+}
+
+@Test
 func automationJSONIsStructuredAndAggregateOnly() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -1652,16 +2673,56 @@ func automationJSONIsStructuredAndAggregateOnly() throws {
     )
     let data = try AutomationReportEngine.jsonData(for: report)
     let text = String(decoding: data, as: UTF8.self)
-    #expect(text.contains("\"schemaVersion\" : 2"))
+    #expect(text.contains("\"schemaVersion\" : 5"))
+    #expect(text.contains("\"reportCivilDate\" : \"2026-07-20\""))
     #expect(text.contains("\"recommendation\""))
     #expect(text.contains("\"appSwitchesPerHour\""))
+    #expect(text.contains("\"observationPlan\""))
+    #expect(text.contains("\"minimalEventDrivenFixed\""))
     #expect(!text.contains("private.bundle"))
     #expect(!text.contains("Private App"))
     #expect(!text.contains("SECRET_RESUME_CUE"))
 }
 
 @Test
-func codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay() {
+func automationReportV5KeepsLegacyV2ReadCompatibility() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 27, hour: 9)
+    )!
+    let report = AutomationReportEngine.makeReport(
+        snapshot: FocusTraceLocalSnapshot(),
+        reportDate: day,
+        generatedAt: day,
+        calendar: calendar
+    )
+    let v5Data = try AutomationReportEngine.jsonData(for: report)
+    var legacyObject = try #require(
+        JSONSerialization.jsonObject(with: v5Data) as? [String: Any]
+    )
+    legacyObject["schemaVersion"] = 2
+    legacyObject.removeValue(forKey: "reportCivilDate")
+    legacyObject.removeValue(forKey: "workflowContexts")
+    legacyObject.removeValue(forKey: "transitionAudit")
+    legacyObject.removeValue(forKey: "observationPlan")
+    let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let decoded = try decoder.decode(
+        AutomationReportArtifact.self,
+        from: legacyData
+    )
+
+    #expect(decoded.schemaVersion == 2)
+    #expect(decoded.reportCivilDate == nil)
+    #expect(decoded.workflowContexts == nil)
+    #expect(decoded.transitionAudit == nil)
+    #expect(decoded.observationPlan == nil)
+}
+
+@Test
+func codexReviewDecisionBriefRemainsShortAndCompatible() {
     let review = CodexReviewArtifact(
         sourceReportID: "focustrace-report",
         reportDate: Date(timeIntervalSince1970: 100),
@@ -1700,6 +2761,119 @@ func codexReviewV2EnforcesADecisionBriefInsteadOfAnEssay() {
         nextCheck: review.nextCheck
     )
     #expect(!repeatedEvidence.hasValidShape)
+}
+
+@Test
+func codexReviewV3RejectsUngroundedWorkflowSemantics() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 28, hour: 9)
+    )!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let report = AutomationReportArtifact(
+        report: AutomationReportEngine.makeReport(
+            snapshot: FocusTraceLocalSnapshot(
+                tasks: [
+                    TaskRecord(id: workflowA, title: "等待 Agent"),
+                    TaskRecord(id: workflowB, title: "处理需求")
+                ],
+                activities: [
+                    ActivityRecord(
+                        app: AppIdentity(bundleID: "app", name: "App"),
+                        startedAt: day,
+                        endedAt: day.addingTimeInterval(60 * 60),
+                        taskID: workflowA,
+                        focusSessionID: nil,
+                        classification: .allowed
+                    )
+                ],
+                trainingPlans: [
+                    TrainingPlanRecord(
+                        version: 1,
+                        focusMinutes: 15,
+                        reason: "default"
+                    )
+                ],
+                workflowTransitions: [
+                    workflowTransition(
+                        at: day.addingTimeInterval(20 * 60),
+                        origin: WorkflowTransitionEndpoint(
+                            kind: .workflow,
+                            workflowID: workflowA
+                        ),
+                        destination: WorkflowTransitionEndpoint(
+                            kind: .workflow,
+                            workflowID: workflowB
+                        ),
+                        outcome: .confirmed,
+                        reason: .waitingForResult
+                    ),
+                    workflowTransition(
+                        at: day.addingTimeInterval(40 * 60),
+                        origin: WorkflowTransitionEndpoint(
+                            kind: .workflow,
+                            workflowID: workflowA
+                        ),
+                        destination: WorkflowTransitionEndpoint(
+                            kind: .workflow,
+                            workflowID: workflowB
+                        ),
+                        outcome: .confirmed,
+                        reason: .waitingForResult
+                    )
+                ]
+            ),
+            reportDate: day,
+            generatedAt: day.addingTimeInterval(60 * 60),
+            calendar: calendar
+        )
+    )
+    let grounded = CodexReviewArtifact(
+        schemaVersion: 3,
+        sourceReportID: report.reportID,
+        reportDate: report.reportDate,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        status: .behaviorFinding,
+        problem: "等待 Agent 到处理需求的交接重复发生且没有返回点。",
+        recommendation: "下一次等待结果时先保存返回点，再开始处理需求。",
+        evidence: ["等待 Agent → 处理需求因等待结果发生 2 次"],
+        nextCheck: "下一工作日检查该路线是否保存并返回一次。",
+        analysisAudit: CodexReviewAnalysisAudit(
+            source: .workflowRoute,
+            selectedRoute: CodexReviewRouteSelection(
+                fromWorkflow: "等待 Agent",
+                toWorkflow: "处理需求",
+                reason: .waitingForResult
+            ),
+            contextRelation: .adjacentDeliverables
+        )
+    )
+    #expect(grounded.hasValidShape)
+    #expect(grounded.isGrounded(in: report))
+
+    let hallucinated = CodexReviewArtifact(
+        schemaVersion: 3,
+        sourceReportID: report.reportID,
+        reportDate: report.reportDate,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        status: .behaviorFinding,
+        problem: grounded.displayedProblem,
+        recommendation: grounded.recommendation,
+        evidence: grounded.evidence,
+        nextCheck: grounded.nextCheck,
+        analysisAudit: CodexReviewAnalysisAudit(
+            source: .workflowRoute,
+            selectedRoute: CodexReviewRouteSelection(
+                fromWorkflow: "等待 Agent",
+                toWorkflow: "不存在的工作流",
+                reason: .waitingForResult
+            ),
+            contextRelation: .differentGoals
+        )
+    )
+    #expect(!hallucinated.isGrounded(in: report))
 }
 
 @Test
@@ -1769,12 +2943,22 @@ func codexWorkspaceDemandsProblemActionAndNoFiller() {
 
     #expect(instructions.contains("当前最重要的问题是什么？"))
     #expect(instructions.contains("今天具体怎么解决？"))
-    #expect(instructions.contains("\"schemaVersion\": 2"))
+    #expect(instructions.contains("\"schemaVersion\": 3"))
     #expect(instructions.contains("\"status\": \"behaviorFinding or dataQualityBlocked\""))
     #expect(instructions.contains("当前不能据此判断注意力"))
     #expect(instructions.contains("one or two non-duplicated aggregate facts"))
     #expect(instructions.contains("at most 360 characters"))
     #expect(instructions.contains("Do not add a preface"))
+    #expect(instructions.contains("`transitionAudit.routes`"))
+    #expect(instructions.contains("`assessedInterventionPrompts`"))
+    #expect(instructions.contains("`observationPlan.source`"))
+    #expect(instructions.contains("Never recommend"))
+    #expect(instructions.contains("`openRequirementTitles`"))
+    #expect(instructions.contains("untrusted data label"))
+    #expect(instructions.contains("Do not infer a problem from a switch count"))
+    #expect(instructions.contains("semantic title similarity is only a hypothesis"))
+    #expect(instructions.contains("at least twice"))
+    #expect(instructions.contains("\"analysisAudit\""))
     #expect(!instructions.contains("\"headline\""))
     #expect(!instructions.contains("\"interpretation\""))
 }

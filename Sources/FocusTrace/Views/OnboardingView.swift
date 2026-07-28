@@ -63,6 +63,7 @@ struct OnboardingView: View {
                         }
                         .padding(.top, 10)
                     }
+                    .focusTraceDisclosureHitTarget(isExpanded: $showSchedule)
                     .padding(8)
                 }
 
@@ -93,6 +94,7 @@ struct OnboardingView: View {
                         }
                         .padding(.top, 10)
                     }
+                    .focusTraceDisclosureHitTarget(isExpanded: $showDetails)
                     .padding(8)
                 }
 

@@ -12,6 +12,7 @@ struct TaskEditorSheet: View {
     @State private var selectedApps: Set<String>
     @State private var runningApps: [AppIdentity] = []
     @State private var showDetails: Bool
+    @State private var showDeleteConfirmation = false
 
     private var reusableTasks: [FocusTaskModel] {
         state.activeTasks.filter { $0.id != editingTask?.id && !$0.allowedBundleIDs.isEmpty }
@@ -41,6 +42,11 @@ struct TaskEditorSheet: View {
             TextField("工作流名称", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .controlSize(.large)
+            if let validationMessage {
+                Text(validationMessage)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
             Text("先保存名称就可以开始；其余信息只在你需要专注训练时再补。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -91,13 +97,20 @@ struct TaskEditorSheet: View {
                 }
                 .padding(.top, 10)
             }
+            .focusTraceDisclosureHitTarget(isExpanded: $showDetails)
 
             HStack {
-                Button("取消") { dismiss() }
+                if editingTask != nil {
+                    Button("删除工作流…", role: .destructive) {
+                        showDeleteConfirmation = true
+                    }
+                }
                 Spacer()
+                Button("取消") { dismiss() }
                 Button(editingTask == nil ? "创建工作流" : "保存") {
+                    let didSave: Bool
                     if let editingTask {
-                        state.updateTask(
+                        didSave = state.updateTask(
                             id: editingTask.id,
                             title: title,
                             expectedOutcome: outcome,
@@ -105,23 +118,26 @@ struct TaskEditorSheet: View {
                         )
                     } else {
                         if bindCurrentSpaceOnCreate {
-                            state.createWorkflowAndBindCurrentSpace(
+                            didSave = state.createWorkflowAndBindCurrentSpace(
                                 title: title,
                                 expectedOutcome: outcome,
                                 allowedBundleIDs: selectedApps
                             )
                         } else {
-                            state.createTask(
+                            didSave = state.createTask(
                                 title: title,
                                 expectedOutcome: outcome,
                                 allowedBundleIDs: selectedApps
                             )
                         }
                     }
-                    dismiss()
+                    if didSave { dismiss() }
                 }
                 .buttonStyle(FocusTracePrimaryButtonStyle())
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    WorkflowNamePolicy.normalizedTitle(title) == nil
+                        || validationMessage != nil
+                )
             }
         }
         .padding(22)
@@ -129,6 +145,47 @@ struct TaskEditorSheet: View {
         .focusTraceScreen()
         .focusTraceVisualSystem()
         .onAppear { loadVisibleApps() }
+        .confirmationDialog(
+            "删除这个工作流？",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            if let editingTask {
+                Button("删除“\(editingTask.title)”", role: .destructive) {
+                    if state.deleteWorkflow(editingTask.id) {
+                        dismiss()
+                    }
+                }
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text(workflowDeletionMessage)
+        }
+    }
+
+    private var validationMessage: String? {
+        guard WorkflowNamePolicy.normalizedTitle(title) != nil else {
+            return nil
+        }
+        return state.workflowNameValidationMessage(
+            for: title,
+            excluding: editingTask?.id
+        )
+    }
+
+    private var workflowDeletionMessage: String {
+        guard let editingTask,
+              let impact = state.workflowDeletionImpact(for: editingTask.id)
+        else {
+            return "历史时间轴和训练记录会保留。"
+        }
+        let requirements = impact.unfinishedRequirementCount == 0
+            ? "没有未完成需求需要解绑"
+            : "\(impact.unfinishedRequirementCount) 条未完成需求会回到“未指定工作流”"
+        let bindings = impact.spaceBindingCount == 0
+            ? "没有桌面绑定"
+            : "\(impact.spaceBindingCount) 个桌面绑定会解除"
+        return "\(requirements)，\(bindings)。历史时间轴和训练记录会保留。"
     }
 
     private func binding(for bundleID: String) -> Binding<Bool> {

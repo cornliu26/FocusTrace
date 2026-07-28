@@ -254,6 +254,66 @@ final class TimelineMarkerModel: Codable, Identifiable {
     }
 }
 
+final class WorkflowTransitionModel: Codable, Identifiable {
+    var id: UUID
+    var sourceRaw: String
+    var navigationStartedAt: Date
+    var settledAt: Date
+    var resolvedAt: Date
+    var originKindRaw: String
+    var originWorkflowID: UUID?
+    var destinationKindRaw: String
+    var destinationWorkflowID: UUID?
+    var outcomeRaw: String
+    var reasonRaw: String?
+    var interventionTriggerRaw: String?
+    var navigationEventCount: Int
+
+    init(record: WorkflowTransitionRecord) {
+        id = record.id
+        sourceRaw = record.source.rawValue
+        navigationStartedAt = record.navigationStartedAt
+        settledAt = record.settledAt
+        resolvedAt = record.resolvedAt
+        originKindRaw = record.origin.kind.rawValue
+        originWorkflowID = record.origin.workflowID
+        destinationKindRaw = record.destination.kind.rawValue
+        destinationWorkflowID = record.destination.workflowID
+        outcomeRaw = record.outcome.rawValue
+        reasonRaw = record.reason?.rawValue
+        interventionTriggerRaw = record.interventionTrigger?.rawValue
+        navigationEventCount = record.navigationEventCount
+    }
+
+    var record: WorkflowTransitionRecord {
+        WorkflowTransitionRecord(
+            id: id,
+            source: WorkflowTransitionSource(rawValue: sourceRaw) ?? .space,
+            navigationStartedAt: navigationStartedAt,
+            settledAt: settledAt,
+            resolvedAt: resolvedAt,
+            origin: WorkflowTransitionEndpoint(
+                kind: WorkflowTransitionEndpointKind(rawValue: originKindRaw)
+                    ?? .unknown,
+                workflowID: originWorkflowID
+            ),
+            destination: WorkflowTransitionEndpoint(
+                kind: WorkflowTransitionEndpointKind(
+                    rawValue: destinationKindRaw
+                ) ?? .unknown,
+                workflowID: destinationWorkflowID
+            ),
+            outcome: WorkflowTransitionOutcome(rawValue: outcomeRaw)
+                ?? .unresolved,
+            reason: reasonRaw.flatMap(SpaceSwitchReason.init(rawValue:)),
+            interventionTrigger: interventionTriggerRaw.flatMap(
+                WorkflowInterventionTrigger.init(rawValue:)
+            ),
+            navigationEventCount: navigationEventCount
+        )
+    }
+}
+
 final class TaskParkingModel: Codable, Identifiable {
     var id: UUID
     var taskID: UUID
@@ -399,6 +459,7 @@ final class FocusTraceStore {
         var interruptions: [InterruptionModel]
         var trainingPlans: [TrainingPlanModel]
         var markers: [TimelineMarkerModel]
+        var workflowTransitions: [WorkflowTransitionModel]
         var taskParkings: [TaskParkingModel]
         var workflowSpaceBindings: [WorkflowSpaceBindingModel]
         var requirements: [RequirementItemModel]
@@ -411,6 +472,7 @@ final class FocusTraceStore {
             interruptions: [InterruptionModel],
             trainingPlans: [TrainingPlanModel],
             markers: [TimelineMarkerModel],
+            workflowTransitions: [WorkflowTransitionModel],
             taskParkings: [TaskParkingModel],
             workflowSpaceBindings: [WorkflowSpaceBindingModel],
             requirements: [RequirementItemModel]
@@ -422,6 +484,7 @@ final class FocusTraceStore {
             self.interruptions = interruptions
             self.trainingPlans = trainingPlans
             self.markers = markers
+            self.workflowTransitions = workflowTransitions
             self.taskParkings = taskParkings
             self.workflowSpaceBindings = workflowSpaceBindings
             self.requirements = requirements
@@ -436,6 +499,10 @@ final class FocusTraceStore {
             interruptions = try container.decodeIfPresent([InterruptionModel].self, forKey: .interruptions) ?? []
             trainingPlans = try container.decodeIfPresent([TrainingPlanModel].self, forKey: .trainingPlans) ?? []
             markers = try container.decodeIfPresent([TimelineMarkerModel].self, forKey: .markers) ?? []
+            workflowTransitions = try container.decodeIfPresent(
+                [WorkflowTransitionModel].self,
+                forKey: .workflowTransitions
+            ) ?? []
             taskParkings = try container.decodeIfPresent([TaskParkingModel].self, forKey: .taskParkings) ?? []
             workflowSpaceBindings = try container.decodeIfPresent(
                 [WorkflowSpaceBindingModel].self,
@@ -455,6 +522,7 @@ final class FocusTraceStore {
     private(set) var interruptions: [InterruptionModel] = []
     private(set) var trainingPlans: [TrainingPlanModel] = []
     private(set) var markers: [TimelineMarkerModel] = []
+    private(set) var workflowTransitions: [WorkflowTransitionModel] = []
     private(set) var taskParkings: [TaskParkingModel] = []
     private(set) var workflowSpaceBindings: [WorkflowSpaceBindingModel] = []
     private(set) var requirements: [RequirementItemModel] = []
@@ -485,6 +553,7 @@ final class FocusTraceStore {
             interruptions = snapshot.interruptions
             trainingPlans = snapshot.trainingPlans
             markers = snapshot.markers
+            workflowTransitions = snapshot.workflowTransitions
             taskParkings = snapshot.taskParkings
             workflowSpaceBindings = snapshot.workflowSpaceBindings
             requirements = snapshot.requirements
@@ -520,6 +589,9 @@ final class FocusTraceStore {
     func insert(_ value: InterruptionModel) { interruptions.append(value) }
     func insert(_ value: TrainingPlanModel) { trainingPlans.append(value) }
     func insert(_ value: TimelineMarkerModel) { markers.append(value) }
+    func insert(_ value: WorkflowTransitionModel) {
+        workflowTransitions.append(value)
+    }
     func insert(_ value: TaskParkingModel) { taskParkings.append(value) }
     func insert(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.append(value) }
     func insert(_ value: RequirementItemModel) { requirements.append(value) }
@@ -531,6 +603,9 @@ final class FocusTraceStore {
     func delete(_ value: InterruptionModel) { interruptions.removeAll { $0.id == value.id } }
     func delete(_ value: TrainingPlanModel) { trainingPlans.removeAll { $0.id == value.id } }
     func delete(_ value: TimelineMarkerModel) { markers.removeAll { $0.id == value.id } }
+    func delete(_ value: WorkflowTransitionModel) {
+        workflowTransitions.removeAll { $0.id == value.id }
+    }
     func delete(_ value: TaskParkingModel) { taskParkings.removeAll { $0.id == value.id } }
     func delete(_ value: WorkflowSpaceBindingModel) { workflowSpaceBindings.removeAll { $0.id == value.id } }
     func delete(_ value: RequirementItemModel) { requirements.removeAll { $0.id == value.id } }
@@ -544,6 +619,7 @@ final class FocusTraceStore {
             interruptions: interruptions,
             trainingPlans: trainingPlans,
             markers: markers,
+            workflowTransitions: workflowTransitions,
             taskParkings: taskParkings,
             workflowSpaceBindings: workflowSpaceBindings,
             requirements: requirements

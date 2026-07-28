@@ -18,17 +18,19 @@ SPEC.loader.exec_module(VALIDATOR)
 
 def report(*, reliable: bool) -> dict:
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 5,
         "reportID": "focustrace-report",
         "reportDate": "2026-07-25T00:00:00+08:00",
+        "reportCivilDate": "2026-07-25",
         "dataQuality": {"isReliableForBehavior": reliable},
         "phaseTwo": {"status": "locked"},
+        "recommendation": {"kind": "maintainRound"},
     }
 
 
 def review(*, status: str, problem: str) -> dict:
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "sourceReportID": "focustrace-report",
         "reportDate": "2026-07-25T00:00:00+08:00",
         "generatedAt": "2026-07-25T18:35:00+08:00",
@@ -37,10 +39,67 @@ def review(*, status: str, problem: str) -> dict:
         "recommendation": "把当前桌面绑定到正在推进的工作流，并连续记录 30 分钟。",
         "evidence": ["工作流归因率 68%", "可靠门槛 70%"],
         "nextCheck": "下一工作日检查归因率是否达到 70%。",
+        "analysisAudit": {
+            "source": "localRecommendation" if status == "behaviorFinding" else "dataQuality",
+            "selectedRoute": None,
+            "contextRelation": "notApplicable",
+        },
     }
 
 
 class CodexReviewContractTests(unittest.TestCase):
+    def test_current_v5_report_is_accepted(self) -> None:
+        payload = review(
+            status="behaviorFinding",
+            problem="无计划工作流跳转形成了重复返回。",
+        )
+        self.assertEqual(
+            VALIDATOR.validate(report(reliable=True), payload),
+            "2026-07-25",
+        )
+
+    def test_legacy_v2_report_remains_accepted(self) -> None:
+        source = report(reliable=True)
+        source["schemaVersion"] = 2
+        payload = review(
+            status="behaviorFinding",
+            problem="无计划工作流跳转形成了重复返回。",
+        )
+        payload["schemaVersion"] = 2
+        payload.pop("analysisAudit")
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+    def test_workflow_route_must_exist_twice_in_native_aggregate(self) -> None:
+        source = report(reliable=True)
+        source["transitionAudit"] = {
+            "dataSource": "semanticEvents",
+            "routes": [
+                {
+                    "fromWorkflow": "等待 Agent",
+                    "toWorkflow": "处理需求",
+                    "reasonCounts": {"waitingForResult": 2},
+                }
+            ],
+        }
+        payload = review(
+            status="behaviorFinding",
+            problem="等待 Agent 到处理需求的交接没有保存返回点。",
+        )
+        payload["analysisAudit"] = {
+            "source": "workflowRoute",
+            "selectedRoute": {
+                "fromWorkflow": "等待 Agent",
+                "toWorkflow": "处理需求",
+                "reason": "waitingForResult",
+            },
+            "contextRelation": "adjacentDeliverables",
+        }
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+        payload["analysisAudit"]["selectedRoute"]["toWorkflow"] = "不存在的工作流"
+        with self.assertRaisesRegex(ValueError, "至少两次聚合证据"):
+            VALIDATOR.validate(source, payload)
+
     def test_unreliable_report_accepts_one_repair_action(self) -> None:
         payload = review(
             status="dataQualityBlocked",
@@ -66,6 +125,18 @@ class CodexReviewContractTests(unittest.TestCase):
             problem="工作流归因率只有 68%；当前不能据此判断注意力。",
         )
         source["reportDate"] = "2026-07-25T00:30:00+14:00"
+        payload["reportDate"] = source["reportDate"]
+
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+    def test_explicit_civil_date_survives_utc_json_encoding(self) -> None:
+        source = report(reliable=False)
+        payload = review(
+            status="dataQualityBlocked",
+            problem="工作流归因率只有 68%；当前不能据此判断注意力。",
+        )
+        source["reportDate"] = "2026-07-24T16:00:00Z"
+        source["reportCivilDate"] = "2026-07-25"
         payload["reportDate"] = source["reportDate"]
 
         self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")

@@ -6,6 +6,36 @@ public enum WorkflowLifecycle: String, Codable, CaseIterable, Sendable {
     case archived
 }
 
+public enum WorkflowNamePolicy {
+    public static func normalizedTitle(_ value: String) -> String? {
+        let result = value
+            .precomposedStringWithCompatibilityMapping
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.isEmpty ? nil : result
+    }
+
+    public static func canonicalKey(_ value: String) -> String? {
+        normalizedTitle(value)?
+            .folding(
+                options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                locale: Locale(identifier: "en_US_POSIX")
+            )
+            .lowercased(with: Locale(identifier: "en_US_POSIX"))
+    }
+
+    public static func isAvailable(
+        _ proposedTitle: String,
+        among existingTitles: [String]
+    ) -> Bool {
+        guard let proposedKey = canonicalKey(proposedTitle) else { return false }
+        return !existingTitles.contains {
+            canonicalKey($0) == proposedKey
+        }
+    }
+}
+
 public enum WorkflowPresence: String, Codable, CaseIterable, Sendable {
     case unbound
     case background

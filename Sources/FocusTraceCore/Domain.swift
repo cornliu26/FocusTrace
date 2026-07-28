@@ -48,6 +48,11 @@ public enum TimelineMarkerKind: String, Codable, CaseIterable, Hashable, Sendabl
     case taskResumed
     case focusPaused
     case focusResumed
+    case spaceSwitchCheckpoint
+    case spaceSwitchWaiting
+    case spaceSwitchInterrupted
+    case spaceSwitchUnstructured
+    case spaceSwitchCancelled
 }
 
 public struct AppIdentity: Codable, Equatable, Hashable, Sendable {
