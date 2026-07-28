@@ -2515,8 +2515,13 @@ func workflowTransitionAuditUsesFinalRoutesReasonsAndBoundedWorkTitles() throws 
         $0.workflowTitle == "主召回 性能优化"
     })
     #expect(context.activeMinutes == 26)
-    #expect(context.openRequirementTitles.count == 3)
-    #expect(context.openRequirementTitles.first == "修复 召回耗时")
+    #expect(
+        context.openRequirementTitles == [
+            "校验尾延迟",
+            "修复 召回耗时",
+            "补齐压测"
+        ]
+    )
     #expect(!context.openRequirementTitles.contains("第四个不会进入提示词"))
     #expect(!context.openRequirementTitles.contains("已完成内容"))
 }

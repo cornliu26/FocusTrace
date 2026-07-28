@@ -2393,6 +2393,18 @@ suite.run("工作流跳转审计只分析最终路线并保留原因与标题上
                 capturedAt: at(7, 0),
                 status: .planned,
                 workflowID: workflowA
+            ),
+            RequirementRecord(
+                title: "校验尾延迟",
+                capturedAt: at(7, 1),
+                status: .active,
+                workflowID: workflowA
+            ),
+            RequirementRecord(
+                title: "补齐压测",
+                capturedAt: at(7, 2),
+                status: .planned,
+                workflowID: workflowA
             )
         ],
         taskIntervals: [
@@ -2429,8 +2441,12 @@ suite.run("工作流跳转审计只分析最终路线并保留原因与标题上
     try expect(
         result.contexts.first(where: {
             $0.workflowTitle == "主召回 性能优化"
-        })?.openRequirementTitles == ["修复 召回耗时"],
-        "提示词只应获得清洗后的有限需求标题"
+        })?.openRequirementTitles == [
+            "校验尾延迟",
+            "修复 召回耗时",
+            "补齐压测"
+        ],
+        "提示词应先获得正在处理的需求，再按捕获时间保留有限标题"
     )
     try expect(
         result.contexts.first(where: {
