@@ -3278,6 +3278,13 @@ suite.run("切换负荷只在行为恢复与主观证据收敛时升高") {
         behaviorOnly.status == .mixedEvidence,
         "应用与工作流切换都属于行为通道，不能伪装成两类证据"
     )
+    try expect(
+        behaviorOnly.metrics.finalWorkflowSwitches == 0
+            && behaviorOnly.recommendedExperiment.contains(
+                "不减少同一工作流"
+            ),
+        "没有实际跨工作流事件时不得生成跨工作流干预"
+    )
     let assessment = SwitchingLoadEngine.assess(
         activities: activities,
         taskIntervals: taskIntervals,

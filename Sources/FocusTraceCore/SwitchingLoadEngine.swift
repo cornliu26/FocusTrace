@@ -399,6 +399,7 @@ public enum SwitchingLoadEngine {
             recommendedExperiment: experiment(
                 status: status,
                 withinWorkflowRatio: withinWorkflowRatio,
+                finalWorkflowSwitches: metrics.finalWorkflowSwitches,
                 applicationPressure: applicationPressure,
                 workflowPressure: workflowPressure,
                 recoveryPressure: recoveryPressure,
@@ -472,6 +473,7 @@ public enum SwitchingLoadEngine {
     private static func experiment(
         status: SwitchingLoadStatus,
         withinWorkflowRatio: Double?,
+        finalWorkflowSwitches: Int,
         applicationPressure: Bool,
         workflowPressure: Bool,
         recoveryPressure: Bool,
@@ -486,10 +488,11 @@ public enum SwitchingLoadEngine {
         }
         if applicationPressure,
            (withinWorkflowRatio ?? 0) >= 0.7,
-           !workflowPressure {
+           (!workflowPressure || finalWorkflowSwitches == 0) {
             return "先不减少同一工作流内的必要工具切换；做一轮单一产出训练，只检查高切换五分钟窗口是否减少"
         }
-        if applicationPressure || workflowPressure {
+        if applicationPressure
+            || (workflowPressure && finalWorkflowSwitches > 0) {
             return "下一次跨工作流只在明确检查点切换；下一工作日检查同一路线的短停留和 30 分钟内返回"
         }
         if subjectivePressure {
