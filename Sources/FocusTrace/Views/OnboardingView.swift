@@ -18,114 +18,11 @@ struct OnboardingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 16) {
-                    FocusTraceBrandMark(size: 64)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("设置当前工作流")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("输入名称后，当前桌面会自动绑定到这个工作流。")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                GroupBox("当前工作流") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField("例如：完成登录问题修复", text: $taskTitle)
-                            .textFieldStyle(.roundedBorder)
-                            .controlSize(.large)
-                            .accessibilityIdentifier(
-                                FocusTraceUXContract.workflowNameInputIdentifier
-                            )
-                        Text("现在只填名称即可；创建后会自动绑定当前桌面并开始记录。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                }
-
-                GroupBox {
-                    DisclosureGroup(
-                        "自动记录：\(workScheduleSummary)",
-                        isExpanded: $showSchedule
-                    ) {
-                        VStack(alignment: .leading, spacing: 14) {
-                            WeekdayPicker(preferences: preferences)
-                            HStack {
-                                TimePicker(title: "开始", minutes: $preferences.workStartMinutes)
-                                TimePicker(title: "结束", minutes: $preferences.workEndMinutes)
-                            }
-                            if !preferences.isWithinWorkSchedule(Date()) {
-                                Label("当前不在这个时段内，设置完成后会等到下个记录时段自动开始。", systemImage: "clock.badge.exclamationmark")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .padding(.top, 10)
-                    }
-                    .focusTraceDisclosureHitTarget(isExpanded: $showSchedule)
-                    .padding(8)
-                }
-
-                GroupBox {
-                    DisclosureGroup(
-                        "可选：补充目标和专注时允许的应用",
-                        isExpanded: $showDetails
-                    ) {
-                        VStack(alignment: .leading, spacing: 12) {
-                            TextField("期望产出（可选）", text: $expectedOutcome)
-                                .textFieldStyle(.roundedBorder)
-
-                            Text("允许应用只在专注训练时使用，前三天基线记录不要求现在设置。")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-
-                            List(runningApps, id: \.bundleID) { app in
-                                Toggle(isOn: appBinding(app.bundleID)) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(app.name)
-                                        Text(app.bundleID)
-                                            .font(.caption2)
-                                            .foregroundStyle(.tertiary)
-                                    }
-                                }
-                            }
-                            .frame(height: 170)
-                        }
-                        .padding(.top, 10)
-                    }
-                    .focusTraceDisclosureHitTarget(isExpanded: $showDetails)
-                    .padding(8)
-                }
-
-                GroupBox {
-                    Label {
-                        Text("只记录前台应用、工作流标签和时间；不读取窗口标题、网页地址、聊天对象或键盘内容。数据只保存在本机，也不用于 ADHD 诊断。")
-                    } icon: {
-                        Image(systemName: "lock.shield")
-                    }
-                    .foregroundStyle(.secondary)
-                    .padding(5)
-                }
-
-                HStack {
-                    Text("之后通常只需切换桌面；专注计时和允许应用都可以稍后设置。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("开始记录当前工作流") {
-                        state.completeOnboardingAndCreateTask(
-                            title: taskTitle,
-                            expectedOutcome: expectedOutcome,
-                            allowedBundleIDs: selectedApps
-                        )
-                    }
-                    .buttonStyle(FocusTracePrimaryButtonStyle())
-                    .controlSize(.large)
-                    .disabled(
-                        preferences.workdayNumbers.isEmpty
-                            || taskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    )
+            Group {
+                if state.activeTasks.isEmpty {
+                    setupForm
+                } else {
+                    firstUseGuide
                 }
             }
             .padding(26)
@@ -136,6 +33,224 @@ struct OnboardingView: View {
         .onAppear {
             runningApps = state.runningApps().filter { $0.bundleID != "com.apple.loginwindow" }
         }
+    }
+
+    private var setupForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 16) {
+                FocusTraceBrandMark(size: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("设置第一个工作流")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("先起一个名字；下一页会告诉你怎样真正开始记录。")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            GroupBox("第一个工作流") {
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField("例如：完成登录问题修复", text: $taskTitle)
+                        .textFieldStyle(.roundedBorder)
+                        .controlSize(.large)
+                        .accessibilityIdentifier(
+                            FocusTraceUXContract.workflowNameInputIdentifier
+                        )
+                    Text("现在只填名称即可；不会绑定 FocusTrace 窗口所在的桌面。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(8)
+            }
+
+            GroupBox {
+                DisclosureGroup(
+                    "自动记录：\(workScheduleSummary)",
+                    isExpanded: $showSchedule
+                ) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        WeekdayPicker(preferences: preferences)
+                        HStack {
+                            TimePicker(title: "开始", minutes: $preferences.workStartMinutes)
+                            TimePicker(title: "结束", minutes: $preferences.workEndMinutes)
+                        }
+                        if !preferences.isWithinWorkSchedule(Date()) {
+                            Label("当前不在这个时段内，设置完成后会等到下个记录时段自动开始。", systemImage: "clock.badge.exclamationmark")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(.top, 10)
+                }
+                .focusTraceDisclosureHitTarget(isExpanded: $showSchedule)
+                .padding(8)
+            }
+
+            GroupBox {
+                DisclosureGroup(
+                    "可选：补充目标和专注时允许的应用",
+                    isExpanded: $showDetails
+                ) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("期望产出（可选）", text: $expectedOutcome)
+                            .textFieldStyle(.roundedBorder)
+
+                        Text("允许应用只在专注训练时使用，前三天基线记录不要求现在设置。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        List(runningApps, id: \.bundleID) { app in
+                            Toggle(isOn: appBinding(app.bundleID)) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(app.name)
+                                    Text(app.bundleID)
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                        }
+                        .frame(height: 170)
+                    }
+                    .padding(.top, 10)
+                }
+                .focusTraceDisclosureHitTarget(isExpanded: $showDetails)
+                .padding(8)
+            }
+
+            GroupBox {
+                Label {
+                    Text("只记录前台应用、工作流标签和时间；不读取窗口标题、网页地址、聊天对象或键盘内容。数据只保存在本机，也不用于 ADHD 诊断。")
+                } icon: {
+                    Image(systemName: "lock.shield")
+                }
+                .foregroundStyle(.secondary)
+                .padding(5)
+            }
+
+            HStack {
+                Text("必填项只有工作流名称，其余都可以稍后设置。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("创建并继续") {
+                    state.createFirstWorkflowForOnboarding(
+                        title: taskTitle,
+                        expectedOutcome: expectedOutcome,
+                        allowedBundleIDs: selectedApps
+                    )
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+                .controlSize(.large)
+                .disabled(
+                    preferences.workdayNumbers.isEmpty
+                        || taskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                )
+            }
+        }
+    }
+
+    private var firstUseGuide: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 16) {
+                FocusTraceBrandMark(size: 64)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("工作流已创建")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("再看完这三步，你就可以关掉主窗口正常工作。")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Label(
+                state.activeTasks.first?.title ?? "第一个工作流",
+                systemImage: "checkmark.circle.fill"
+            )
+            .font(.headline)
+            .foregroundStyle(FocusTraceTheme.mint)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                FocusTraceTheme.mint.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+
+            VStack(spacing: 10) {
+                ForEach(
+                    FocusTraceGettingStartedContract.steps.filter {
+                        $0.id != .createWorkflow
+                    }
+                ) { step in
+                    gettingStartedStep(
+                        step,
+                        isCurrent: step.id == state.gettingStartedPhase
+                    )
+                }
+            }
+
+            Label(
+                "桌面绑定只能从屏幕顶部状态栏完成，因为主窗口可能正在另一个桌面。",
+                systemImage: "menubar.rectangle"
+            )
+            .font(.callout)
+            .padding(12)
+            .background(
+                FocusTraceTheme.sky.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+
+            HStack {
+                Text("以后可从状态栏“更多 → 查看新手教学”随时重看。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(
+                    state.gettingStartedPhase == .bindDesktop
+                        ? "完成设置，去状态栏绑定"
+                        : "完成设置"
+                ) {
+                    state.completeOnboarding()
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+                .controlSize(.large)
+            }
+        }
+    }
+
+    private func gettingStartedStep(
+        _ step: FocusTraceGettingStartedStep,
+        isCurrent: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: isCurrent ? "arrow.right.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(isCurrent ? FocusTraceTheme.sky : Color.secondary)
+                .frame(width: 24)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(step.title)
+                        .font(.headline)
+                    if isCurrent {
+                        Text("下一步")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(FocusTraceTheme.sky)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(
+                                FocusTraceTheme.sky.opacity(0.1),
+                                in: Capsule()
+                            )
+                    }
+                }
+                Text(step.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(12)
+        .background(
+            isCurrent ? FocusTraceTheme.sky.opacity(0.06) : Color.primary.opacity(0.025),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
     }
 
     private var workScheduleSummary: String {
@@ -164,69 +279,114 @@ struct QuickStartSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 FocusTraceBrandMark(size: 42)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("FocusTrace 平时怎么用")
+                    Text("FocusTrace 新手教学")
                         .font(.system(.title2, design: .rounded, weight: .bold))
-                    Text("正常工作只需要记住一条：一个桌面对应一个工作流。")
+                    Text("完成当前一步就够了；训练和 Codex 都可以以后再开。")
                         .foregroundStyle(.secondary)
                 }
             }
 
-            guideStep(
-                number: "1",
-                title: "切桌面就是切工作流",
-                detail: "第一次绑定后自动识别，不需要每次再选。Codex、终端和浏览器只是工具，它们之间切换不等于换工作流。"
-            )
-            guideStep(
-                number: "2",
-                title: "平时直接工作，训练时再计时",
-                detail: "记录会在工作时段自动进行。想训练注意力时，再点一次“开始专注”；前三个工作日只观察，不提醒。"
-            )
-            guideStep(
-                number: "3",
-                title: "Agent 还在运行时，先保存返回点",
-                detail: "“返回点”就是回来后立刻做的第一步，例如“看 Agent 结果并跑测试”。切回原桌面时它会重新出现，不需要在脑中同时维持多个上下文。"
-            )
+            VStack(spacing: 9) {
+                ForEach(
+                    Array(FocusTraceGettingStartedContract.steps.enumerated()),
+                    id: \.element.id
+                ) { index, step in
+                    guideStep(
+                        number: index + 1,
+                        step: step,
+                        isCurrent: step.id == state.gettingStartedPhase
+                    )
+                }
+            }
 
-            Text("不需要盯着时间轴工作。下班后再打开回顾；切换密度只是描述，不自动等于走神。")
+            Text("被消息或 Agent 等待打断时：新事情先放进需求箱；离开当前工作流前，保存一句“回来后第一步”。")
                 .font(.callout)
                 .padding(12)
-                .background(.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                .background(
+                    FocusTraceTheme.mint.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10)
+                )
 
             HStack {
-                if state.currentTaskID == nil {
-                    Button(state.activeTasks.isEmpty ? "创建第一个工作流" : "绑定当前桌面") {
-                        dismiss()
-                        if state.activeTasks.isEmpty { state.showTaskCreator = true }
-                        else { state.showTaskSwitcher = true }
-                    }
-                    .buttonStyle(FocusTracePrimaryButtonStyle())
-                }
                 Spacer()
-                Button("知道了") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                Button("关闭") { dismiss() }
+                Button(primaryActionTitle) {
+                    performPrimaryAction()
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+                .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
-        .frame(width: 570)
+        .frame(width: 620)
         .focusTraceScreen()
         .focusTraceVisualSystem()
     }
 
-    private func guideStep(number: String, title: String, detail: String) -> some View {
+    private var primaryActionTitle: String {
+        switch state.gettingStartedPhase {
+        case .createWorkflow:
+            return "创建工作流"
+        case .bindDesktop:
+            return "关闭后去状态栏绑定"
+        case .workNormally:
+            return "开始正常工作"
+        case .reviewEvidence:
+            return "打开回顾分析"
+        }
+    }
+
+    private func performPrimaryAction() {
+        switch state.gettingStartedPhase {
+        case .createWorkflow:
+            dismiss()
+            state.showTaskCreator = true
+        case .bindDesktop, .workNormally:
+            dismiss()
+        case .reviewEvidence:
+            state.selectedAppSection = .review
+            dismiss()
+        }
+    }
+
+    private func guideStep(
+        number: Int,
+        step: FocusTraceGettingStartedStep,
+        isCurrent: Bool
+    ) -> some View {
         HStack(alignment: .top, spacing: 13) {
-            Text(number)
+            Text("\(number)")
                 .font(.headline)
                 .frame(width: 30, height: 30)
-                .background(.tint.opacity(0.14), in: Circle())
+                .foregroundStyle(isCurrent ? Color.white : Color.primary)
+                .background(
+                    isCurrent ? FocusTraceTheme.sky : Color.primary.opacity(0.08),
+                    in: Circle()
+                )
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(step.title).font(.headline)
+                    if isCurrent {
+                        Text("当前")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(FocusTraceTheme.sky)
+                    }
+                }
+                Text(step.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 6)
         }
+        .padding(10)
+        .background(
+            isCurrent ? FocusTraceTheme.sky.opacity(0.06) : Color.clear,
+            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+        )
     }
 }
 

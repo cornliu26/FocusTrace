@@ -3,6 +3,7 @@ import FocusTraceCore
 
 struct ReviewView: View {
     @ObservedObject var state: ApplicationState
+    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var codexBridge = CodexReviewBridge()
     @StateObject private var codexLauncher = CodexConnectionLauncher()
     @State private var showPlanHistory = false
@@ -14,8 +15,8 @@ struct ReviewView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 reviewHeader
+                attentionDashboard
                 localAnalysis
-                interventionEffectiveness
                 codexAnalysis
                 if hasUnresolvedReview {
                     unresolvedReview
@@ -30,70 +31,6 @@ struct ReviewView: View {
         .task(id: state.selectedDate) {
             codexLauncher.refreshExistingWorkspaceIfPresent()
             await codexBridge.observe(for: state.selectedDate)
-        }
-    }
-
-    private var interventionEffectiveness: some View {
-        let audit = state.selectedInterventionAudit
-        return GroupBox {
-            VStack(alignment: .leading, spacing: 13) {
-                HStack(alignment: .top, spacing: 12) {
-                    Image(systemName: "arrow.trianglehead.2.clockwise.rotate.90")
-                        .font(.title3)
-                        .foregroundStyle(FocusTraceTheme.mint)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("只在高频切换段请求确认")
-                            .font(.headline)
-                        Text("普通切换静默记录；10 分钟内第 3 次已绑定工作流切换才在屏幕中上方确认，之后冷却 10 分钟。")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                LazyVGrid(
-                    columns: Array(repeating: GridItem(.flexible()), count: 4),
-                    spacing: 10
-                ) {
-                    MetricCard(
-                        title: "高频切换段",
-                        value: "\(audit.frequentSwitchEpisodes)",
-                        detail: "达到确认门槛"
-                    )
-                    MetricCard(
-                        title: "实际确认",
-                        value: "\(audit.promptsShown)",
-                        detail: "最多每 10 分钟一次"
-                    )
-                    MetricCard(
-                        title: "主动说明",
-                        value: "\(audit.confirmedPrompts)",
-                        detail: audit.promptsShown > 0
-                            ? percent(audit.confirmationRate ?? 0)
-                            : "暂无确认"
-                    )
-                    MetricCard(
-                        title: "确认后稳定",
-                        value: audit.quietAfterPromptRate.map(percent) ?? "—",
-                        detail: audit.assessedPrompts > 0
-                            ? "后续 10 分钟未再切换"
-                            : "等待完整观察窗"
-                    )
-                }
-
-                Label(interventionStatus(audit), systemImage: interventionStatusIcon(audit))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(8)
-        } label: {
-            HStack {
-                Label("切换干预是否值得", systemImage: "waveform.path.ecg")
-                Spacer()
-                Text("仅聚合语义跳转")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
         }
     }
 
@@ -115,9 +52,94 @@ struct ReviewView: View {
         }
     }
 
+    private var attentionDashboard: some View {
+        let dashboard = state.selectedAttentionDashboard
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(FocusTraceTheme.accentGradient.opacity(0.14))
+                    Image(systemName: "rectangle.3.group.bubble.left.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(FocusTraceTheme.indigo)
+                }
+                .frame(width: 42, height: 42)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("注意力趋势")
+                        .font(.title3.bold())
+                    Text(dashboardPeriodDescription(dashboard))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                HStack(spacing: 8) {
+                    DashboardSummaryPill(
+                        title: "趋势工作日",
+                        value: "\(dashboard.baselineDays)/\(AttentionDashboardEngine.trendWorkdayCount)"
+                    )
+                    DashboardSummaryPill(
+                        title: "可靠趋势",
+                        value: "\(dashboard.reliableDimensionCount)/\(dashboard.metrics.count)"
+                    )
+                    DashboardSummaryPill(
+                        title: "所选日记录",
+                        value: "\(Int(dashboard.recordedMinutes.rounded())) 分"
+                    )
+                }
+            }
+
+            if let finding = dashboard.finding {
+                AttentionDashboardFindingCard(finding: finding)
+            } else if dashboard.reliableDimensionCount == 0 {
+                Label(
+                    "当前不能据此判断注意力；至少需要 5 个可靠工作日。",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.callout.weight(.medium))
+                .foregroundStyle(FocusTraceTheme.amber)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(
+                    FocusTraceTheme.amber.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+            }
+
+            VStack(spacing: 10) {
+                ForEach(dashboard.metrics) { metric in
+                    AttentionTrendCard(metric: metric)
+                }
+            }
+
+            if dashboard.includesPartialDay == true {
+                Label(
+                    "进行中的日期只显示为空心点，不参与趋势方向和主要问题判断。",
+                    systemImage: "circle.dashed"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Text(dashboard.boundary)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(18)
+        .background(
+            FocusTraceTheme.cardFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
+        }
+    }
+
     private var localAnalysis: some View {
         let analysis = state.selectedCoachingAnalysis
-        let recommendation = analysis.recommendation
+        let recommendation = state.selectedAttentionDashboard.recommendation
+            ?? analysis.recommendation
         let observationPlan = ObservationPlanEngine.makePlan(
             coaching: analysis,
             summary: state.selectedSummary,
@@ -153,7 +175,7 @@ struct ReviewView: View {
 
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("今天唯一建议")
+                        Text("下一步单项实验")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(FocusTraceTheme.mint)
                         Text(recommendation.title)
@@ -162,7 +184,7 @@ struct ReviewView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Text("可信度：\(confidenceText(recommendation.confidence))")
+                    Text("趋势可信度：\(confidenceText(recommendation.confidence))")
                         .font(.caption.weight(.medium))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 4)
@@ -181,7 +203,7 @@ struct ReviewView: View {
                             Text(step).font(.callout)
                         }
                     }
-                    Label("成功标准：\(recommendation.method.successMeasure)", systemImage: "checkmark.seal")
+                    Label("验收：\(recommendation.method.successMeasure)", systemImage: "checkmark.seal")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.blue)
                 }
@@ -203,33 +225,8 @@ struct ReviewView: View {
                             Label(evidence, systemImage: "chart.bar.xaxis")
                                 .font(.callout)
                         }
-                        LazyVGrid(
-                            columns: Array(repeating: GridItem(.flexible()), count: 4),
-                            spacing: 10
-                        ) {
-                            MetricCard(
-                                title: "有效记录",
-                                value: String(format: "%.0f 分", analysis.metrics.recordedMinutes),
-                                detail: analysis.quality.isReliableForBehavior ? "可用于比较" : "暂不做行为判断"
-                            )
-                            MetricCard(
-                                title: "工作流归因",
-                                value: percent(analysis.metrics.attributedRatio),
-                                detail: "可靠门槛 70%"
-                            )
-                            MetricCard(
-                                title: "应用切换率",
-                                value: String(format: "%.1f/时", analysis.metrics.appSwitchesPerHour),
-                                detail: trendText(analysis.trend.appSwitchRateDeltaPercent)
-                            )
-                            MetricCard(
-                                title: "工作流切换率",
-                                value: String(format: "%.1f/时", analysis.metrics.workflowSwitchesPerHour),
-                                detail: trendText(analysis.trend.workflowSwitchRateDeltaPercent)
-                            )
-                        }
                     }
-                    .padding(.top, 10)
+                    .padding(.top, 6)
                 }
                 .focusTraceDisclosureHitTarget(isExpanded: $showLocalEvidence)
 
@@ -245,6 +242,18 @@ struct ReviewView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    private func dashboardPeriodDescription(
+        _ dashboard: AttentionDashboard
+    ) -> String {
+        guard let start = dashboard.periodStart,
+              let end = dashboard.periodEnd else {
+            return "至少 5 个可靠工作日后，比较最近 3 日与此前个人典型区间"
+        }
+        let startText = start.formatted(.dateTime.month().day())
+        let endText = end.formatted(.dateTime.month().day())
+        return "\(startText)–\(endText) · 最近 3 个可靠工作日 vs 此前最多 7 日"
     }
 
     private func observationPlanDisclosure(
@@ -698,40 +707,6 @@ struct ReviewView: View {
         }
     }
 
-    private func interventionStatus(
-        _ audit: WorkflowInterventionAudit
-    ) -> String {
-        if !state.baselineComplete,
-           Calendar.current.isDateInToday(state.selectedDate) {
-            return "仍在基线期：今天只记录，不弹出确认。"
-        }
-        if audit.frequentSwitchEpisodes == 0 {
-            return "今天没有进入高频切换段，FocusTrace 不会为了正常切换打断你。"
-        }
-        if audit.promptsShown == 0 {
-            return "检测到高频切换段，但没有策略确认记录；旧数据或当时未启用确认不会被补算。"
-        }
-        guard let quietRate = audit.quietAfterPromptRate else {
-            return "确认后的 10 分钟观察窗尚未结束，暂不判断这次干预是否有效。"
-        }
-        return quietRate >= 0.5
-            ? "确认后多数观察窗恢复稳定；继续观察，不增加弹出频率。"
-            : "确认后仍常继续切换；当前干预效果不足，不应提高弹出频率。"
-    }
-
-    private func interventionStatusIcon(
-        _ audit: WorkflowInterventionAudit
-    ) -> String {
-        guard let rate = audit.quietAfterPromptRate else {
-            return "info.circle"
-        }
-        return rate >= 0.5 ? "checkmark.circle" : "exclamationmark.circle"
-    }
-
-    private func trendText(_ value: Double?) -> String {
-        value.map { String(format: "较近 7 日 %+.0f%%", $0) } ?? "可比样本不足"
-    }
-
     private func confidenceText(_ value: DailyCoachConfidence) -> String {
         switch value {
         case .low: return "低"
@@ -760,7 +735,7 @@ struct ReviewView: View {
     private func actionButtonTitle(_ action: DailyCoachAction) -> String? {
         switch action {
         case .none: return nil
-        case .bindWorkflow: return "绑定当前桌面"
+        case .bindWorkflow: return nil
         case let .startFocus(minutes): return "现在开始 \(minutes) 分钟"
         case .parkWorkflow: return "练习一次保存返回点"
         case .reviewTimeline: return "打开时间轴校准"
@@ -772,8 +747,7 @@ struct ReviewView: View {
         case .none:
             break
         case .bindWorkflow:
-            if state.activeTasks.isEmpty { state.showTaskCreator = true }
-            else { state.showTaskSwitcher = true }
+            break
         case let .startFocus(minutes):
             state.requestStartFocus(minutes: minutes)
             state.selectedAppSection = .focus
@@ -787,5 +761,352 @@ struct ReviewView: View {
         case .reviewTimeline:
             state.selectedAppSection = .timeline
         }
+    }
+}
+
+private struct DashboardSummaryPill: View {
+    let title: String
+    let value: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption.monospacedDigit().weight(.semibold))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.secondary.opacity(0.07), in: Capsule())
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AttentionDashboardFindingCard: View {
+    let finding: AttentionDashboardFinding
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.headline)
+                .foregroundStyle(color)
+                .frame(width: 34, height: 34)
+                .background(
+                    color.opacity(0.11),
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+            VStack(alignment: .leading, spacing: 5) {
+                Text(label)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(color)
+                Text(finding.title)
+                    .font(.title3.bold())
+                Text(finding.detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(finding.evidence, id: \.self) { evidence in
+                    Label(evidence, systemImage: "chart.line.uptrend.xyaxis")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 12)
+        }
+        .padding(14)
+        .background(
+            FocusTraceTheme.elevatedFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(color.opacity(0.22), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private var label: String {
+        switch finding.state {
+        case .calibrating: return "样本状态"
+        case .stable: return "当前结论"
+        case .improving: return "持续改善"
+        case .needsAttention: return "当前唯一问题"
+        }
+    }
+
+    private var icon: String {
+        switch finding.state {
+        case .calibrating: return "hourglass"
+        case .stable: return "equal.circle"
+        case .improving: return "arrow.up.right.circle"
+        case .needsAttention: return "scope"
+        }
+    }
+
+    private var color: Color {
+        switch finding.state {
+        case .calibrating: return FocusTraceTheme.sky
+        case .stable, .improving: return FocusTraceTheme.jade
+        case .needsAttention: return FocusTraceTheme.coral
+        }
+    }
+}
+
+private struct AttentionTrendCard: View {
+    let metric: AttentionDashboardMetric
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(accent)
+                    .frame(width: 30, height: 30)
+                    .background(
+                        accent.opacity(0.11),
+                        in: RoundedRectangle(cornerRadius: 8)
+                    )
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(metric.title)
+                        .font(.headline)
+                    Text(metric.value)
+                        .font(.system(.title3, design: .rounded, weight: .bold))
+                        .monospacedDigit()
+                }
+            }
+            .frame(width: 170, alignment: .leading)
+
+            if let trend = metric.trend {
+                VStack(spacing: 4) {
+                    AttentionTrendChart(trend: trend, accent: accent)
+                        .frame(height: 62)
+                    HStack {
+                        Text(
+                            trend.points.first?.date.formatted(
+                                .dateTime.month().day()
+                            ) ?? ""
+                        )
+                        Spacer()
+                        Text(
+                            trend.points.last?.date.formatted(
+                                .dateTime.month().day()
+                            ) ?? ""
+                        )
+                    }
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                Text("等待形成纵向样本")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(stateTitle)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(stateColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(stateColor.opacity(0.10), in: Capsule())
+                    Spacer()
+                    if let reliableDays = metric.trend?.reliableDayCount {
+                        Text(
+                            metric.kind == .trainingFeedback
+                                ? "最近 \(reliableDays) 次"
+                                : "可靠 \(reliableDays) 天"
+                        )
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                Text(metric.comparison)
+                    .font(.caption.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                if let evidence = metric.evidence.first {
+                    Text(evidence)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            .frame(width: 235, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, minHeight: 94, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(
+            FocusTraceTheme.elevatedFill(colorScheme),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .stroke(accent.opacity(0.14), lineWidth: 1)
+        }
+        .opacity(metric.state == .unavailable ? 0.72 : 1)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var icon: String {
+        switch metric.kind {
+        case .sustainedProgress: return "arrow.right.to.line.compact"
+        case .fragmentation: return "square.grid.3x3.middle.filled"
+        case .switchingBoundary: return "arrow.trianglehead.branch"
+        case .contextRecovery: return "arrow.uturn.backward.circle"
+        case .trainingFeedback: return "scope"
+        }
+    }
+
+    private var accent: Color {
+        switch metric.kind {
+        case .sustainedProgress: return FocusTraceTheme.jade
+        case .fragmentation: return FocusTraceTheme.amber
+        case .switchingBoundary: return FocusTraceTheme.indigo
+        case .contextRecovery: return FocusTraceTheme.violet
+        case .trainingFeedback: return FocusTraceTheme.cyan
+        }
+    }
+
+    private var stateTitle: String {
+        switch metric.state {
+        case .unavailable: return "待收集"
+        case .calibrating: return "趋势校准中"
+        case .observed: return "趋势稳定"
+        case .improving: return "持续改善"
+        case .needsAttention:
+            return metric.kind == .trainingFeedback
+                ? "负荷不适配"
+                : "持续恶化"
+        }
+    }
+
+    private var stateColor: Color {
+        switch metric.state {
+        case .unavailable: return .secondary
+        case .calibrating: return FocusTraceTheme.sky
+        case .observed: return accent
+        case .improving: return FocusTraceTheme.jade
+        case .needsAttention: return FocusTraceTheme.coral
+        }
+    }
+}
+
+private struct AttentionTrendChart: View {
+    let trend: AttentionMetricTrend
+    let accent: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let values = trend.points.compactMap(\.value)
+                + [trend.typicalLowerBound, trend.typicalUpperBound]
+                    .compactMap { $0 }
+            guard !values.isEmpty else { return }
+            let minimum = values.min() ?? 0
+            let maximum = values.max() ?? 1
+            let spread = max(1, maximum - minimum)
+            let lower = max(0, minimum - spread * 0.12)
+            let upper = maximum + spread * 0.12
+
+            func x(_ index: Int) -> CGFloat {
+                guard trend.points.count > 1 else { return size.width / 2 }
+                return CGFloat(index) / CGFloat(trend.points.count - 1)
+                    * size.width
+            }
+            func y(_ value: Double) -> CGFloat {
+                let normalized = (value - lower) / max(0.0001, upper - lower)
+                return size.height * CGFloat(1 - normalized)
+            }
+
+            if let typicalLower = trend.typicalLowerBound,
+               let typicalUpper = trend.typicalUpperBound {
+                let top = y(max(typicalLower, typicalUpper))
+                let bottom = y(min(typicalLower, typicalUpper))
+                let rect = CGRect(
+                    x: 0,
+                    y: min(top, bottom),
+                    width: size.width,
+                    height: max(3, abs(bottom - top))
+                )
+                context.fill(
+                    Path(roundedRect: rect, cornerRadius: 3),
+                    with: .color(accent.opacity(0.08))
+                )
+            }
+
+            if let baseline = trend.baselineMedian {
+                var baselinePath = Path()
+                baselinePath.move(to: CGPoint(x: 0, y: y(baseline)))
+                baselinePath.addLine(
+                    to: CGPoint(x: size.width, y: y(baseline))
+                )
+                context.stroke(
+                    baselinePath,
+                    with: .color(accent.opacity(0.28)),
+                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                )
+            }
+
+            var line = Path()
+            var hasOpenSegment = false
+            for (index, point) in trend.points.enumerated() {
+                guard let value = point.value,
+                      point.isReliable,
+                      !point.isPartial else {
+                    hasOpenSegment = false
+                    continue
+                }
+                let location = CGPoint(x: x(index), y: y(value))
+                if hasOpenSegment {
+                    line.addLine(to: location)
+                } else {
+                    line.move(to: location)
+                    hasOpenSegment = true
+                }
+            }
+            context.stroke(
+                line,
+                with: .color(accent.opacity(0.82)),
+                style: StrokeStyle(
+                    lineWidth: 2,
+                    lineCap: .round,
+                    lineJoin: .round
+                )
+            )
+
+            for (index, point) in trend.points.enumerated() {
+                guard let value = point.value else { continue }
+                let location = CGPoint(x: x(index), y: y(value))
+                let diameter: CGFloat = point.isPartial ? 7 : 6
+                let dot = Path(
+                    ellipseIn: CGRect(
+                        x: location.x - diameter / 2,
+                        y: location.y - diameter / 2,
+                        width: diameter,
+                        height: diameter
+                    )
+                )
+                if point.isPartial {
+                    context.stroke(
+                        dot,
+                        with: .color(accent),
+                        style: StrokeStyle(lineWidth: 1.5)
+                    )
+                } else if point.isReliable {
+                    context.fill(dot, with: .color(accent))
+                } else {
+                    context.fill(
+                        dot,
+                        with: .color(Color.secondary.opacity(0.28))
+                    )
+                }
+            }
+        }
+        .accessibilityHidden(true)
     }
 }

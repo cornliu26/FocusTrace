@@ -82,7 +82,7 @@ struct RootView: View {
             TaskSwitcherSheet(state: state)
         }
         .sheet(isPresented: $state.showTaskCreator) {
-            TaskEditorSheet(state: state, bindCurrentSpaceOnCreate: true)
+            TaskEditorSheet(state: state)
         }
         .sheet(isPresented: $state.showTaskParking) {
             TaskParkingSheet(state: state)

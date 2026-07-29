@@ -68,6 +68,37 @@ func flowGuidanceAlwaysExposesOnlyTheNextRequiredAction() {
 }
 
 @Test
+func workflowBindingIsExclusiveToTheMenuBarSurface() {
+    let binding = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(binding.action == .bindWorkflow)
+    #expect(
+        WorkflowBindingSurfacePolicy.canPresent(binding, on: .menuBar)
+    )
+    #expect(
+        !WorkflowBindingSurfacePolicy.canPresent(binding, on: .mainWindow)
+    )
+
+    let focus = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    #expect(
+        WorkflowBindingSurfacePolicy.canPresent(focus, on: .mainWindow)
+    )
+}
+
+@Test
 func workflowConfirmationUsesUpperCenterWithoutPassiveOverlay() {
     let visibleFrame = CGRect(x: 0, y: 25, width: 1_440, height: 875)
     let decision = FocusTraceConfirmationLayout.frame(
@@ -155,6 +186,94 @@ func loginWindowIsTreatedAsSystemInactive() {
 }
 
 @Test
+func lockExcludesWorkflowTimeUntilTheSessionActuallyUnlocks() {
+    let start = Date(timeIntervalSince1970: 2_000)
+    let workflowID = UUID()
+    let range = DateInterval(start: start, duration: 60)
+    let interval = TaskIntervalRecord(
+        taskID: workflowID,
+        startedAt: start,
+        endedAt: range.end,
+        workflowSource: .manual
+    )
+    let markers = [
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(10),
+            kind: .sessionBecameInactive,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(15),
+            kind: .screenSlept,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(30),
+            kind: .screenWoke,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(40),
+            kind: .sessionBecameActive,
+            taskID: workflowID
+        )
+    ]
+
+    let counted = SystemInactiveIntervalEngine.countedWorkflowIntervals(
+        taskIntervals: [interval],
+        markers: markers,
+        range: range,
+        now: range.end
+    )
+
+    #expect(counted.count == 2)
+    #expect(counted[0].startedAt == start)
+    #expect(counted[0].endedAt == start.addingTimeInterval(10))
+    #expect(counted[1].startedAt == start.addingTimeInterval(40))
+    #expect(counted[1].endedAt == range.end)
+    #expect(
+        counted.reduce(0) {
+            $0 + $1.endedAt.timeIntervalSince($1.startedAt)
+        } == 30
+    )
+}
+
+@Test
+func lockPausesWorkflowAndFocusAccountingUntilAValidReturn() {
+    let workflowID = UUID()
+    let otherWorkflowID = UUID()
+
+    #expect(WorkAccountingGate.shouldCountWorkflow(
+        isRecordingWindow: true,
+        isSystemActive: true,
+        workflowID: workflowID
+    ))
+    #expect(!WorkAccountingGate.shouldCountWorkflow(
+        isRecordingWindow: true,
+        isSystemActive: false,
+        workflowID: workflowID
+    ))
+    #expect(WorkAccountingGate.shouldPauseFocusForSystemInactivity(
+        hasRunningFocus: true,
+        focusIsAlreadyPaused: false
+    ))
+    #expect(!WorkAccountingGate.shouldResumeSystemPausedFocus(
+        wasPausedBySystem: true,
+        isRecordingWindow: true,
+        isSystemActive: true,
+        focusWorkflowID: workflowID,
+        currentWorkflowID: otherWorkflowID
+    ))
+    #expect(WorkAccountingGate.shouldResumeSystemPausedFocus(
+        wasPausedBySystem: true,
+        isRecordingWindow: true,
+        isSystemActive: true,
+        focusWorkflowID: workflowID,
+        currentWorkflowID: workflowID
+    ))
+}
+
+@Test
 func selectedDateFollowsMidnightOnlyWhenViewingToday() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
@@ -200,6 +319,35 @@ func optimizedDailyUXContractRemainsStable() {
     #expect(FocusTraceUXContract.sidebarTimelineIcon == "clock.arrow.circlepath")
     #expect(FocusTraceUXContract.timelinePaletteName == "radix-cool-v4")
     #expect(!FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled)
+}
+
+@Test
+func timelineLabelsAndEndpointHoursStayInsideThePlotAtNarrowWidths() {
+    #expect(FocusTraceTimelineLayout.rowLabelWidth >= 76)
+    #expect(FocusTraceTimelineLayout.rowSpacing == 10)
+
+    let plotWidth = 240.0
+    let centers = (0..<FocusTraceTimelineLayout.hourLabelCount).map {
+        FocusTraceTimelineLayout.hourLabelCenterX(
+            index: $0,
+            availableWidth: plotWidth
+        )
+    }
+    #expect(centers.first == FocusTraceTimelineLayout.endpointHourLabelInset)
+    #expect(
+        centers.last
+            == plotWidth - FocusTraceTimelineLayout.endpointHourLabelInset
+    )
+    #expect(centers == centers.sorted())
+
+    let veryNarrowWidth = 24.0
+    let narrowCenters = (0..<FocusTraceTimelineLayout.hourLabelCount).map {
+        FocusTraceTimelineLayout.hourLabelCenterX(
+            index: $0,
+            availableWidth: veryNarrowWidth
+        )
+    }
+    #expect(narrowCenters.allSatisfy { $0 >= 0 && $0 <= veryNarrowWidth })
 }
 
 @Test
@@ -253,6 +401,66 @@ func mainWindowContractRemainsSingleInstance() {
     #expect(FocusTraceWindowContract.mainWindowID == "main")
     #expect(!FocusTraceWindowContract.allowsMultipleMainWindows)
     #expect(!FocusTraceWindowContract.exposesDedicatedSettingsWindow)
+}
+
+@Test
+func settingsDataControlsUseOneDeletionEntryWithTwoConfirmedScopes() {
+    #expect(
+        FocusTraceDataSettingsContract.rows
+            == [.retention, .export, .deletion]
+    )
+    #expect(FocusTraceDataSettingsContract.visibleDeletionEntryCount == 1)
+    #expect(FocusTraceDataSettingsContract.deletionScopeCount == 2)
+    #expect(FocusTraceDataSettingsContract.destructiveActionsRequireConfirmation)
+}
+
+@Test
+func gettingStartedFollowsCreateBindWorkReviewWithoutAddingInputs() {
+    #expect(
+        FocusTraceGettingStartedContract.steps.map(\.id)
+            == [.createWorkflow, .bindDesktop, .workNormally, .reviewEvidence]
+    )
+    #expect(
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: false,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: false,
+            hasRecordedActivity: false
+        ) == .createWorkflow
+    )
+    #expect(
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: false,
+            hasRecordedActivity: false
+        ) == .bindDesktop
+    )
+    #expect(
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: true,
+            hasRecordedActivity: false
+        ) == .workNormally
+    )
+    #expect(
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: true,
+            hasRecordedActivity: true
+        ) == .reviewEvidence
+    )
+    #expect(
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: false,
+            hasVerifiedDesktopBinding: false,
+            hasRecordedActivity: false
+        ) == .workNormally
+    )
+    #expect(FocusTraceUXContract.onboardingRequiredInputs == ["workflowName"])
 }
 
 @Test
@@ -1219,6 +1427,713 @@ private func observationAudit(
     )
 }
 
+private func reliableSwitchingLoadQuality() -> DailyDataQuality {
+    DailyDataQuality(
+        isReliableForBehavior: true,
+        warnings: [],
+        analysisScopes: ObservationLens.allCases.map {
+            DailyAnalysisScopeReliability(
+                lens: $0,
+                isReliable: true,
+                reason: "测试样本可靠"
+            )
+        }
+    )
+}
+
+private func switchingLoadTransitionAudit(
+    routes: [AutomationWorkflowTransitionRouteArtifact] = [],
+    explicitReasonCoverage: Double? = nil
+) -> AutomationWorkflowTransitionAuditArtifact {
+    AutomationWorkflowTransitionAuditArtifact(
+        protocolVersion: 2,
+        dataSource: "semanticEvents",
+        finalSwitches: routes.reduce(0) { $0 + $1.count },
+        explicitReasonSwitches: routes.reduce(0) { $0 + $1.count },
+        timedOutSwitches: 0,
+        automaticSwitches: 0,
+        unresolvedNavigations: 0,
+        explicitReasonCoverage: explicitReasonCoverage,
+        reasonedSwitches: routes.reduce(0) { $0 + $1.count },
+        unreasonedSwitches: 0,
+        cancelledNavigations: 0,
+        reasonCounts: [:],
+        routes: routes
+    )
+}
+
+private func dashboardAnalysis(
+    reliableLenses: Set<ObservationLens> = Set(ObservationLens.allCases),
+    baselineDays: Int = 5,
+    appSwitchDelta: Double? = 10,
+    medianFocusDelta: Double? = 3,
+    medianFocusMinutes: Double? = 20,
+    trainingCount: Int = 5,
+    successfulTrainingCount: Int = 4,
+    feedbackCompletionRatio: Double? = 1
+) -> DailyCoachingAnalysis {
+    DailyCoachingAnalysis(
+        metrics: DailyNormalizedMetrics(
+            recordedMinutes: 240,
+            attributedMinutes: 220,
+            attributedRatio: 0.92,
+            appSwitchesPerHour: 8,
+            workflowSwitchesPerHour: 2,
+            medianFocusMinutes: medianFocusMinutes,
+            trainingCount: trainingCount,
+            successfulTrainingCount: successfulTrainingCount,
+            feedbackCompletionRatio: feedbackCompletionRatio,
+            parkingCount: 2
+        ),
+        quality: DailyDataQuality(
+            isReliableForBehavior: !reliableLenses.isEmpty,
+            warnings: [],
+            analysisScopes: ObservationLens.allCases.map {
+                DailyAnalysisScopeReliability(
+                    lens: $0,
+                    isReliable: reliableLenses.contains($0),
+                    reason: reliableLenses.contains($0) ? "样本可靠" : "样本不足"
+                )
+            }
+        ),
+        trend: DailyTrendComparison(
+            baselineDays: baselineDays,
+            appSwitchRateDeltaPercent: appSwitchDelta,
+            workflowSwitchRateDeltaPercent: 5,
+            attributedRatioDeltaPoints: 2,
+            medianFocusDeltaMinutes: medianFocusDelta
+        ),
+        recommendation: DailyCoachRecommendation(
+            kind: .maintainRound,
+            title: "保持当前训练",
+            rationale: "测试",
+            evidence: [],
+            confidence: .high,
+            action: .none,
+            method: DailyTrainingMethod(
+                title: "测试",
+                steps: [],
+                successMeasure: "测试"
+            )
+        ),
+        previousRecommendationEvaluation: nil
+    )
+}
+
+private func dashboardSwitchingLoad(
+    status: SwitchingLoadStatus = .stable,
+    withinWorkflowRatio: Double = 0.4,
+    highFragmentationWindows: Int = 2,
+    finalSwitches: Int = 4,
+    plannedSwitches: Int = 3,
+    burdenSwitches: Int = 0,
+    resumeRate: Double? = 0.5,
+    averageDifficulty: Double? = 2.5,
+    difficultySamples: Int = 5,
+    successRate: Double? = 0.8
+) -> SwitchingLoadAssessment {
+    SwitchingLoadAssessment(
+        status: status,
+        confidence: .high,
+        headline: "测试",
+        convergingSignals: [],
+        evidence: [],
+        recommendedExperiment: "测试",
+        metrics: SwitchingLoadMetrics(
+            activeMinutes: 240,
+            appSwitchesPerHour: 8,
+            withinWorkflowAppSwitchRatio: withinWorkflowRatio,
+            peakFiveMinuteAppSwitches: 7,
+            highFragmentationWindows: highFragmentationWindows,
+            activeFiveMinuteWindows: 40,
+            finalWorkflowSwitches: finalSwitches,
+            plannedWorkflowSwitches: plannedSwitches,
+            highRecoveryBurdenSwitches: burdenSwitches,
+            navigationEventsPerBurst: 1.5,
+            explicitReasonCoverage: 1,
+            shortDestinationSwitches: burdenSwitches,
+            returnedWithin30Minutes: burdenSwitches,
+            returnPointResumeRate: resumeRate,
+            averageInterruptionReturnSeconds: 75,
+            averageSubjectiveDifficulty: averageDifficulty,
+            subjectiveDifficultySamples: difficultySamples,
+            focusSuccessRate: successRate,
+            comparableBaselineDays: 5,
+            systemInactiveMinutes: 30
+        ),
+        traceCoverage: []
+    )
+}
+
+private func dashboardDay(
+    date: Date,
+    isPartial: Bool = false,
+    medianFocusMinutes: Double? = 20,
+    highFragmentationWindows: Int = 4,
+    withinWorkflowRatio: Double = 0.3,
+    finalSwitches: Int = 4,
+    burdenSwitches: Int = 0,
+    resumeRate: Double? = 0.8,
+    parkings: Int = 2,
+    sessions: [FocusSessionRecord] = []
+) -> AttentionDashboardDay {
+    let successful = sessions.filter(\.isSuccessful).count
+    let feedbackCount = sessions.compactMap(\.difficulty).count
+    let feedbackRatio = sessions.isEmpty
+        ? nil
+        : Double(feedbackCount) / Double(sessions.count)
+    let averageDifficulty = sessions.compactMap(\.difficulty).isEmpty
+        ? nil
+        : Double(sessions.compactMap(\.difficulty).reduce(0, +))
+            / Double(feedbackCount)
+    return AttentionDashboardDay(
+        date: date,
+        isPartial: isPartial,
+        coaching: dashboardAnalysis(
+            medianFocusMinutes: medianFocusMinutes,
+            trainingCount: sessions.count,
+            successfulTrainingCount: successful,
+            feedbackCompletionRatio: feedbackRatio
+        ),
+        summary: observationSummary(
+            parkings: parkings,
+            resumed: resumeRate.map {
+                Int((Double(parkings) * $0).rounded())
+            } ?? 0,
+            resumeLatency: 8 * 60
+        ),
+        switchingLoad: dashboardSwitchingLoad(
+            withinWorkflowRatio: withinWorkflowRatio,
+            highFragmentationWindows: highFragmentationWindows,
+            finalSwitches: finalSwitches,
+            burdenSwitches: burdenSwitches,
+            resumeRate: resumeRate,
+            averageDifficulty: averageDifficulty,
+            difficultySamples: feedbackCount,
+            successRate: sessions.isEmpty
+                ? nil
+                : Double(successful) / Double(sessions.count)
+        ),
+        interventionAudit: observationAudit(),
+        focusSessions: sessions
+    )
+}
+
+private func dashboardSession(
+    date: Date,
+    successful: Bool,
+    difficulty: Int
+) -> FocusSessionRecord {
+    FocusSessionRecord(
+        taskID: UUID(),
+        startedAt: date.addingTimeInterval(9 * 60 * 60),
+        endedAt: date.addingTimeInterval(
+            9 * 60 * 60 + (successful ? 15 * 60 : 5 * 60)
+        ),
+        targetSeconds: 15 * 60,
+        outcome: successful ? .completed : .notCompleted,
+        difficulty: difficulty,
+        confirmedDistractionCount: 0
+    )
+}
+
+@Test
+func attentionDashboardKeepsFiveIndependentDimensionsWithoutACompositeScore() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(),
+        summary: observationSummary(
+            parkings: 2,
+            resumed: 1,
+            resumeLatency: 8 * 60
+        ),
+        switchingLoad: dashboardSwitchingLoad(),
+        interventionAudit: observationAudit(
+            episodes: 2,
+            assessed: 1,
+            quiet: 1
+        )
+    )
+
+    #expect(dashboard.metrics.map(\.kind) == AttentionDashboardMetricKind.allCases)
+    #expect(dashboard.reliableDimensionCount == 5)
+    #expect(dashboard.boundary.contains("不合成为"))
+    #expect(!dashboard.boundary.contains("脑负荷分数"))
+    let switching = dashboard.metrics.first { $0.kind == .switchingBoundary }
+    #expect(switching?.evidence.contains { $0.contains("高频段 2") } == true)
+    #expect(switching?.evidence.contains { $0.contains("确认后稳定 100%") } == true)
+}
+
+@Test
+func attentionDashboardDoesNotCallSameWorkflowToolSwitchesAttentionFailure() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(appSwitchDelta: 60),
+        summary: observationSummary(),
+        switchingLoad: dashboardSwitchingLoad(withinWorkflowRatio: 0.85),
+        interventionAudit: observationAudit()
+    )
+    let fragmentation = dashboard.metrics.first { $0.kind == .fragmentation }
+
+    #expect(fragmentation?.state == .observed)
+    #expect(fragmentation?.comparison.contains("同工作流工具协作") == true)
+    #expect(fragmentation?.evidence.contains { $0.contains("不直接等于分心") } == true)
+}
+
+@Test
+func attentionDashboardStillFlagsConcentratedFragmentationAgainstAHighBaseline() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(appSwitchDelta: -12),
+        summary: observationSummary(),
+        switchingLoad: dashboardSwitchingLoad(
+            withinWorkflowRatio: 0.3,
+            highFragmentationWindows: 30
+        ),
+        interventionAudit: observationAudit()
+    )
+    let fragmentation = dashboard.metrics.first { $0.kind == .fragmentation }
+
+    #expect(fragmentation?.state == .needsAttention)
+    #expect(fragmentation?.comparison.contains("75%") == true)
+}
+
+@Test
+func attentionDashboardGatesEachDimensionIndependently() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(
+            reliableLenses: [.contextRecovery],
+            appSwitchDelta: nil,
+            medianFocusDelta: nil
+        ),
+        summary: observationSummary(
+            parkings: 2,
+            resumed: 1,
+            resumeLatency: 5 * 60
+        ),
+        switchingLoad: dashboardSwitchingLoad(),
+        interventionAudit: observationAudit()
+    )
+    let states = Dictionary(
+        uniqueKeysWithValues: dashboard.metrics.map { ($0.kind, $0.state) }
+    )
+
+    #expect(states[.sustainedProgress] == .unavailable)
+    #expect(states[.fragmentation] == .unavailable)
+    #expect(states[.switchingBoundary] == .unavailable)
+    #expect(states[.contextRecovery] == .observed)
+    #expect(states[.trainingFeedback] == .improving)
+    #expect(dashboard.reliableDimensionCount == 2)
+}
+
+@Test
+func attentionDashboardWaitsForFiveTrainingSamplesBeforeJudging() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(
+            trainingCount: 4,
+            successfulTrainingCount: 4
+        ),
+        summary: observationSummary(),
+        switchingLoad: dashboardSwitchingLoad(
+            difficultySamples: 4,
+            successRate: 1
+        ),
+        interventionAudit: observationAudit()
+    )
+    let training = dashboard.metrics.first { $0.kind == .trainingFeedback }
+
+    #expect(training?.state == .calibrating)
+    #expect(training?.evidence.contains { $0.contains("满 5 次") } == true)
+}
+
+@Test
+func attentionDashboardUsesTenWorkdaysAndLinksTheExperimentToTheMainProblem() {
+    let start = Date(timeIntervalSince1970: 2_000_000)
+    let days = (0..<10).map { index in
+        dashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: index < 7 ? 20 : 10,
+            highFragmentationWindows: index < 7 ? 4 : 20,
+            withinWorkflowRatio: 0.3
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+    let fragmentation = dashboard.metrics.first {
+        $0.kind == .fragmentation
+    }
+    let sustained = dashboard.metrics.first {
+        $0.kind == .sustainedProgress
+    }
+
+    #expect(dashboard.version == 2)
+    #expect(dashboard.baselineDays == 10)
+    #expect(fragmentation?.trend?.direction == .worsening)
+    #expect(sustained?.trend?.direction == .worsening)
+    #expect(dashboard.finding?.kind == .fragmentation)
+    #expect(dashboard.finding?.state == .needsAttention)
+    #expect(dashboard.recommendation?.title.contains("单一产出") == true)
+    #expect(
+        dashboard.recommendation?.evidence
+            == dashboard.finding?.evidence
+    )
+}
+
+@Test
+func attentionDashboardExcludesAnUnfinishedDayFromTrendConclusions() {
+    let start = Date(timeIntervalSince1970: 3_000_000)
+    let completed = (0..<9).map { index in
+        dashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: 20,
+            highFragmentationWindows: 4
+        )
+    }
+    let partial = dashboardDay(
+        date: start.addingTimeInterval(9 * 86_400),
+        isPartial: true,
+        medianFocusMinutes: 2,
+        highFragmentationWindows: 35
+    )
+    let dashboard = AttentionDashboardEngine.make(
+        days: completed + [partial],
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+
+    #expect(dashboard.includesPartialDay == true)
+    #expect(dashboard.finding?.state == .stable)
+    #expect(
+        dashboard.metrics.first { $0.kind == .fragmentation }?
+            .trend?.direction == .stable
+    )
+}
+
+@Test
+func attentionDashboardDoesNotEscalateToolCollaborationAsFragmentation() {
+    let start = Date(timeIntervalSince1970: 4_000_000)
+    let days = (0..<10).map { index in
+        dashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: 20,
+            highFragmentationWindows: index < 7 ? 4 : 20,
+            withinWorkflowRatio: index < 7 ? 0.4 : 0.85
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+    let fragmentation = dashboard.metrics.first {
+        $0.kind == .fragmentation
+    }
+
+    #expect(fragmentation?.trend?.direction == .stable)
+    #expect(fragmentation?.comparison.contains("工具协作") == true)
+    #expect(dashboard.finding?.state != .needsAttention)
+}
+
+@Test
+func attentionDashboardEvaluatesTrainingAcrossDaysInRollingFiveSessions() {
+    let start = Date(timeIntervalSince1970: 5_000_000)
+    let days = (0..<5).map { index in
+        let date = start.addingTimeInterval(Double(index) * 86_400)
+        return dashboardDay(
+            date: date,
+            sessions: [
+                dashboardSession(
+                    date: date,
+                    successful: index == 0,
+                    difficulty: 4
+                )
+            ]
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+    let training = dashboard.metrics.first { $0.kind == .trainingFeedback }
+
+    #expect(training?.trend?.reliableDayCount == 5)
+    #expect(training?.trend?.recentMedian == 20)
+    #expect(training?.state == .needsAttention)
+    #expect(dashboard.finding?.kind == .trainingFeedback)
+    #expect(dashboard.recommendation?.title.contains("5 次训练") == true)
+}
+
+@Test
+func attentionDashboardDoesNotEscalateFragmentationWithoutAConsequence() {
+    let start = Date(timeIntervalSince1970: 6_000_000)
+    let days = (0..<10).map { index in
+        dashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: 20,
+            highFragmentationWindows: index < 7 ? 4 : 20,
+            withinWorkflowRatio: 0.3
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+
+    #expect(dashboard.finding?.state == .stable)
+    #expect(dashboard.finding?.title.contains("没有出现恢复后果") == true)
+    #expect(dashboard.recommendation?.action == DailyCoachAction.none)
+}
+
+@Test
+func switchingLoadRefusesABrainLoadClaimWhenBehaviorDataIsUnreliable() {
+    let start = Date(timeIntervalSince1970: 210_000)
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let assessment = SwitchingLoadEngine.assess(
+        activities: [
+            ActivityRecord(
+                app: AppIdentity(bundleID: "app", name: "App"),
+                startedAt: start,
+                endedAt: range.end,
+                taskID: UUID(),
+                focusSessionID: nil,
+                classification: .allowed
+            )
+        ],
+        taskIntervals: [],
+        focusSessions: [],
+        interruptions: [],
+        workflowTransitions: [],
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 0,
+        range: range,
+        now: range.end,
+        quality: DailyDataQuality(
+            isReliableForBehavior: false,
+            warnings: ["样本不足"]
+        ),
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 100,
+            workflowSwitchRateDeltaPercent: 100,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: switchingLoadTransitionAudit()
+    )
+
+    #expect(assessment.status == .unavailable)
+    #expect(assessment.headline.contains("不能据此判断"))
+    #expect(assessment.boundary.contains("不是脑活动"))
+    #expect(
+        assessment.traceCoverage.first {
+            $0.family == .semanticTransitions
+        }?.status == .qualityBlocked
+    )
+}
+
+@Test
+func sameWorkflowToolSwitchesRemainAQualifiedSignalNotAnOverloadVerdict() {
+    let start = Date(timeIntervalSince1970: 220_000)
+    let workflowID = UUID()
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let apps = (0..<7).map { index in
+        ActivityRecord(
+            app: AppIdentity(
+                bundleID: index.isMultiple(of: 2) ? "editor" : "terminal",
+                name: index.isMultiple(of: 2) ? "Editor" : "Terminal"
+            ),
+            startedAt: start.addingTimeInterval(Double(index) * 8 * 60),
+            endedAt: start.addingTimeInterval(Double(index + 1) * 8 * 60),
+            taskID: workflowID,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let sessions = (0..<3).map { index in
+        FocusSessionRecord(
+            taskID: workflowID,
+            startedAt: start.addingTimeInterval(Double(index) * 20 * 60),
+            endedAt: start.addingTimeInterval(Double(index) * 20 * 60 + 15 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .completed,
+            difficulty: 2,
+            confirmedDistractionCount: 0
+        )
+    }
+
+    let assessment = SwitchingLoadEngine.assess(
+        activities: apps,
+        taskIntervals: [
+            TaskIntervalRecord(
+                taskID: workflowID,
+                startedAt: start,
+                endedAt: range.end,
+                workflowSource: .manual
+            )
+        ],
+        focusSessions: sessions,
+        interruptions: [],
+        workflowTransitions: [],
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 1,
+        range: range,
+        now: range.end,
+        quality: reliableSwitchingLoadQuality(),
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 40,
+            workflowSwitchRateDeltaPercent: 35,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: switchingLoadTransitionAudit()
+    )
+
+    #expect(assessment.status == .mixedEvidence)
+    #expect(assessment.convergingSignals.count == 2)
+    #expect(assessment.metrics.withinWorkflowAppSwitchRatio == 1)
+    #expect(assessment.recommendedExperiment.contains("不减少同一工作流"))
+    #expect(!assessment.headline.contains("脑"))
+}
+
+@Test
+func switchingLoadRequiresConvergingBehaviorRecoveryAndSubjectiveEvidence() {
+    let start = Date(timeIntervalSince1970: 230_000)
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowA
+    )
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowB
+    )
+    let transitions = [
+        workflowTransition(
+            at: start.addingTimeInterval(10 * 60),
+            origin: endpointA,
+            destination: endpointB,
+            outcome: .confirmed,
+            reason: .forcedInterruption
+        ),
+        workflowTransition(
+            at: start.addingTimeInterval(30 * 60),
+            origin: endpointA,
+            destination: endpointB,
+            outcome: .confirmed,
+            reason: .forcedInterruption
+        )
+    ]
+    let route = AutomationWorkflowTransitionRouteArtifact(
+        fromWorkflow: "A",
+        toWorkflow: "B",
+        count: 2,
+        reasonCounts: ["forcedInterruption": 2],
+        medianDestinationMinutes: 3,
+        returnedWithin30Minutes: 2,
+        timeBucketCounts: ["morning": 2],
+        outcomeCounts: ["confirmed": 2]
+    )
+    let sessions = (0..<3).map { index in
+        FocusSessionRecord(
+            taskID: workflowA,
+            startedAt: start.addingTimeInterval(Double(index) * 20 * 60),
+            endedAt: start.addingTimeInterval(Double(index) * 20 * 60 + 10 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .partial,
+            difficulty: 4,
+            confirmedDistractionCount: 0
+        )
+    }
+    let activities = (0..<8).map { index in
+        ActivityRecord(
+            app: AppIdentity(
+                bundleID: index.isMultiple(of: 2) ? "a" : "b",
+                name: index.isMultiple(of: 2) ? "A" : "B"
+            ),
+            startedAt: start.addingTimeInterval(Double(index) * 7 * 60),
+            endedAt: start.addingTimeInterval(Double(index + 1) * 7 * 60),
+            taskID: index < 4 ? workflowA : workflowB,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+
+    let assessment = SwitchingLoadEngine.assess(
+        activities: activities,
+        taskIntervals: [
+            TaskIntervalRecord(
+                taskID: workflowA,
+                startedAt: start,
+                endedAt: start.addingTimeInterval(30 * 60),
+                workflowSource: .space
+            ),
+            TaskIntervalRecord(
+                taskID: workflowB,
+                startedAt: start.addingTimeInterval(30 * 60),
+                endedAt: range.end,
+                workflowSource: .space
+            )
+        ],
+        focusSessions: sessions,
+        interruptions: [],
+        workflowTransitions: transitions,
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 2,
+        range: range,
+        now: range.end,
+        quality: reliableSwitchingLoadQuality(),
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 35,
+            workflowSwitchRateDeltaPercent: 30,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: switchingLoadTransitionAudit(
+            routes: [route],
+            explicitReasonCoverage: 1
+        )
+    )
+
+    #expect(assessment.status == .elevated)
+    #expect(assessment.convergingSignals.count >= 3)
+    #expect(assessment.metrics.highRecoveryBurdenSwitches == 2)
+    #expect(assessment.metrics.returnedWithin30Minutes == 2)
+    #expect(assessment.recommendedExperiment.contains("回来先做什么"))
+    #expect(
+        Set(assessment.traceCoverage.map(\.family))
+            == Set(SwitchingLoadTraceFamily.allCases)
+    )
+}
+
 @Test
 func observationPlanStartsBalancedAndReallocatesOnlyAnalysisAttention() {
     let initial = ObservationPlanEngine.makePlan(
@@ -2116,7 +3031,54 @@ func analysisSurfacesRepeatedRiskAppFirst() {
 }
 
 @Test
-func dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow() {
+func workflowAttributionRecoversOnlyUnambiguousExplicitTrace() {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let focusID = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let activities = [
+        ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(10 * 60), taskID: workflowA, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(10 * 60), endedAt: day.addingTimeInterval(30 * 60), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(40 * 60), taskID: nil, focusSessionID: focusID, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(40 * 60), endedAt: day.addingTimeInterval(50 * 60), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(50 * 60), endedAt: day.addingTimeInterval(60 * 60), taskID: nil, focusSessionID: nil, classification: .allowed)
+    ]
+    let intervals = [
+        TaskIntervalRecord(taskID: workflowA, startedAt: day.addingTimeInterval(10 * 60), endedAt: day.addingTimeInterval(30 * 60)),
+        TaskIntervalRecord(taskID: workflowA, startedAt: day.addingTimeInterval(40 * 60), endedAt: day.addingTimeInterval(50 * 60)),
+        TaskIntervalRecord(taskID: workflowB, startedAt: day.addingTimeInterval(40 * 60), endedAt: day.addingTimeInterval(50 * 60))
+    ]
+    let session = FocusSessionRecord(
+        id: focusID,
+        taskID: workflowB,
+        startedAt: day.addingTimeInterval(30 * 60),
+        endedAt: day.addingTimeInterval(40 * 60),
+        targetSeconds: 10 * 60,
+        outcome: .completed,
+        difficulty: 2,
+        confirmedDistractionCount: 0
+    )
+
+    let result = WorkflowAttributionEngine.summarize(
+        activities: activities,
+        taskIntervals: intervals,
+        focusSessions: [session],
+        now: day.addingTimeInterval(60 * 60)
+    )
+
+    #expect(result.recordedMinutes == 60)
+    #expect(result.directMinutes == 10)
+    #expect(result.intervalRecoveredMinutes == 20)
+    #expect(result.focusSessionRecoveredMinutes == 10)
+    #expect(result.unresolvedMinutes == 20)
+    #expect(abs(result.attributedRatio - (2.0 / 3.0)) < 0.0001)
+}
+
+@Test
+func dailyCoachKeepsNonWorkflowAnalysisWhenAttributionIsLow() {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
@@ -2136,9 +3098,14 @@ func dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow() {
         calendar: calendar
     )
     #expect(result.metrics.attributedRatio == 0.5)
-    #expect(!result.quality.isReliableForBehavior)
-    #expect(result.recommendation.kind == .repairAttribution)
-    #expect(result.recommendation.action == .bindWorkflow)
+    #expect(result.quality.isReliableForBehavior)
+    #expect(result.quality.isReliable(.fragmentation))
+    #expect(result.quality.isReliable(.contextRecovery))
+    #expect(!result.quality.isReliable(.workflowSemantics))
+    #expect(result.recommendation.kind == .startFocusRound)
+    #expect(result.recommendation.action == .startFocus(minutes: 15))
+    #expect(result.metrics.workflowAttribution?.directMinutes == 30)
+    #expect(result.metrics.workflowAttribution?.unresolvedMinutes == 30)
 }
 
 @Test
@@ -2167,9 +3134,11 @@ func dailyCoachTreatsExtremelyDenseSpaceSignalsAsInstrumentationRisk() {
         generatedAt: day.addingTimeInterval(60 * 60),
         calendar: calendar
     )
-    #expect(!result.quality.isReliableForBehavior)
+    #expect(result.quality.isReliableForBehavior)
+    #expect(result.quality.isReliable(.fragmentation))
+    #expect(!result.quality.isReliable(.workflowSemantics))
     #expect(result.quality.warnings.contains { $0.contains("Space 识别噪声") })
-    #expect(result.recommendation.kind == .verifySpaceTracking)
+    #expect(result.recommendation.kind == .startFocusRound)
 }
 
 @Test
@@ -2673,11 +3642,15 @@ func automationJSONIsStructuredAndAggregateOnly() throws {
     )
     let data = try AutomationReportEngine.jsonData(for: report)
     let text = String(decoding: data, as: UTF8.self)
-    #expect(text.contains("\"schemaVersion\" : 5"))
+    #expect(text.contains("\"schemaVersion\" : 6"))
     #expect(text.contains("\"reportCivilDate\" : \"2026-07-20\""))
     #expect(text.contains("\"recommendation\""))
     #expect(text.contains("\"appSwitchesPerHour\""))
     #expect(text.contains("\"observationPlan\""))
+    #expect(text.contains("\"switchingLoad\""))
+    #expect(text.contains("\"traceCoverage\""))
+    #expect(text.contains("\"workflowAttribution\""))
+    #expect(text.contains("\"analysisScopes\""))
     #expect(text.contains("\"minimalEventDrivenFixed\""))
     #expect(!text.contains("private.bundle"))
     #expect(!text.contains("Private App"))
@@ -2685,7 +3658,78 @@ func automationJSONIsStructuredAndAggregateOnly() throws {
 }
 
 @Test
-func automationReportV5KeepsLegacyV2ReadCompatibility() throws {
+func automationReportV7CarriesTheSameAggregateAttentionTrendAsTheApp() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let start = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 10, hour: 9)
+    )!
+    let task = UUID()
+    let activities = (0..<10).map { index -> ActivityRecord in
+        let date = calendar.date(
+            byAdding: .day,
+            value: index,
+            to: start
+        )!
+        return ActivityRecord(
+            app: AppIdentity(
+                bundleID: "aggregate.private.bundle",
+                name: "Aggregate Private"
+            ),
+            startedAt: date,
+            endedAt: date.addingTimeInterval(60 * 60),
+            taskID: task,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let snapshot = FocusTraceLocalSnapshot(
+        tasks: [TaskRecord(id: task, title: "工作流")],
+        activities: activities,
+        trainingPlans: [
+            TrainingPlanRecord(
+                version: 1,
+                focusMinutes: 15,
+                reason: "default"
+            )
+        ]
+    )
+    let reportDate = activities.last!.startedAt
+    let report = AutomationReportEngine.makeReport(
+        snapshot: snapshot,
+        reportDate: reportDate,
+        generatedAt: reportDate.addingTimeInterval(2 * 60 * 60),
+        calendar: calendar
+    )
+    let trend = AutomationReportEngine.makeAttentionDashboard(
+        snapshot: snapshot,
+        through: reportDate,
+        generatedAt: reportDate.addingTimeInterval(2 * 60 * 60),
+        calendar: calendar,
+        currentReport: report
+    )
+    let data = try AutomationReportEngine.jsonData(
+        for: report,
+        attentionTrend: trend
+    )
+    let text = String(decoding: data, as: UTF8.self)
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        attentionTrend: trend,
+        timeZone: calendar.timeZone
+    )
+
+    #expect(text.contains("\"schemaVersion\" : 7"))
+    #expect(text.contains("\"attentionTrend\""))
+    #expect(text.contains("\"metrics\""))
+    #expect(markdown.contains("最近十个工作日注意力趋势"))
+    #expect(markdown.contains("下一步单项实验"))
+    #expect(!text.contains("aggregate.private.bundle"))
+    #expect(!text.contains("Aggregate Private"))
+}
+
+@Test
+func automationReportV6KeepsLegacyV2ReadCompatibility() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let day = calendar.date(
@@ -2697,15 +3741,24 @@ func automationReportV5KeepsLegacyV2ReadCompatibility() throws {
         generatedAt: day,
         calendar: calendar
     )
-    let v5Data = try AutomationReportEngine.jsonData(for: report)
+    let v6Data = try AutomationReportEngine.jsonData(for: report)
     var legacyObject = try #require(
-        JSONSerialization.jsonObject(with: v5Data) as? [String: Any]
+        JSONSerialization.jsonObject(with: v6Data) as? [String: Any]
     )
     legacyObject["schemaVersion"] = 2
     legacyObject.removeValue(forKey: "reportCivilDate")
     legacyObject.removeValue(forKey: "workflowContexts")
     legacyObject.removeValue(forKey: "transitionAudit")
     legacyObject.removeValue(forKey: "observationPlan")
+    legacyObject.removeValue(forKey: "switchingLoad")
+    if var normalized = legacyObject["normalized"] as? [String: Any] {
+        normalized.removeValue(forKey: "workflowAttribution")
+        legacyObject["normalized"] = normalized
+    }
+    if var quality = legacyObject["dataQuality"] as? [String: Any] {
+        quality.removeValue(forKey: "analysisScopes")
+        legacyObject["dataQuality"] = quality
+    }
     let legacyData = try JSONSerialization.data(withJSONObject: legacyObject)
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
@@ -2719,6 +3772,9 @@ func automationReportV5KeepsLegacyV2ReadCompatibility() throws {
     #expect(decoded.workflowContexts == nil)
     #expect(decoded.transitionAudit == nil)
     #expect(decoded.observationPlan == nil)
+    #expect(decoded.switchingLoad == nil)
+    #expect(decoded.normalized.workflowAttribution == nil)
+    #expect(decoded.dataQuality.analysisScopes == nil)
 }
 
 @Test
@@ -2764,7 +3820,7 @@ func codexReviewDecisionBriefRemainsShortAndCompatible() {
 }
 
 @Test
-func codexReviewV3RejectsUngroundedWorkflowSemantics() {
+func codexReviewV3RejectsUngroundedWorkflowSemantics() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = TimeZone(secondsFromGMT: 0)!
     let day = calendar.date(
@@ -2874,6 +3930,33 @@ func codexReviewV3RejectsUngroundedWorkflowSemantics() {
         )
     )
     #expect(!hallucinated.isGrounded(in: report))
+
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let reportData = try encoder.encode(report)
+    var reportObject = try #require(
+        JSONSerialization.jsonObject(with: reportData) as? [String: Any]
+    )
+    var qualityObject = try #require(
+        reportObject["dataQuality"] as? [String: Any]
+    )
+    qualityObject["analysisScopes"] = [
+        ["lens": "dataQuality", "isReliable": true, "reason": "可说明范围"],
+        ["lens": "fragmentation", "isReliable": true, "reason": "应用记录完整"],
+        ["lens": "contextRecovery", "isReliable": true, "reason": "显式动作完整"],
+        ["lens": "workflowSemantics", "isReliable": false, "reason": "覆盖不足"]
+    ]
+    reportObject["dataQuality"] = qualityObject
+    let partialData = try JSONSerialization.data(withJSONObject: reportObject)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let partialReport = try decoder.decode(
+        AutomationReportArtifact.self,
+        from: partialData
+    )
+    #expect(partialReport.dataQuality.isReliableForBehavior)
+    #expect(!partialReport.dataQuality.isReliable(.workflowSemantics))
+    #expect(!grounded.isGrounded(in: partialReport))
 }
 
 @Test

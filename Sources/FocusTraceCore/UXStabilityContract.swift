@@ -119,12 +119,112 @@ public enum FocusTraceUXContract {
     public static let timelineCurrentWorkflowOutlineEnabled = false
 }
 
+/// Geometry shared by every row in the timeline chart.
+///
+/// Row titles need enough fixed space for four Chinese characters, while hour
+/// labels are centered inside the plot instead of on its outer edges. Keeping
+/// these values in the core contract makes narrow-window regressions testable
+/// without rendering SwiftUI.
+public enum FocusTraceTimelineLayout {
+    public static let rowLabelWidth = 76.0
+    public static let rowSpacing = 10.0
+    public static let endpointHourLabelInset = 22.0
+    public static let hourLabelCount = 5
+
+    public static func hourLabelCenterX(
+        index: Int,
+        availableWidth: Double
+    ) -> Double {
+        guard availableWidth > 0 else { return 0 }
+        let finalIndex = max(1, hourLabelCount - 1)
+        let clampedIndex = min(max(0, index), finalIndex)
+        let inset = min(endpointHourLabelInset, availableWidth / 2)
+        let usableWidth = max(0, availableWidth - inset * 2)
+        return inset + usableWidth * Double(clampedIndex) / Double(finalIndex)
+    }
+}
+
 /// The app has one durable work context, so every entry point must reuse the
 /// same main window instead of creating visual copies of that context.
 public enum FocusTraceWindowContract {
     public static let mainWindowID = "main"
     public static let allowsMultipleMainWindows = false
     public static let exposesDedicatedSettingsWindow = false
+}
+
+public enum FocusTraceDataSettingsRow: String, CaseIterable, Sendable {
+    case retention
+    case export
+    case deletion
+}
+
+public enum FocusTraceDataSettingsContract {
+    public static let rows = FocusTraceDataSettingsRow.allCases
+    public static let visibleDeletionEntryCount = 1
+    public static let deletionScopeCount = 2
+    public static let destructiveActionsRequireConfirmation = true
+}
+
+public enum FocusTraceGettingStartedPhase: String, CaseIterable, Sendable {
+    case createWorkflow
+    case bindDesktop
+    case workNormally
+    case reviewEvidence
+}
+
+public struct FocusTraceGettingStartedStep: Equatable, Identifiable, Sendable {
+    public let id: FocusTraceGettingStartedPhase
+    public let title: String
+    public let detail: String
+
+    public init(
+        id: FocusTraceGettingStartedPhase,
+        title: String,
+        detail: String
+    ) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+    }
+}
+
+public enum FocusTraceGettingStartedContract {
+    public static let steps = [
+        FocusTraceGettingStartedStep(
+            id: .createWorkflow,
+            title: "创建一个工作流",
+            detail: "只写正在推进的事情，例如“排查登录问题”；目标和允许应用都可以稍后补。"
+        ),
+        FocusTraceGettingStartedStep(
+            id: .bindDesktop,
+            title: "在真正工作的桌面绑定",
+            detail: "切回普通或全屏工作桌面，点击屏幕顶部的 FocusTrace，再选择刚创建的工作流。"
+        ),
+        FocusTraceGettingStartedStep(
+            id: .workNormally,
+            title: "正常工作，不用盯着 FocusTrace",
+            detail: "工作时段会自动形成轨迹；应用切换只是事实，不会因为一次切屏就被判定为分心。"
+        ),
+        FocusTraceGettingStartedStep(
+            id: .reviewEvidence,
+            title: "下班后看回顾，只改一件事",
+            detail: "先用时间轴解释高切换区间，再根据可靠趋势选择一个可以验证的调整。"
+        )
+    ]
+
+    public static func phase(
+        hasOpenWorkflow: Bool,
+        requiresDesktopBinding: Bool,
+        hasVerifiedDesktopBinding: Bool,
+        hasRecordedActivity: Bool
+    ) -> FocusTraceGettingStartedPhase {
+        guard hasOpenWorkflow else { return .createWorkflow }
+        if requiresDesktopBinding && !hasVerifiedDesktopBinding {
+            return .bindDesktop
+        }
+        guard hasRecordedActivity else { return .workNormally }
+        return .reviewEvidence
+    }
 }
 
 public struct FocusTraceRGBColor: Equatable, Sendable {
@@ -217,6 +317,10 @@ public enum FocusTracePerformanceBudget {
     public static let timelinePresentationMaximumSeconds = 1.0
     public static let requirementQueueCount = 1_000
     public static let requirementQueueMaximumSeconds = 0.1
+    public static let reviewDashboardActivityCount = 2_000
+    public static let reviewDashboardTransitionCount = 1_000
+    public static let reviewDashboardParkingCount = 1_000
+    public static let reviewDashboardMaximumSeconds = 1.0
 }
 
 public struct FocusTraceCalendarDayLayout: Equatable, Identifiable, Sendable {

@@ -29,6 +29,8 @@ ANALYSIS_SOURCES = {
     "workflowRoute",
     "previousRecommendation",
     "normalizedTrend",
+    "attentionTrend",
+    "switchingLoad",
     "phaseTwo",
     "localRecommendation",
 }
@@ -44,6 +46,15 @@ ROUTE_REASONS = {
     "waitingForResult",
     "forcedInterruption",
     "unstructured",
+}
+RECOMMENDATION_LENSES = {
+    "collectData": "dataQuality",
+    "repairAttribution": "dataQuality",
+    "verifySpaceTracking": "dataQuality",
+    "startFocusRound": "fragmentation",
+    "recoveryRound": "fragmentation",
+    "maintainRound": "fragmentation",
+    "agentParkingDrill": "contextRecovery",
 }
 FILLER_PHRASES = {
     "总体来看",
@@ -99,6 +110,24 @@ def report_civil_date(report: dict[str, Any]) -> str:
     return explicit
 
 
+def lens_is_reliable(report: dict[str, Any], lens: str) -> bool:
+    data_quality = report.get("dataQuality")
+    if not isinstance(data_quality, dict):
+        return False
+    scopes = data_quality.get("analysisScopes")
+    if isinstance(scopes, list):
+        for scope in scopes:
+            if (
+                isinstance(scope, dict)
+                and scope.get("lens") == lens
+                and isinstance(scope.get("isReliable"), bool)
+            ):
+                return scope["isReliable"]
+    if lens == "dataQuality":
+        return True
+    return data_quality.get("isReliableForBehavior") is True
+
+
 def validate_analysis_audit(
     report: dict[str, Any],
     review: dict[str, Any],
@@ -129,7 +158,19 @@ def validate_analysis_audit(
     if not reliable:
         raise ValueError("数据不可靠时只能选择 dataQuality")
     if source == "localRecommendation":
-        if not no_route or not isinstance(report.get("recommendation"), dict):
+        recommendation = report.get("recommendation")
+        recommendation_kind = (
+            recommendation.get("kind")
+            if isinstance(recommendation, dict)
+            else None
+        )
+        lens = RECOMMENDATION_LENSES.get(recommendation_kind)
+        if (
+            not no_route
+            or lens is None
+            or lens == "dataQuality"
+            or not lens_is_reliable(report, lens)
+        ):
             raise ValueError("本地建议来源与聚合报告不匹配")
         return
     if source == "previousRecommendation":
@@ -151,6 +192,8 @@ def validate_analysis_audit(
         }
         if (
             not no_route
+            or not lens_is_reliable(report, "fragmentation")
+            or not lens_is_reliable(report, "workflowSemantics")
             or not isinstance(trend, dict)
             or not isinstance(trend.get("baselineDays"), int)
             or trend["baselineDays"] < 2
@@ -158,10 +201,62 @@ def validate_analysis_audit(
         ):
             raise ValueError("标准化趋势缺少两个可比工作日或有效变化")
         return
+    if source == "attentionTrend":
+        attention_trend = report.get("attentionTrend")
+        finding = (
+            attention_trend.get("finding")
+            if isinstance(attention_trend, dict)
+            else None
+        )
+        recommendation = (
+            attention_trend.get("recommendation")
+            if isinstance(attention_trend, dict)
+            else None
+        )
+        if (
+            not no_route
+            or not isinstance(finding, dict)
+            or finding.get("state")
+            not in {"needsAttention", "stable", "improving"}
+            or not isinstance(finding.get("evidence"), list)
+            or not finding["evidence"]
+            or not isinstance(recommendation, dict)
+            or not isinstance(finding.get("title"), str)
+            or not finding["title"].strip()
+            or not isinstance(recommendation.get("title"), str)
+            or not recommendation["title"].strip()
+            or attention_trend.get("reliableDimensionCount", 0) < 1
+        ):
+            raise ValueError("纵向趋势来源缺少可靠结论与下一步")
+        finding_evidence = finding["evidence"]
+        if (
+            normalized_text(finding.get("title", ""))
+            not in normalized_text(review.get("problem", ""))
+            or normalized_text(recommendation.get("title", ""))
+            not in normalized_text(review.get("recommendation", ""))
+            or any(
+                item not in finding_evidence
+                for item in review.get("evidence", [])
+            )
+        ):
+            raise ValueError("纵向趋势写回偏离了本地唯一问题或证据")
+        return
+    if source == "switchingLoad":
+        switching_load = report.get("switchingLoad")
+        if (
+            not no_route
+            or not isinstance(switching_load, dict)
+            or switching_load.get("status") not in {"mixedEvidence", "elevated"}
+            or not isinstance(switching_load.get("evidence"), list)
+            or not switching_load["evidence"]
+        ):
+            raise ValueError("切换负荷来源缺少收敛证据")
+        return
     if source == "phaseTwo":
         phase_two = report.get("phaseTwo")
         if (
             not no_route
+            or not lens_is_reliable(report, "workflowSemantics")
             or not isinstance(phase_two, dict)
             or phase_two.get("status") != "ready"
             or not (
@@ -193,7 +288,8 @@ def validate_analysis_audit(
         raise ValueError("工作流路线内容无效")
     transition_audit = report.get("transitionAudit")
     if (
-        not isinstance(transition_audit, dict)
+        not lens_is_reliable(report, "workflowSemantics")
+        or not isinstance(transition_audit, dict)
         or transition_audit.get("dataSource") not in {"semanticEvents", "mixed"}
     ):
         raise ValueError("工作流路线缺少原生语义事件")
@@ -217,8 +313,8 @@ def validate_analysis_audit(
 
 
 def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
-    if report.get("schemaVersion") not in {2, 3, 4, 5}:
-        raise ValueError("聚合报告 schemaVersion 必须是 2、3、4 或 5")
+    if report.get("schemaVersion") not in {2, 3, 4, 5, 6, 7}:
+        raise ValueError("聚合报告 schemaVersion 必须是 2、3、4、5、6 或 7")
     schema_version = review.get("schemaVersion")
     if schema_version not in {2, 3}:
         raise ValueError("Codex 写回 schemaVersion 必须是 2 或 3")
@@ -254,9 +350,23 @@ def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
     data_quality = report.get("dataQuality")
     if not isinstance(data_quality, dict):
         raise ValueError("聚合报告缺少 dataQuality")
-    reliable = data_quality.get("isReliableForBehavior")
-    if not isinstance(reliable, bool):
+    current_day_reliable = data_quality.get("isReliableForBehavior")
+    if not isinstance(current_day_reliable, bool):
         raise ValueError("聚合报告缺少可靠性判断")
+    attention_trend = report.get("attentionTrend")
+    trend_finding = (
+        attention_trend.get("finding")
+        if isinstance(attention_trend, dict)
+        else None
+    )
+    trend_reliable = (
+        isinstance(trend_finding, dict)
+        and trend_finding.get("state")
+        in {"needsAttention", "stable", "improving"}
+        and isinstance(attention_trend.get("reliableDimensionCount"), int)
+        and attention_trend["reliableDimensionCount"] > 0
+    )
+    reliable = current_day_reliable or trend_reliable
     if reliable and status != "behaviorFinding":
         raise ValueError("数据可靠时 status 必须是 behaviorFinding")
     if not reliable:

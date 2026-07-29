@@ -56,7 +56,7 @@ final class CodexReviewBridge: ObservableObject {
                 AutomationReportArtifact.self,
                 from: Data(contentsOf: reportURL)
             )
-            guard (2...5).contains(report.schemaVersion),
+            guard (2...7).contains(report.schemaVersion),
                   calendar.isDate(report.reportDate, inSameDayAs: date) else {
                 updateStatus(.invalid("聚合报告协议或日期不匹配"))
                 return
@@ -71,9 +71,13 @@ final class CodexReviewBridge: ObservableObject {
                 CodexReviewArtifact.self,
                 from: Data(contentsOf: reviewURL)
             )
+            let hasReliableAttentionTrend =
+                report.attentionTrend?.reliableDimensionCount ?? 0 > 0
+                    && report.attentionTrend?.finding?.state != .calibrating
             guard review.hasValidShape,
                   review.isConsistentWithBehaviorReliability(
                       report.dataQuality.isReliableForBehavior
+                          || hasReliableAttentionTrend
                   ),
                   review.isGrounded(in: report),
                   review.sourceReportID == report.reportID,

@@ -23,6 +23,30 @@ public struct FlowGuidance: Equatable, Sendable {
     }
 }
 
+public enum WorkflowBindingSurface: Equatable, Sendable {
+    case menuBar
+    case mainWindow
+}
+
+public enum WorkflowBindingSurfacePolicy {
+    /// A main app window may live on a different Space from the work the user
+    /// was just viewing. Only the status item is presented in the user's
+    /// current Space and can therefore give "current desktop" a reliable
+    /// meaning.
+    public static func canPresentBinding(
+        on surface: WorkflowBindingSurface
+    ) -> Bool {
+        surface == .menuBar
+    }
+
+    public static func canPresent(
+        _ guidance: FlowGuidance,
+        on surface: WorkflowBindingSurface
+    ) -> Bool {
+        guidance.action != .bindWorkflow || canPresentBinding(on: surface)
+    }
+}
+
 public enum FlowGuidanceEngine {
     /// Keeps the daily workflow to one visible decision. More detailed setup
     /// remains available, but it never competes with the next required action.

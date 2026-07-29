@@ -106,7 +106,15 @@ public enum ObservationPlanEngine {
             weights[.dataQuality] = 7
             reasons[.dataQuality] = "行为数据尚不可靠，先修复最高优先级的数据问题"
         } else {
-            if let delta = coaching.trend.appSwitchRateDeltaPercent,
+            if !coaching.quality.isReliable(.workflowSemantics) {
+                weights[.dataQuality, default: 1] += 2
+                weights[.workflowSemantics] = 0.25
+                reasons[.dataQuality] = "说明 trace 补全与未归因范围，不阻塞其他可靠分析"
+                reasons[.workflowSemantics] = "命名工作流证据不足，本次不判断路线语义"
+            }
+
+            if coaching.quality.isReliable(.fragmentation),
+               let delta = coaching.trend.appSwitchRateDeltaPercent,
                delta >= 15 {
                 weights[.fragmentation, default: 1] += 2
                 reasons[.fragmentation] = "应用切换率较近 \(coaching.trend.baselineDays) 个可比工作日上升"
@@ -116,7 +124,8 @@ public enum ObservationPlanEngine {
                 0,
                 summary.taskParkingCount - summary.resumedTaskCount
             )
-            if incompleteParkings > 0
+            if coaching.quality.isReliable(.contextRecovery),
+               incompleteParkings > 0
                 || (summary.averageTaskResumeLatency ?? 0) >= 10 * 60 {
                 weights[.contextRecovery, default: 1] += 2
                 reasons[.contextRecovery] = incompleteParkings > 0
@@ -126,7 +135,7 @@ public enum ObservationPlanEngine {
 
             let semanticEvents = interventionAudit.frequentSwitchEpisodes > 0
                 || (coaching.trend.workflowSwitchRateDeltaPercent ?? 0) >= 15
-            if semanticEvents {
+            if coaching.quality.isReliable(.workflowSemantics), semanticEvents {
                 weights[.workflowSemantics, default: 1] += 2
                 reasons[.workflowSemantics] = interventionAudit.frequentSwitchEpisodes > 0
                     ? "出现高频工作流切换段，需要区分目标连续与上下文重置"

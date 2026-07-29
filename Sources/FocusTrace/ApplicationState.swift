@@ -42,7 +42,7 @@ struct TimelineViewSnapshot {
     let renderNow: Date
     let range: DateInterval
     let activities: [ActivitySegmentModel]
-    let taskIntervals: [TaskIntervalModel]
+    let taskIntervals: [CountedWorkflowInterval]
     let markers: [TimelineMarkerModel]
     let taskNames: [UUID: String]
     let presentation: TimelinePresentationSnapshot
@@ -51,6 +51,17 @@ struct TimelineViewSnapshot {
 private struct TimelineViewCache {
     let key: TimelinePresentationCacheKey
     let snapshot: TimelineViewSnapshot
+}
+
+private struct ReviewAnalysisSnapshot {
+    let report: AutomationDailyReport
+    let interventionAudit: WorkflowInterventionAudit
+    let dashboard: AttentionDashboard
+}
+
+private struct ReviewAnalysisCache {
+    let key: TimelinePresentationCacheKey
+    let snapshot: ReviewAnalysisSnapshot
 }
 
 @MainActor
@@ -95,6 +106,7 @@ final class ApplicationState: ObservableObject {
     private var distractionTask: Task<Void, Never>?
     private var focusClockTask: Task<Void, Never>?
     private var focusDepartureTask: Task<Void, Never>?
+    private var focusPausedBySystem = false
     private var scheduleTask: Task<Void, Never>?
     private var spaceResolutionTask: Task<Void, Never>?
     private var spaceSwitchGateTimeoutTask: Task<Void, Never>?
@@ -103,6 +115,7 @@ final class ApplicationState: ObservableObject {
     private var timelineDataRevision: UInt64 = 0
     private var timelineSnapshotSequence: UInt64 = 0
     private var timelineViewCache: TimelineViewCache?
+    private var reviewAnalysisCache: ReviewAnalysisCache?
     private var lastAllowedBundleID: String?
     private var hasStarted = false
 
@@ -183,6 +196,28 @@ final class ApplicationState: ObservableObject {
             isWithinSchedule: preferences.isWithinWorkSchedule(now),
             focusRemainingSeconds: currentFocusID == nil ? nil : focusRemainingSeconds,
             planMinutes: currentPlan.focusMinutes
+        )
+    }
+
+    var mainWindowFlowGuidance: FlowGuidance? {
+        let guidance = flowGuidance
+        return WorkflowBindingSurfacePolicy.canPresent(
+            guidance,
+            on: .mainWindow
+        ) ? guidance : nil
+    }
+
+    var gettingStartedPhase: FocusTraceGettingStartedPhase {
+        let activeWorkflowIDs = Set(activeTasks.map(\.id))
+        let hasVerifiedBinding = workflowSpaceBindings.contains {
+            $0.state == .verified
+                && activeWorkflowIDs.contains($0.workflowID)
+        }
+        return FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: !activeWorkflowIDs.isEmpty,
+            requiresDesktopBinding: spaceAnchorRegistry.isIdentityProviderAvailable,
+            hasVerifiedDesktopBinding: hasVerifiedBinding,
+            hasRecordedActivity: !activities.isEmpty
         )
     }
 
@@ -335,22 +370,15 @@ final class ApplicationState: ObservableObject {
     }
 
     var selectedSummary: DailySummary {
-        MetricsEngine.dailySummary(
-            activities: selectedActivities.map(\.record),
-            taskIntervals: selectedTaskIntervals.map(\.record),
-            interruptions: selectedInterruptions.map(\.record),
-            taskParkings: selectedTaskParkings.map(\.record),
-            now: now
-        )
+        selectedReviewAnalysis.report.summary
     }
 
     var selectedInterventionAudit: WorkflowInterventionAudit {
-        let interval = dayInterval(for: selectedDate)
-        return WorkflowSwitchInterventionEngine.audit(
-            transitions: workflowTransitions.map(\.record),
-            range: interval.start..<interval.end,
-            now: now
-        )
+        selectedReviewAnalysis.interventionAudit
+    }
+
+    var selectedAttentionDashboard: AttentionDashboard {
+        selectedReviewAnalysis.dashboard
     }
 
     var selectedTimelineSnapshot: TimelineViewSnapshot {
@@ -386,6 +414,12 @@ final class ApplicationState: ObservableObject {
         }
         let selectedMarkers = markers.filter { interval.contains($0.date) }
         let selectedParkings = taskParkings.filter { interval.contains($0.parkedAt) }
+        let countedTaskIntervals = SystemInactiveIntervalEngine.countedWorkflowIntervals(
+            taskIntervals: selectedTaskIntervals.map(\.record),
+            markers: selectedMarkers.map(\.record),
+            range: range,
+            now: renderMinute
+        )
 
         timelineSnapshotSequence &+= 1
         let snapshot = TimelineViewSnapshot(
@@ -393,7 +427,7 @@ final class ApplicationState: ObservableObject {
             renderNow: renderMinute,
             range: range,
             activities: selectedActivities,
-            taskIntervals: selectedTaskIntervals,
+            taskIntervals: countedTaskIntervals,
             markers: selectedMarkers,
             taskNames: Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0.title) }),
             presentation: TimelinePresentationEngine.snapshot(
@@ -411,22 +445,7 @@ final class ApplicationState: ObservableObject {
     }
 
     var selectedCoachingAnalysis: DailyCoachingAnalysis {
-        DailyCoachEngine.analyze(
-            snapshot: FocusTraceLocalSnapshot(
-                tasks: tasks.map(\.record),
-                taskIntervals: taskIntervals.map(\.record),
-                activities: activities.map(\.record),
-                focusSessions: focusSessions.map(\.record),
-                interruptions: interruptions.map(\.record),
-                trainingPlans: trainingPlans.map(\.record),
-                markers: markers.map(\.record),
-                workflowTransitions: workflowTransitions.map(\.record),
-                taskParkings: taskParkings.map(\.record),
-                requirements: requirements.map(\.record)
-            ),
-            reportDate: selectedDate,
-            generatedAt: now
-        )
+        selectedReviewAnalysis.report.coaching
     }
 
     var analysisResult: AnalysisResult {
@@ -509,23 +528,20 @@ final class ApplicationState: ObservableObject {
         refreshCaptureForCurrentState()
     }
 
-    func completeOnboardingAndCreateTask(
+    @discardableResult
+    func createFirstWorkflowForOnboarding(
         title: String,
         expectedOutcome: String,
         allowedBundleIDs: Set<String>
-    ) {
+    ) -> Bool {
+        guard !preferences.hasCompletedOnboarding else { return false }
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return }
-        guard createTask(
+        guard !cleanTitle.isEmpty else { return false }
+        return createTask(
             title: cleanTitle,
             expectedOutcome: expectedOutcome,
             allowedBundleIDs: allowedBundleIDs
-        ) else { return }
-        preferences.completeOnboarding()
-        if let currentTaskID {
-            bindCurrentSpace(to: currentTaskID)
-        }
-        refreshCaptureForCurrentState()
+        )
     }
 
     func setCapturePaused(_ paused: Bool) {
@@ -537,6 +553,8 @@ final class ApplicationState: ObservableObject {
                 confirmPendingSpaceSwitch(reason: .unstructured, at: date)
             }
             stopCurrentActivity(at: date)
+            closeActiveTaskInterval(at: date)
+            saveOrReport()
         } else {
             refreshCaptureForCurrentState()
         }
@@ -558,7 +576,14 @@ final class ApplicationState: ObservableObject {
         store.insert(task)
         tasks.append(task)
         saveOrReport()
-        switchTask(to: task.id)
+        if spaceAnchorRegistry.isIdentityProviderAvailable {
+            objectWillChange.send()
+        } else {
+            // Preserve the non-Space fallback on systems where stable Space
+            // identity cannot be read. Supported systems still require the
+            // status-bar binding flow.
+            switchTask(to: task.id)
+        }
         return true
     }
 
@@ -669,14 +694,12 @@ final class ApplicationState: ObservableObject {
             return false
         }
 
-        if isSpaceWorkflowModeEnabled {
-            if let currentSpaceWorkflowID, currentSpaceWorkflowID != workflowID {
-                errorMessage = "当前桌面已绑定到“\(taskName(for: currentSpaceWorkflowID))”。请切到目标工作流的桌面，或先解除当前桌面绑定。"
+        if spaceAnchorRegistry.isIdentityProviderAvailable {
+            guard currentSpaceWorkflowID == workflowID else {
+                errorMessage = currentSpaceWorkflowID == nil
+                    ? "请先回到目标工作桌面，从 FocusTrace 状态栏选择这个工作流。"
+                    : "当前桌面属于“\(taskName(for: currentSpaceWorkflowID))”。请切到目标工作流的桌面后再开始处理。"
                 return false
-            }
-            if currentSpaceWorkflowID == nil {
-                bindCurrentSpace(to: workflowID)
-                guard currentSpaceWorkflowID == workflowID else { return false }
             }
         } else {
             switchTask(to: workflowID)
@@ -724,7 +747,7 @@ final class ApplicationState: ObservableObject {
     }
 
     @discardableResult
-    func createWorkflowAndBindCurrentSpace(
+    func createWorkflowAndBindCurrentSpaceFromMenuBar(
         title: String,
         expectedOutcome: String = "",
         allowedBundleIDs: Set<String> = []
@@ -738,7 +761,7 @@ final class ApplicationState: ObservableObject {
         store.insert(workflow)
         tasks.append(workflow)
         saveOrReport()
-        bindCurrentSpace(to: workflow.id)
+        bindCurrentSpaceFromMenuBar(to: workflow.id)
         return true
     }
 
@@ -852,7 +875,10 @@ final class ApplicationState: ObservableObject {
         objectWillChange.send()
     }
 
-    func bindCurrentSpace(to workflowID: UUID) {
+    /// Binding is intentionally exposed only to the NSStatusItem flow. A main
+    /// window can be hosted on a different Space from the user's work and
+    /// therefore cannot safely define "current desktop".
+    func bindCurrentSpaceFromMenuBar(to workflowID: UUID) {
         guard tasks.contains(where: {
             $0.id == workflowID && $0.workflowLifecycle == .open
         }) else {
@@ -920,7 +946,7 @@ final class ApplicationState: ObservableObject {
         }
     }
 
-    func unbindCurrentSpace() {
+    func unbindCurrentSpaceFromMenuBar() {
         let releasedIDs = spaceAnchorRegistry.releaseCurrentSpace()
         guard !releasedIDs.isEmpty else { return }
         for binding in workflowSpaceBindings where releasedIDs.contains(binding.id) {
@@ -1022,6 +1048,7 @@ final class ApplicationState: ObservableObject {
             return
         }
         if taskID == currentTaskID {
+            openActiveTaskIntervalIfNeeded(at: date, source: source)
             if source == .space {
                 handleFocusWorkflowContextChange(to: taskID, at: date)
             }
@@ -1039,21 +1066,9 @@ final class ApplicationState: ObservableObject {
            let parking = activeTaskParkings.first(where: { $0.taskID == taskID }) {
             resolveTaskParking(parking, resumedAt: date)
         }
-        if let activeTaskInterval {
-            activeTaskInterval.endedAt = date
-            self.activeTaskInterval = nil
-        }
+        closeActiveTaskInterval(at: date)
         currentTaskID = taskID
-        if let taskID {
-            let interval = TaskIntervalModel(
-                taskID: taskID,
-                startedAt: date,
-                workflowSource: source
-            )
-            store.insert(interval)
-            taskIntervals.append(interval)
-            activeTaskInterval = interval
-        }
+        openActiveTaskIntervalIfNeeded(at: date, source: source)
         if source == .space {
             handleFocusWorkflowContextChange(to: taskID, at: date)
         }
@@ -1138,6 +1153,7 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
         pendingFocusDepartureAt = nil
+        focusPausedBySystem = false
         let targetMinutes = min(50, max(10, minutes ?? currentPlan.focusMinutes))
         let focus = FocusSessionModel(taskID: taskID, targetSeconds: targetMinutes * 60)
         store.insert(focus)
@@ -1181,6 +1197,7 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
         pendingFocusDepartureAt = nil
+        focusPausedBySystem = false
         finishCurrentPause(for: focus, at: date)
         let elapsedSeconds = activeFocusElapsedSeconds(focus, at: date)
         focus.endedAt = date
@@ -1315,6 +1332,7 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
         pendingFocusDepartureAt = nil
+        focusPausedBySystem = false
         spaceAnchorRegistry.releaseAll()
         spaceResolution = .unknown
         if let focus = currentFocus, focus.endedAt == nil {
@@ -1399,6 +1417,7 @@ final class ApplicationState: ObservableObject {
         focusDepartureTask?.cancel()
         focusDepartureTask = nil
         pendingFocusDepartureAt = nil
+        focusPausedBySystem = false
         activeTaskInterval = nil
         pendingSessionReview = nil
         trainingProposal = nil
@@ -1544,9 +1563,24 @@ final class ApplicationState: ObservableObject {
         isSystemActive = false
         _ = captureMachine.becomeInactive(at: date)
         closeActiveSegment(at: date)
+        closeActiveTaskInterval(at: date)
+        if let focus = currentFocus,
+           WorkAccountingGate.shouldPauseFocusForSystemInactivity(
+               hasRunningFocus: focus.endedAt == nil,
+               focusIsAlreadyPaused: focus.pausedAt != nil
+           ) {
+            focusDepartureTask?.cancel()
+            focusDepartureTask = nil
+            pendingFocusDepartureAt = nil
+            focus.pausedAt = date
+            focusPausedBySystem = true
+            insertMarker(.focusPaused, at: date, taskID: focus.taskID)
+        }
         distractionTask?.cancel()
         distractionTask = nil
         insertMarker(source == .screenSleep ? .screenSlept : .sessionBecameInactive, at: date, taskID: currentTaskID)
+        saveOrReport()
+        objectWillChange.send()
     }
 
     private func handleSystemActive(source: ActivityEventSource, app: AppIdentity?, at date: Date) {
@@ -1564,6 +1598,8 @@ final class ApplicationState: ObservableObject {
             insertMarkerIfNotRecent(.sessionBecameActive, at: date, taskID: currentTaskID)
         }
         guard shouldRecord(at: date) else { return }
+        openActiveTaskIntervalIfNeeded(at: date, source: .recovery)
+        resumeSystemPausedFocusIfPossible(at: date)
         let transition = captureMachine.becomeActive(app, at: date)
         if let opened = transition.opened {
             openSegment(for: opened, source: source)
@@ -1625,10 +1661,61 @@ final class ApplicationState: ObservableObject {
         closeActiveSegment(at: date)
     }
 
+    private func closeActiveTaskInterval(at date: Date) {
+        if let interval = activeTaskInterval, interval.endedAt == nil {
+            interval.endedAt = max(interval.startedAt, date)
+        }
+        activeTaskInterval = nil
+    }
+
+    private func openActiveTaskIntervalIfNeeded(
+        at date: Date,
+        source: WorkflowIntervalSource
+    ) {
+        guard activeTaskInterval == nil,
+              WorkAccountingGate.shouldCountWorkflow(
+                  isRecordingWindow: shouldRecord(at: date),
+                  isSystemActive: isSystemActive,
+                  workflowID: currentTaskID
+              ),
+              let taskID = currentTaskID else {
+            return
+        }
+        let interval = TaskIntervalModel(
+            taskID: taskID,
+            startedAt: date,
+            workflowSource: source
+        )
+        store.insert(interval)
+        taskIntervals.append(interval)
+        activeTaskInterval = interval
+    }
+
+    private func resumeSystemPausedFocusIfPossible(at date: Date) {
+        guard let focus = currentFocus, focus.endedAt == nil else {
+            focusPausedBySystem = false
+            return
+        }
+        guard WorkAccountingGate.shouldResumeSystemPausedFocus(
+            wasPausedBySystem: focusPausedBySystem,
+            isRecordingWindow: shouldRecord(at: date),
+            isSystemActive: isSystemActive,
+            focusWorkflowID: focus.taskID,
+            currentWorkflowID: currentTaskID
+        ) else {
+            return
+        }
+        finishCurrentPause(for: focus, at: date)
+        focusPausedBySystem = false
+        insertMarker(.focusResumed, at: date, taskID: focus.taskID)
+        saveOrReport()
+        objectWillChange.send()
+    }
+
     private func resegmentCurrentApp(at date: Date, classification: ActivityClassification? = nil) {
         let app = workspaceMonitor.frontmostApp
         stopCurrentActivity(at: date)
-        guard shouldRecord(at: date), let app else { return }
+        guard shouldRecord(at: date), isSystemActive, let app else { return }
         let transition = captureMachine.activate(app, at: date)
         if let opened = transition.opened {
             openSegment(for: opened, source: .appActivation)
@@ -1657,6 +1744,7 @@ final class ApplicationState: ObservableObject {
             pendingFocusDepartureAt = nil
             return
         }
+        guard isSystemActive else { return }
 
         let transition = FocusWorkflowDepartureEngine.contextChanged(
             focusDepartureState(for: focus),
@@ -1680,6 +1768,7 @@ final class ApplicationState: ObservableObject {
             case .paused:
                 break
             case .resumed:
+                focusPausedBySystem = false
                 insertMarker(.focusResumed, at: date, taskID: focus.taskID)
                 saveOrReport()
                 objectWillChange.send()
@@ -1847,8 +1936,12 @@ final class ApplicationState: ObservableObject {
         updateClock(to: date)
         guard shouldRecord(at: date), isSystemActive, let app = workspaceMonitor.frontmostApp else {
             stopCurrentActivity(at: date)
+            closeActiveTaskInterval(at: date)
+            saveOrReport()
             return
         }
+        openActiveTaskIntervalIfNeeded(at: date, source: .recovery)
+        resumeSystemPausedFocusIfPossible(at: date)
         handleAppActivation(app, at: date)
     }
 
@@ -2666,6 +2759,64 @@ final class ApplicationState: ObservableObject {
     private func invalidateTimelinePresentation() {
         timelineDataRevision &+= 1
         timelineViewCache = nil
+        reviewAnalysisCache = nil
+    }
+
+    private var selectedReviewAnalysis: ReviewAnalysisSnapshot {
+        let calendar = Calendar.current
+        let selectedDay = calendar.startOfDay(for: selectedDate)
+        let interval = dayInterval(for: selectedDay)
+        let renderMinute = TimelinePresentationEngine.renderMinute(
+            for: now,
+            calendar: calendar
+        )
+        let key = TimelinePresentationCacheKey(
+            selectedDay: selectedDay,
+            range: interval,
+            now: renderMinute,
+            dataRevision: timelineDataRevision,
+            calendar: calendar
+        )
+        if let reviewAnalysisCache, reviewAnalysisCache.key == key {
+            return reviewAnalysisCache.snapshot
+        }
+
+        let localSnapshot = FocusTraceLocalSnapshot(
+            tasks: tasks.map(\.record),
+            taskIntervals: taskIntervals.map(\.record),
+            activities: activities.map(\.record),
+            focusSessions: focusSessions.map(\.record),
+            interruptions: interruptions.map(\.record),
+            trainingPlans: trainingPlans.map(\.record),
+            markers: markers.map(\.record),
+            workflowTransitions: workflowTransitions.map(\.record),
+            taskParkings: taskParkings.map(\.record),
+            requirements: requirements.map(\.record)
+        )
+        let report = AutomationReportEngine.makeReport(
+            snapshot: localSnapshot,
+            reportDate: selectedDay,
+            generatedAt: renderMinute,
+            calendar: calendar
+        )
+        let interventionAudit = WorkflowSwitchInterventionEngine.audit(
+            transitions: workflowTransitions.map(\.record),
+            range: interval.start..<interval.end,
+            now: renderMinute
+        )
+        let snapshot = ReviewAnalysisSnapshot(
+            report: report,
+            interventionAudit: interventionAudit,
+            dashboard: AutomationReportEngine.makeAttentionDashboard(
+                snapshot: localSnapshot,
+                through: selectedDay,
+                generatedAt: renderMinute,
+                calendar: calendar,
+                currentReport: report
+            )
+        )
+        reviewAnalysisCache = ReviewAnalysisCache(key: key, snapshot: snapshot)
+        return snapshot
     }
 
     private func dayInterval(for date: Date) -> DateInterval {

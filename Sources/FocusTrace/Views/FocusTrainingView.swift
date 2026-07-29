@@ -30,10 +30,7 @@ struct FocusTrainingView: View {
         }
         .focusTraceScreen()
         .sheet(isPresented: $showingNewTask) {
-            TaskEditorSheet(
-                state: state,
-                bindCurrentSpaceOnCreate: state.currentSpaceWorkflowID == nil
-            )
+            TaskEditorSheet(state: state)
         }
         .sheet(item: $editingTask) { task in
             TaskEditorSheet(state: state, editingTask: task)
@@ -110,7 +107,7 @@ struct FocusTrainingView: View {
             return "还没有工作流：当前记录不会累积基线。请先创建工作流。"
         }
         if state.currentTaskID == nil {
-            return "请先绑定当前工作流；未标注的时间不计入 3 日基线。"
+            return "尚未有正在记录的工作流；桌面绑定只在状态栏完成。"
         }
         return "前三个工作日只观察，不发送分心提醒。之后切换桌面即可切换工作流。"
     }
@@ -155,21 +152,24 @@ struct FocusTrainingView: View {
                         } else {
                             Button("切换工作流") { state.showTaskSwitcher = true }
                         }
-                        Button("Agent 还在运行：保存返回点") {
+                        Button("离开前保存返回点") {
                             state.showTaskParking = true
                         }
                     }
                 } else {
-                    idleGuidance
+                    if let guidance = state.mainWindowFlowGuidance {
+                        idleGuidance(guidance)
+                    } else {
+                        mainWindowUnboundState
+                    }
                 }
             }
             .padding(8)
         }
     }
 
-    private var idleGuidance: some View {
-        let guidance = state.flowGuidance
-        return VStack(alignment: .leading, spacing: 12) {
+    private func idleGuidance(_ guidance: FlowGuidance) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 16) {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(guidance.title)
@@ -190,12 +190,20 @@ struct FocusTrainingView: View {
                 .controlSize(.large)
             }
             if state.currentTaskID != nil {
-                Button("Agent 还在运行？保存返回点再切走") {
+                Button("离开前保存返回点") {
                     state.showTaskParking = true
                 }
                 .buttonStyle(.borderless)
             }
         }
+    }
+
+    private var mainWindowUnboundState: some View {
+        Label(
+            "没有正在记录的工作流。桌面绑定只在状态栏完成。",
+            systemImage: "menubar.rectangle"
+        )
+        .foregroundStyle(.secondary)
     }
 
     private var parkedTasksCard: some View {
@@ -265,37 +273,16 @@ struct FocusTrainingView: View {
             ) {
             VStack(spacing: 0) {
                 ForEach(state.activeTasks) { task in
-                    let isCurrentWorkflow = state.isSpaceWorkflowModeEnabled
-                        ? state.currentSpaceWorkflowID == task.id
-                        : state.currentTaskID == task.id
                     HStack {
-                        Button {
-                            if state.isSpaceWorkflowModeEnabled {
-                                state.bindCurrentSpace(to: task.id)
-                            } else {
-                                state.switchTask(to: task.id)
-                            }
-                        } label: {
-                            HStack {
-                                Image(systemName: isCurrentWorkflow ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(isCurrentWorkflow ? FocusTraceTheme.mint : .secondary)
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(task.title).font(.headline)
-                                    let bindingCount = state.verifiedSpaceBindingCount(for: task.id)
-                                    Text(bindingCount == 0
-                                         ? "允许 \(task.allowedBundleIDs.count) 个应用 · 尚未绑定桌面"
-                                         : "允许 \(task.allowedBundleIDs.count) 个应用 · 已绑定 \(bindingCount) 个桌面")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(task.title).font(.headline)
+                            let bindingCount = state.verifiedSpaceBindingCount(for: task.id)
+                            Text(bindingCount == 0
+                                 ? "允许 \(task.allowedBundleIDs.count) 个应用 · 尚未绑定桌面"
+                                 : "允许 \(task.allowedBundleIDs.count) 个应用 · 已绑定 \(bindingCount) 个桌面")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
-                        .buttonStyle(.plain)
-                        .help(
-                            state.isSpaceWorkflowModeEnabled
-                                ? "将当前桌面绑定到“\(task.title)”"
-                                : "切换到“\(task.title)”"
-                        )
                         Spacer()
                         Button("编辑") { editingTask = task }
                         Button {
@@ -390,7 +377,7 @@ struct FocusTrainingView: View {
             showingNewTask = true
             showWorkflowManagement = true
         case .bindWorkflow:
-            state.showTaskSwitcher = true
+            break
         case .viewFocus:
             break
         case .openSchedule:

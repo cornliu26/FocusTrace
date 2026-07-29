@@ -13,7 +13,16 @@ final class WorkspaceMonitor: NSObject {
     var onSystemActive: ((ActivityEventSource, AppIdentity?, Date) -> Void)?
 
     private let workspace = NSWorkspace.shared
+    private let distributedCenter = DistributedNotificationCenter.default()
     private var isStarted = false
+    private var isScreenLocked = false
+
+    static let screenLockedNotification = Notification.Name(
+        "com.apple.screenIsLocked"
+    )
+    static let screenUnlockedNotification = Notification.Name(
+        "com.apple.screenIsUnlocked"
+    )
 
     var frontmostApp: AppIdentity? {
         Self.identity(for: workspace.frontmostApplication)
@@ -71,11 +80,31 @@ final class WorkspaceMonitor: NSObject {
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
+        // NSWorkspace's session notifications describe user-session switching,
+        // while an ordinary Control-Command-Q lock may only surface through
+        // loginwindow activation on some macOS releases. Observe the Window
+        // Server's distributed lock notifications as a redundant, no-permission
+        // signal; duplicate events are idempotent in ApplicationState.
+        distributedCenter.addObserver(
+            self,
+            selector: #selector(screenLocked(_:)),
+            name: Self.screenLockedNotification,
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
+        distributedCenter.addObserver(
+            self,
+            selector: #selector(screenUnlocked(_:)),
+            name: Self.screenUnlockedNotification,
+            object: nil,
+            suspensionBehavior: .deliverImmediately
+        )
     }
 
     func stop() {
         guard isStarted else { return }
         workspace.notificationCenter.removeObserver(self)
+        distributedCenter.removeObserver(self)
         isStarted = false
     }
 
@@ -95,7 +124,7 @@ final class WorkspaceMonitor: NSObject {
     }
 
     @objc private func screenWoke(_ notification: Notification) {
-        onSystemActive?(.screenWake, frontmostApp, Date())
+        onSystemActive?(.screenWake, isScreenLocked ? nil : frontmostApp, Date())
     }
 
     @objc private func sessionInactive(_ notification: Notification) {
@@ -103,7 +132,7 @@ final class WorkspaceMonitor: NSObject {
     }
 
     @objc private func sessionActive(_ notification: Notification) {
-        onSystemActive?(.sessionActive, frontmostApp, Date())
+        onSystemActive?(.sessionActive, isScreenLocked ? nil : frontmostApp, Date())
     }
 
     @objc private func willSleep(_ notification: Notification) {
@@ -111,7 +140,17 @@ final class WorkspaceMonitor: NSObject {
     }
 
     @objc private func didWake(_ notification: Notification) {
-        onSystemActive?(.screenWake, frontmostApp, Date())
+        onSystemActive?(.screenWake, isScreenLocked ? nil : frontmostApp, Date())
+    }
+
+    @objc private func screenLocked(_ notification: Notification) {
+        isScreenLocked = true
+        onSystemInactive?(.sessionInactive, Date())
+    }
+
+    @objc private func screenUnlocked(_ notification: Notification) {
+        isScreenLocked = false
+        onSystemActive?(.sessionActive, frontmostApp, Date())
     }
 
     static func runningApps() -> [AppIdentity] {
