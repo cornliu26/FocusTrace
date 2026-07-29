@@ -56,7 +56,7 @@ final class CodexReviewBridge: ObservableObject {
                 AutomationReportArtifact.self,
                 from: Data(contentsOf: reportURL)
             )
-            guard (2...7).contains(report.schemaVersion),
+            guard (2...8).contains(report.schemaVersion),
                   calendar.isDate(report.reportDate, inSameDayAs: date) else {
                 updateStatus(.invalid("聚合报告协议或日期不匹配"))
                 return

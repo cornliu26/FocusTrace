@@ -57,6 +57,7 @@ private struct ReviewAnalysisSnapshot {
     let report: AutomationDailyReport
     let interventionAudit: WorkflowInterventionAudit
     let dashboard: AttentionDashboard
+    let attentionExperimentProgress: AttentionExperimentProgress?
 }
 
 private struct ReviewAnalysisCache {
@@ -75,6 +76,7 @@ final class ApplicationState: ObservableObject {
     @Published private(set) var focusSessions: [FocusSessionModel] = []
     @Published private(set) var interruptions: [InterruptionModel] = []
     @Published private(set) var trainingPlans: [TrainingPlanModel] = []
+    @Published private(set) var attentionExperiments: [AttentionExperimentModel] = []
     @Published private(set) var markers: [TimelineMarkerModel] = []
     @Published private(set) var workflowTransitions: [WorkflowTransitionModel] = []
     @Published private(set) var taskParkings: [TaskParkingModel] = []
@@ -290,6 +292,25 @@ final class ApplicationState: ObservableObject {
         trainingPlans.append(fallback)
         try? store.save()
         return fallback
+    }
+
+    var activeAttentionExperiment: AttentionExperimentModel? {
+        attentionExperiments
+            .filter { $0.record.status == .active }
+            .max { $0.record.startedAt < $1.record.startedAt }
+    }
+
+    var latestCompletedAttentionExperiment: AttentionExperimentModel? {
+        attentionExperiments
+            .filter { $0.record.status != .active }
+            .max {
+                ($0.record.completedAt ?? $0.record.startedAt)
+                    < ($1.record.completedAt ?? $1.record.startedAt)
+            }
+    }
+
+    var selectedAttentionExperimentProgress: AttentionExperimentProgress? {
+        selectedReviewAnalysis.attentionExperimentProgress
     }
 
     var isRecording: Bool {
@@ -1354,6 +1375,59 @@ final class ApplicationState: ObservableObject {
         }
     }
 
+    func startAttentionExperiment(
+        recommendation: DailyCoachRecommendation,
+        dashboard: AttentionDashboard
+    ) {
+        guard AttentionExperimentEngine.canStartNew(
+            in: attentionExperiments.map(\.record)
+        ) else {
+            errorMessage = "已有一项实验正在进行。请先完成或结束它，再开始新的变量。"
+            return
+        }
+        guard let record = AttentionExperimentEngine.proposal(
+            recommendation: recommendation,
+            dashboard: dashboard,
+            contextWorkflowID: currentTaskID,
+            startedAt: now
+        ) else {
+            errorMessage = "当前建议还没有达到实验门槛；先继续收集可靠趋势。"
+            return
+        }
+        let model = AttentionExperimentModel(record: record)
+        store.insert(model)
+        attentionExperiments.append(model)
+        saveOrReport()
+    }
+
+    func completeActiveAttentionExperiment() {
+        guard let model = activeAttentionExperiment,
+              let progress = selectedAttentionExperimentProgress else {
+            return
+        }
+        guard progress.state == .ready else {
+            errorMessage = "可靠样本还没有达到验收数量；可以继续收集，或选择提前结束。"
+            return
+        }
+        model.record = AttentionExperimentEngine.completed(
+            model.record,
+            progress: progress,
+            at: now
+        )
+        saveOrReport()
+        objectWillChange.send()
+    }
+
+    func stopActiveAttentionExperiment() {
+        guard let model = activeAttentionExperiment else { return }
+        model.record = AttentionExperimentEngine.stopped(
+            model.record,
+            at: now
+        )
+        saveOrReport()
+        objectWillChange.send()
+    }
+
     func exportBundle() -> ExportBundle {
         ExportBundle(
             tasks: tasks.map(\.record),
@@ -1362,6 +1436,7 @@ final class ApplicationState: ObservableObject {
             focusSessions: focusSessions.map(\.record),
             interruptions: interruptions.map(\.record),
             trainingPlans: trainingPlans.map(\.record),
+            attentionExperiments: attentionExperiments.map(\.record),
             markers: markers.map(\.record),
             taskParkings: taskParkings.map(\.record)
         )
@@ -1412,6 +1487,7 @@ final class ApplicationState: ObservableObject {
         workflowTransitions.forEach { store.delete($0) }
         taskParkings.forEach { store.delete($0) }
         trainingPlans.forEach { store.delete($0) }
+        attentionExperiments.forEach { store.delete($0) }
         currentTaskID = nil
         currentFocusID = nil
         focusDepartureTask?.cancel()
@@ -2696,6 +2772,10 @@ final class ApplicationState: ObservableObject {
         }
         taskParkings.filter { max($0.resumedAt ?? .distantPast, $0.dismissedAt ?? $0.parkedAt) < cutoff }
             .forEach { store.delete($0) }
+        attentionExperiments.filter {
+            $0.record.status != .active
+                && ($0.record.completedAt ?? $0.record.startedAt) < cutoff
+        }.forEach { store.delete($0) }
         saveOrReport()
         reloadAll()
     }
@@ -2707,6 +2787,9 @@ final class ApplicationState: ObservableObject {
         focusSessions = store.focusSessions.sorted { $0.startedAt < $1.startedAt }
         interruptions = store.interruptions.sorted { $0.detectedAt < $1.detectedAt }
         trainingPlans = store.trainingPlans.sorted { $0.version < $1.version }
+        attentionExperiments = store.attentionExperiments.sorted {
+            $0.record.startedAt < $1.record.startedAt
+        }
         markers = store.markers.sorted { $0.date < $1.date }
         workflowTransitions = store.workflowTransitions.sorted {
             $0.resolvedAt < $1.resolvedAt
@@ -2788,6 +2871,7 @@ final class ApplicationState: ObservableObject {
             focusSessions: focusSessions.map(\.record),
             interruptions: interruptions.map(\.record),
             trainingPlans: trainingPlans.map(\.record),
+            attentionExperiments: attentionExperiments.map(\.record),
             markers: markers.map(\.record),
             workflowTransitions: workflowTransitions.map(\.record),
             taskParkings: taskParkings.map(\.record),
@@ -2804,16 +2888,32 @@ final class ApplicationState: ObservableObject {
             range: interval.start..<interval.end,
             now: renderMinute
         )
+        let dashboard = AutomationReportEngine.makeAttentionDashboard(
+            snapshot: localSnapshot,
+            through: selectedDay,
+            generatedAt: renderMinute,
+            calendar: calendar,
+            currentReport: report
+        )
+        let activeExperiment = localSnapshot.attentionExperiments
+            .filter { $0.status == .active }
+            .max { $0.startedAt < $1.startedAt }
+        let experimentProgress = activeExperiment.map {
+            AttentionExperimentEngine.evaluate(
+                $0,
+                dashboard: dashboard,
+                taskIntervals: localSnapshot.taskIntervals,
+                focusSessions: localSnapshot.focusSessions,
+                taskParkings: localSnapshot.taskParkings,
+                now: renderMinute,
+                calendar: calendar
+            )
+        }
         let snapshot = ReviewAnalysisSnapshot(
             report: report,
             interventionAudit: interventionAudit,
-            dashboard: AutomationReportEngine.makeAttentionDashboard(
-                snapshot: localSnapshot,
-                through: selectedDay,
-                generatedAt: renderMinute,
-                calendar: calendar,
-                currentReport: report
-            )
+            dashboard: dashboard,
+            attentionExperimentProgress: experimentProgress
         )
         reviewAnalysisCache = ReviewAnalysisCache(key: key, snapshot: snapshot)
         return snapshot

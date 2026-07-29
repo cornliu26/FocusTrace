@@ -73,6 +73,13 @@ public struct SwitchingLoadMetrics: Codable, Equatable, Sendable {
     public let focusSuccessRate: Double?
     public let comparableBaselineDays: Int
     public let systemInactiveMinutes: Double
+    /// Explicit waiting/forced-interruption transitions that created a
+    /// meaningful opportunity to return to the origin workflow.
+    public let workflowRecoveryOpportunities: Int?
+    /// Opportunities whose origin workflow was observed again within 30
+    /// minutes. This is a behavioral return, not proof of recovered cognition.
+    public let workflowRecoveriesWithin30Minutes: Int?
+    public let workflowRecoveryRate: Double?
 
     public init(
         activeMinutes: Double,
@@ -94,7 +101,10 @@ public struct SwitchingLoadMetrics: Codable, Equatable, Sendable {
         subjectiveDifficultySamples: Int,
         focusSuccessRate: Double?,
         comparableBaselineDays: Int,
-        systemInactiveMinutes: Double
+        systemInactiveMinutes: Double,
+        workflowRecoveryOpportunities: Int? = nil,
+        workflowRecoveriesWithin30Minutes: Int? = nil,
+        workflowRecoveryRate: Double? = nil
     ) {
         self.activeMinutes = activeMinutes
         self.appSwitchesPerHour = appSwitchesPerHour
@@ -116,6 +126,10 @@ public struct SwitchingLoadMetrics: Codable, Equatable, Sendable {
         self.focusSuccessRate = focusSuccessRate
         self.comparableBaselineDays = comparableBaselineDays
         self.systemInactiveMinutes = systemInactiveMinutes
+        self.workflowRecoveryOpportunities = workflowRecoveryOpportunities
+        self.workflowRecoveriesWithin30Minutes =
+            workflowRecoveriesWithin30Minutes
+        self.workflowRecoveryRate = workflowRecoveryRate
     }
 }
 
@@ -227,6 +241,9 @@ public enum SwitchingLoadEngine {
         let quickReturns = transitionAudit.routes.reduce(0) {
             $0 + $1.returnedWithin30Minutes
         }
+        let workflowRecovery = workflowRecoveryClosure(
+            transitions: finalTransitions
+        )
 
         let resumedParkings = taskParkings.filter { $0.resumedAt != nil }.count
         let parkingResumeRate = taskParkings.isEmpty
@@ -286,7 +303,10 @@ public enum SwitchingLoadEngine {
             subjectiveDifficultySamples: difficulties.count,
             focusSuccessRate: focusSuccessRate,
             comparableBaselineDays: trend.baselineDays,
-            systemInactiveMinutes: systemInactiveMinutes
+            systemInactiveMinutes: systemInactiveMinutes,
+            workflowRecoveryOpportunities: workflowRecovery.opportunities,
+            workflowRecoveriesWithin30Minutes: workflowRecovery.recovered,
+            workflowRecoveryRate: workflowRecovery.rate
         )
 
         let traceCoverage = coverage(
@@ -595,5 +615,35 @@ public enum SwitchingLoadEngine {
 
     private static func average(_ values: [Double]) -> Double? {
         values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+    }
+
+    private static func workflowRecoveryClosure(
+        transitions: [WorkflowTransitionRecord]
+    ) -> (opportunities: Int, recovered: Int, rate: Double?) {
+        let ordered = transitions.sorted { $0.resolvedAt < $1.resolvedAt }
+        let opportunities = ordered.filter {
+            [.waitingForResult, .forcedInterruption].contains($0.reason)
+                && $0.origin.workflowID != nil
+                && $0.destination.workflowID != nil
+        }
+        var usedReturnIDs: Set<UUID> = []
+        var recovered = 0
+        for opportunity in opportunities {
+            guard let originID = opportunity.origin.workflowID else { continue }
+            if let returning = ordered.first(where: {
+                !usedReturnIDs.contains($0.id)
+                    && $0.resolvedAt > opportunity.resolvedAt
+                    && $0.resolvedAt.timeIntervalSince(opportunity.resolvedAt)
+                        <= 30 * 60
+                    && $0.destination.workflowID == originID
+            }) {
+                usedReturnIDs.insert(returning.id)
+                recovered += 1
+            }
+        }
+        let rate = opportunities.isEmpty
+            ? nil
+            : Double(recovered) / Double(opportunities.count)
+        return (opportunities.count, recovered, rate)
     }
 }

@@ -1560,7 +1560,12 @@ private func dashboardSwitchingLoad(
     finalSwitches: Int = 4,
     plannedSwitches: Int = 3,
     burdenSwitches: Int = 0,
+    shortDestinationSwitches: Int? = nil,
+    returnedWithin30Minutes: Int? = nil,
     resumeRate: Double? = 0.5,
+    workflowRecoveryOpportunities: Int? = nil,
+    workflowRecoveriesWithin30Minutes: Int? = nil,
+    workflowRecoveryRate: Double? = nil,
     averageDifficulty: Double? = 2.5,
     difficultySamples: Int = 5,
     successRate: Double? = 0.8
@@ -1584,15 +1589,21 @@ private func dashboardSwitchingLoad(
             highRecoveryBurdenSwitches: burdenSwitches,
             navigationEventsPerBurst: 1.5,
             explicitReasonCoverage: 1,
-            shortDestinationSwitches: burdenSwitches,
-            returnedWithin30Minutes: burdenSwitches,
+            shortDestinationSwitches:
+                shortDestinationSwitches ?? burdenSwitches,
+            returnedWithin30Minutes:
+                returnedWithin30Minutes ?? burdenSwitches,
             returnPointResumeRate: resumeRate,
             averageInterruptionReturnSeconds: 75,
             averageSubjectiveDifficulty: averageDifficulty,
             subjectiveDifficultySamples: difficultySamples,
             focusSuccessRate: successRate,
             comparableBaselineDays: 5,
-            systemInactiveMinutes: 30
+            systemInactiveMinutes: 30,
+            workflowRecoveryOpportunities: workflowRecoveryOpportunities,
+            workflowRecoveriesWithin30Minutes:
+                workflowRecoveriesWithin30Minutes,
+            workflowRecoveryRate: workflowRecoveryRate
         ),
         traceCoverage: []
     )
@@ -1757,6 +1768,34 @@ func attentionDashboardGatesEachDimensionIndependently() {
 }
 
 @Test
+func attentionDashboardTreatsVerifiedReturnAsRecoveryClosureNotFailure() {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: dashboardAnalysis(
+            reliableLenses: [.contextRecovery],
+            appSwitchDelta: nil,
+            medianFocusDelta: nil
+        ),
+        summary: observationSummary(),
+        switchingLoad: dashboardSwitchingLoad(
+            burdenSwitches: 2,
+            shortDestinationSwitches: 0,
+            returnedWithin30Minutes: 2,
+            resumeRate: nil,
+            workflowRecoveryOpportunities: 2,
+            workflowRecoveriesWithin30Minutes: 2,
+            workflowRecoveryRate: 1
+        ),
+        interventionAudit: observationAudit()
+    )
+    let recovery = dashboard.metrics.first { $0.kind == .contextRecovery }
+
+    #expect(recovery?.title == "恢复闭环")
+    #expect(recovery?.state == .observed)
+    #expect(recovery?.value == "100%")
+    #expect(recovery?.evidence.contains { $0.contains("2/2 次回到") } == true)
+}
+
+@Test
 func attentionDashboardWaitsForFiveTrainingSamplesBeforeJudging() {
     let dashboard = AttentionDashboardEngine.make(
         coaching: dashboardAnalysis(
@@ -1911,6 +1950,45 @@ func attentionDashboardEvaluatesTrainingAcrossDaysInRollingFiveSessions() {
     #expect(training?.state == .needsAttention)
     #expect(dashboard.finding?.kind == .trainingFeedback)
     #expect(dashboard.recommendation?.title.contains("5 次训练") == true)
+}
+
+@Test
+func attentionDashboardDoesNotRepeatTrainingResultOnDaysWithoutTraining() {
+    let start = Date(timeIntervalSince1970: 5_500_000)
+    let days = (0..<3).map { index in
+        let day = start.addingTimeInterval(Double(index) * 86_400)
+        return dashboardDay(
+            date: day,
+            sessions: index == 0
+                ? [
+                    dashboardSession(
+                        date: day,
+                        successful: true,
+                        difficulty: 2
+                    )
+                ]
+                : []
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "测试"
+        )
+    )
+    let points = dashboard.metrics
+        .first { $0.kind == .trainingFeedback }?
+        .trend?.points
+
+    #expect(points?.count == 3)
+    #expect(points?.first?.value == 100)
+    #expect(points?[1].value == nil)
+    #expect(points?[1].effectiveAvailability == .noOpportunity)
+    #expect(points?[2].value == nil)
+    #expect(points?[2].effectiveAvailability == .noOpportunity)
 }
 
 @Test
@@ -3759,6 +3837,120 @@ func automationReportV7CarriesTheSameAggregateAttentionTrendAsTheApp() throws {
     #expect(markdown.contains("下一步单项实验"))
     #expect(!text.contains("aggregate.private.bundle"))
     #expect(!text.contains("Aggregate Private"))
+}
+
+@Test
+func automationReportV8CarriesOnlyAggregateActiveExperimentProgress() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let day = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 30, hour: 9)
+    )!
+    let workflowID = UUID()
+    let report = AutomationReportEngine.makeReport(
+        snapshot: FocusTraceLocalSnapshot(),
+        reportDate: day,
+        generatedAt: day.addingTimeInterval(60 * 60),
+        calendar: calendar
+    )
+    let experiment = AttentionExperimentRecord(
+        metricKind: .fragmentation,
+        variable: .singleOutputBoundary,
+        title: "把高碎片工作改成单一产出块",
+        hypothesis: "固定一个交付结果可以减少高碎片工作段",
+        methodTitle: "单一产出边界",
+        steps: ["开始前写下唯一交付结果"],
+        successMeasure: "三个可靠工作日后高碎片工作段不高于目标",
+        evidence: ["近三日高碎片工作段高于个人典型区间"],
+        action: .startFocus(minutes: 15),
+        baselineValue: 60,
+        targetValue: 50,
+        lowerIsBetter: true,
+        targetReliableSamples: 3,
+        startedAt: day,
+        measurementStartsAt: day.addingTimeInterval(24 * 60 * 60),
+        contextWorkflowID: workflowID,
+        contextTimeBand: .morning
+    )
+    let progress = AttentionExperimentProgress(
+        state: .collecting,
+        reliableSamples: 1,
+        targetReliableSamples: 3,
+        noOpportunityCount: 1,
+        missingInputCount: 0,
+        qualityBlockedCount: 0,
+        observedValue: 48,
+        observedSecondaryValue: nil,
+        targetMet: nil,
+        summary: "当前有 1 个可靠样本，尚未形成结论。",
+        nextAction: "保持唯一交付结果不变，再完成一个可比工作日。"
+    )
+    let artifact = AutomationAttentionExperimentArtifact(
+        experiment: experiment,
+        progress: progress
+    )
+    let data = try AutomationReportEngine.jsonData(
+        for: report,
+        attentionExperiment: artifact
+    )
+    let text = String(decoding: data, as: UTF8.self)
+    let object = try #require(
+        JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    let encodedExperiment = try #require(
+        object["attentionExperiment"] as? [String: Any]
+    )
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        attentionExperiment: artifact,
+        timeZone: calendar.timeZone
+    )
+
+    #expect(text.contains("\"schemaVersion\" : 8"))
+    #expect(text.contains("\"attentionExperiment\""))
+    #expect(text.contains("\"reliableSamples\" : 1"))
+    #expect(text.contains("\"contextScope\" : \"sameWorkflowAndTimeBand\""))
+    #expect(!text.contains(workflowID.uuidString))
+    #expect(!encodedExperiment.keys.contains("startedAt"))
+    #expect(!encodedExperiment.keys.contains("contextWorkflowID"))
+    #expect(markdown.contains("## 进行中的注意力实验"))
+    #expect(markdown.contains("今天怎么做"))
+
+    let reportArtifact = AutomationReportArtifact(
+        report: report,
+        attentionExperiment: artifact
+    )
+    let groundedReview = CodexReviewArtifact(
+        schemaVersion: 3,
+        sourceReportID: reportArtifact.reportID,
+        reportDate: reportArtifact.reportDate,
+        generatedAt: day.addingTimeInterval(2 * 60 * 60),
+        status: .behaviorFinding,
+        problem: "\(artifact.title)，当前仍在收集可靠样本。",
+        recommendation: artifact.nextAction,
+        evidence: artifact.evidence,
+        nextCheck: artifact.nextCheck,
+        analysisAudit: CodexReviewAnalysisAudit(
+            source: .attentionExperiment,
+            selectedRoute: nil,
+            contextRelation: .notApplicable
+        )
+    )
+    #expect(groundedReview.isGrounded(in: reportArtifact))
+
+    let changedAction = CodexReviewArtifact(
+        schemaVersion: 3,
+        sourceReportID: reportArtifact.reportID,
+        reportDate: reportArtifact.reportDate,
+        generatedAt: day.addingTimeInterval(2 * 60 * 60),
+        status: .behaviorFinding,
+        problem: groundedReview.displayedProblem,
+        recommendation: "换成另一项未经确认的训练。",
+        evidence: artifact.evidence,
+        nextCheck: artifact.nextCheck,
+        analysisAudit: groundedReview.analysisAudit
+    )
+    #expect(!changedAction.isGrounded(in: reportArtifact))
 }
 
 @Test

@@ -347,6 +347,19 @@ public enum FocusTracePerformanceBudget {
     public static let reviewDashboardTransitionCount = 1_000
     public static let reviewDashboardParkingCount = 1_000
     public static let reviewDashboardMaximumSeconds = 1.0
+    public static let attentionExperimentWorkflowIntervalCount = 2_000
+    public static let attentionExperimentTrainingCount = 1_000
+    public static let attentionExperimentMaximumSeconds = 0.1
+}
+
+/// Product-level visual semantics. The implementation may adopt newer system
+/// rendering, but these roles must not drift between OS versions.
+public enum FocusTraceFunctionalLayerContract {
+    public static let minimumGlassOSMajorVersion = 26
+    public static let usesSingleSystemPageTitle = true
+    public static let glassIsLimitedToFunctionalSurfaces = true
+    public static let contentCardsRemainStableSurfaces = true
+    public static let reduceTransparencyHasOpaqueFallback = true
 }
 
 public struct FocusTraceCalendarDayLayout: Equatable, Identifiable, Sendable {

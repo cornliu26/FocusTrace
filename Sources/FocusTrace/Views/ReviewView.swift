@@ -3,13 +3,13 @@ import FocusTraceCore
 
 struct ReviewView: View {
     @ObservedObject var state: ApplicationState
-    @Environment(\.colorScheme) private var colorScheme
     @StateObject private var codexBridge = CodexReviewBridge()
     @StateObject private var codexLauncher = CodexConnectionLauncher()
     @State private var showPlanHistory = false
     @State private var showLocalEvidence = false
     @State private var showObservationPlan = false
     @State private var showDailyDetails = false
+    @State private var showingStopExperimentConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -31,6 +31,18 @@ struct ReviewView: View {
         .task(id: state.selectedDate) {
             await codexBridge.observe(for: state.selectedDate)
         }
+        .confirmationDialog(
+            "提前结束这项实验？",
+            isPresented: $showingStopExperimentConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("结束实验", role: .destructive) {
+                state.stopActiveAttentionExperiment()
+            }
+            Button("继续实验", role: .cancel) {}
+        } message: {
+            Text("会保留已有进度，但不会据此修改训练计划。")
+        }
     }
 
     private var reviewHeader: some View {
@@ -49,6 +61,8 @@ struct ReviewView: View {
             }
             Spacer()
         }
+        .padding(10)
+        .focusTraceFunctionalSurface(cornerRadius: 12)
     }
 
     private var attentionDashboard: some View {
@@ -125,14 +139,7 @@ struct ReviewView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(18)
-        .background(
-            FocusTraceTheme.cardFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
-        }
+        .focusTraceSurfaceCard()
     }
 
     private var localAnalysis: some View {
@@ -172,62 +179,22 @@ struct ReviewView: View {
                     .background(evaluationColor(evaluation.status).opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
                 }
 
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("下一步单项实验")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(FocusTraceTheme.mint)
-                        Text(recommendation.title)
-                            .font(.title2.bold())
-                        Text(recommendation.rationale)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Text("趋势可信度：\(confidenceText(recommendation.confidence))")
-                        .font(.caption.weight(.medium))
-                        .padding(.horizontal, 9)
-                        .padding(.vertical, 4)
-                        .background(.secondary.opacity(0.1), in: Capsule())
+                if Calendar.current.isDate(
+                    state.selectedDate,
+                    inSameDayAs: state.now
+                ),
+                   let experiment = state.activeAttentionExperiment?.record,
+                   let progress = state.selectedAttentionExperimentProgress {
+                    activeExperimentSection(
+                        experiment,
+                        progress: progress
+                    )
+                } else {
+                    recommendationSection(
+                        recommendation,
+                        dashboard: state.selectedAttentionDashboard
+                    )
                 }
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(recommendation.method.title)
-                        .font(.headline)
-                    ForEach(Array(recommendation.method.steps.enumerated()), id: \.offset) { index, step in
-                        HStack(alignment: .top, spacing: 9) {
-                            Text("\(index + 1)")
-                                .font(.caption.bold())
-                                .frame(width: 22, height: 22)
-                                .background(.blue.opacity(0.12), in: Circle())
-                            Text(step).font(.callout)
-                        }
-                    }
-                    Label("验收：\(recommendation.method.successMeasure)", systemImage: "checkmark.seal")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.blue)
-                }
-
-                if Calendar.current.isDateInToday(state.selectedDate),
-                   let buttonTitle = actionButtonTitle(recommendation.action) {
-                    Button(buttonTitle) {
-                        perform(recommendation.action)
-                    }
-                    .buttonStyle(FocusTracePrimaryButtonStyle())
-                }
-
-                DisclosureGroup(
-                    "为什么这么建议",
-                    isExpanded: $showLocalEvidence
-                ) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(recommendation.evidence, id: \.self) { evidence in
-                            Label(evidence, systemImage: "chart.bar.xaxis")
-                                .font(.callout)
-                        }
-                    }
-                    .padding(.top, 6)
-                }
-                .focusTraceDisclosureHitTarget(isExpanded: $showLocalEvidence)
 
                 observationPlanDisclosure(observationPlan)
             }
@@ -241,6 +208,248 @@ struct ReviewView: View {
                     .foregroundStyle(.secondary)
             }
         }
+    }
+
+    @ViewBuilder
+    private func recommendationSection(
+        _ recommendation: DailyCoachRecommendation,
+        dashboard: AttentionDashboard
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("下一步单项实验")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(FocusTraceTheme.mint)
+                Text(recommendation.title)
+                    .font(.title2.bold())
+                Text(recommendation.rationale)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("趋势可信度：\(confidenceText(recommendation.confidence))")
+                .font(.caption.weight(.medium))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(.secondary.opacity(0.1), in: Capsule())
+        }
+
+        experimentMethod(
+            title: recommendation.method.title,
+            steps: recommendation.method.steps,
+            successMeasure: recommendation.method.successMeasure
+        )
+
+        if Calendar.current.isDate(
+            state.selectedDate,
+            inSameDayAs: state.now
+        ) {
+            if AttentionExperimentEngine.proposal(
+                recommendation: recommendation,
+                dashboard: dashboard,
+                contextWorkflowID: state.currentTaskID,
+                startedAt: state.now
+            ) != nil {
+                Button("开始这个实验") {
+                    state.startAttentionExperiment(
+                        recommendation: recommendation,
+                        dashboard: dashboard
+                    )
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+            } else if let buttonTitle = actionButtonTitle(recommendation.action) {
+                Button(buttonTitle) {
+                    perform(recommendation.action)
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+            }
+        }
+
+        evidenceDisclosure(recommendation.evidence)
+    }
+
+    @ViewBuilder
+    private func activeExperimentSection(
+        _ experiment: AttentionExperimentRecord,
+        progress: AttentionExperimentProgress
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("进行中的单项实验")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(FocusTraceTheme.mint)
+                Text(experiment.title)
+                    .font(.title2.bold())
+                Text(experiment.hypothesis)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text(progress.state == .ready ? "可验收" : "收集中")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(
+                    (progress.state == .ready
+                        ? FocusTraceTheme.mint
+                        : FocusTraceTheme.sky
+                    ).opacity(0.12),
+                    in: Capsule()
+                )
+        }
+
+        HStack(spacing: 12) {
+            Label(
+                "唯一变量：\(experimentVariableTitle(experiment.variable))",
+                systemImage: "slider.horizontal.2.square"
+            )
+            Label(
+                experimentContextTitle(experiment),
+                systemImage: "equal.circle"
+            )
+        }
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.secondary)
+
+        ProgressView(
+            value: Double(progress.reliableSamples),
+            total: Double(progress.targetReliableSamples)
+        ) {
+            Text(
+                "可靠样本 \(progress.reliableSamples)/\(progress.targetReliableSamples)"
+            )
+        }
+
+        HStack(spacing: 14) {
+            experimentSamplePill(
+                "无机会",
+                value: progress.noOpportunityCount
+            )
+            experimentSamplePill(
+                "未执行/缺反馈",
+                value: progress.missingInputCount
+            )
+            experimentSamplePill(
+                "质量阻断",
+                value: progress.qualityBlockedCount
+            )
+        }
+
+        experimentMethod(
+            title: experiment.methodTitle,
+            steps: experiment.steps,
+            successMeasure: experiment.successMeasure
+        )
+
+        VStack(alignment: .leading, spacing: 5) {
+            Text(progress.summary)
+                .font(.callout.weight(.medium))
+            Label(progress.nextAction, systemImage: "arrow.right.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+
+        HStack(spacing: 10) {
+            if progress.state == .ready {
+                Button("保存实验结论") {
+                    state.completeActiveAttentionExperiment()
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+            } else if let buttonTitle = actionButtonTitle(experiment.action) {
+                Button(buttonTitle) {
+                    perform(experiment.action)
+                }
+                .buttonStyle(FocusTracePrimaryButtonStyle())
+            }
+            Button("提前结束") {
+                showingStopExperimentConfirmation = true
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+
+        evidenceDisclosure(experiment.evidence)
+    }
+
+    private func experimentMethod(
+        title: String,
+        steps: [String],
+        successMeasure: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .top, spacing: 9) {
+                    Text("\(index + 1)")
+                        .font(.caption.bold())
+                        .frame(width: 22, height: 22)
+                        .background(FocusTraceTheme.sky.opacity(0.12), in: Circle())
+                    Text(step).font(.callout)
+                }
+            }
+            Label("验收：\(successMeasure)", systemImage: "checkmark.seal")
+                .font(.callout.weight(.medium))
+                .foregroundStyle(FocusTraceTheme.sky)
+        }
+    }
+
+    private func evidenceDisclosure(_ evidence: [String]) -> some View {
+        DisclosureGroup(
+            "证据与边界",
+            isExpanded: $showLocalEvidence
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(evidence, id: \.self) { item in
+                    Label(item, systemImage: "chart.bar.xaxis")
+                        .font(.callout)
+                }
+                Label(
+                    "行为实验，不是脑负荷或临床测量。",
+                    systemImage: "checkmark.shield"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.top, 6)
+        }
+        .focusTraceDisclosureHitTarget(isExpanded: $showLocalEvidence)
+    }
+
+    private func experimentSamplePill(
+        _ title: String,
+        value: Int
+    ) -> some View {
+        Text("\(title) \(value)")
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(.secondary.opacity(0.08), in: Capsule())
+    }
+
+    private func experimentVariableTitle(
+        _ variable: AttentionExperimentVariable
+    ) -> String {
+        switch variable {
+        case .protectedOutputBlock: return "保护单一产出时段"
+        case .singleOutputBoundary: return "单一产出边界"
+        case .savedReturnPoint: return "切走前保存返回点"
+        case .focusDuration: return "训练时长"
+        }
+    }
+
+    private func experimentContextTitle(
+        _ experiment: AttentionExperimentRecord
+    ) -> String {
+        let workflow = experiment.contextWorkflowID == nil
+            ? "不限工作流"
+            : "同一工作流"
+        let time: String
+        switch experiment.contextTimeBand {
+        case .morning: time = "上午"
+        case .afternoon: time = "下午"
+        case .evening: time = "晚间"
+        }
+        return "\(workflow) · \(time)"
     }
 
     private func dashboardPeriodDescription(
@@ -784,7 +993,6 @@ private struct DashboardSummaryPill: View {
 
 private struct AttentionDashboardFindingCard: View {
     let finding: AttentionDashboardFinding
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -815,12 +1023,12 @@ private struct AttentionDashboardFindingCard: View {
             Spacer(minLength: 12)
         }
         .padding(14)
-        .background(
-            FocusTraceTheme.elevatedFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 14, style: .continuous)
-        )
+        .focusTraceSurfaceCard()
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(
+                cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                style: .continuous
+            )
                 .stroke(color.opacity(0.22), lineWidth: 1)
         }
         .accessibilityElement(children: .contain)
@@ -855,7 +1063,6 @@ private struct AttentionDashboardFindingCard: View {
 
 private struct AttentionTrendCard: View {
     let metric: AttentionDashboardMetric
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -883,7 +1090,7 @@ private struct AttentionTrendCard: View {
                     FocusTraceAttentionTrendLayout.shouldPlot(
                         isPartial: $0.isPartial
                     )
-                }
+                }.suffix(AttentionDashboardEngine.trendWorkdayCount)
                 VStack(spacing: 4) {
                     AttentionTrendChart(trend: trend, accent: accent)
                         .frame(height: 62)
@@ -939,18 +1146,24 @@ private struct AttentionTrendCard: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
+                if let availabilitySummary {
+                    Text(availabilitySummary)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
             .frame(width: 235, alignment: .leading)
         }
         .frame(maxWidth: .infinity, minHeight: 94, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(
-            FocusTraceTheme.elevatedFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-        )
+        .focusTraceSurfaceCard()
         .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
+            RoundedRectangle(
+                cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                style: .continuous
+            )
                 .stroke(accent.opacity(0.14), lineWidth: 1)
         }
         .opacity(metric.state == .unavailable ? 0.72 : 1)
@@ -999,6 +1212,26 @@ private struct AttentionTrendCard: View {
         case .needsAttention: return FocusTraceTheme.coral
         }
     }
+
+    private var availabilitySummary: String? {
+        guard let points = metric.trend?.points
+            .filter({ !$0.isPartial })
+            .suffix(AttentionDashboardEngine.trendWorkdayCount),
+              !points.isEmpty else {
+            return nil
+        }
+        let noOpportunity = points.filter {
+            $0.effectiveAvailability == .noOpportunity
+        }.count
+        let missing = points.filter {
+            [.missingInput, .calibrating].contains($0.effectiveAvailability)
+        }.count
+        let blocked = points.filter {
+            $0.effectiveAvailability == .qualityBlocked
+        }.count
+        guard noOpportunity + missing + blocked > 0 else { return nil }
+        return "未入样：无机会 \(noOpportunity) · 缺反馈 \(missing) · 质量阻断 \(blocked)"
+    }
 }
 
 private struct AttentionTrendChart: View {
@@ -1011,7 +1244,7 @@ private struct AttentionTrendChart: View {
                 FocusTraceAttentionTrendLayout.shouldPlot(
                     isPartial: $0.isPartial
                 )
-            }
+            }.suffix(AttentionDashboardEngine.trendWorkdayCount)
             let values = plottedPoints.compactMap(\.value)
                 + [trend.typicalLowerBound, trend.typicalUpperBound]
                     .compactMap { $0 }

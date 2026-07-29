@@ -239,6 +239,38 @@ class CodexReviewContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "偏离了本地唯一问题"):
             VALIDATOR.validate(source, payload)
 
+    def test_v8_active_experiment_keeps_the_confirmed_action(self) -> None:
+        source = report(reliable=True)
+        source["schemaVersion"] = 8
+        source["attentionExperiment"] = {
+            "status": "active",
+            "title": "把高碎片工作改成单一产出块",
+            "hypothesis": "固定一个交付结果可以减少高碎片工作段",
+            "nextAction": "下一次开始前写下唯一交付结果，并保持其他条件不变。",
+            "nextCheck": "达到 3 个可靠样本后检查同一主指标",
+            "evidence": [
+                "可靠样本 1/3",
+                "未入样：无机会 1、缺反馈 0、质量阻断 0",
+            ],
+        }
+        payload = review(
+            status="behaviorFinding",
+            problem="把高碎片工作改成单一产出块，目前仍在收集可比样本。",
+        )
+        payload["recommendation"] = source["attentionExperiment"]["nextAction"]
+        payload["evidence"] = source["attentionExperiment"]["evidence"]
+        payload["nextCheck"] = source["attentionExperiment"]["nextCheck"]
+        payload["analysisAudit"] = {
+            "source": "attentionExperiment",
+            "selectedRoute": None,
+            "contextRelation": "notApplicable",
+        }
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+        payload["recommendation"] = "今天再尝试一个新的番茄钟方法。"
+        with self.assertRaisesRegex(ValueError, "改变了今天的唯一动作"):
+            VALIDATOR.validate(source, payload)
+
     def test_unreliable_report_accepts_one_repair_action(self) -> None:
         payload = review(
             status="dataQualityBlocked",
