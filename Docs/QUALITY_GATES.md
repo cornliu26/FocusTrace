@@ -66,6 +66,8 @@
 | DATA-01 | 旧 store 解码、CSV 转义、JSON 往返保持兼容 | `legacyTaskLifecycleMigrationIsLossless`、`csvQuotesSeparatorsWithoutAddingExtraFields`、`jsonRoundTrip` |
 | DATA-02 | 一次 Space 导航原生记录为一个 `WorkflowTransition`，包含起点、最终落点、来源、导航事件数、确认结果和可选原因；兼容时间轴标记只用于历史推断，和原生记录重合时不得重复计数；聚合报告声明 `semanticEvents`、`mixed` 或 `legacyInferred` | `workflowTransitionKeepsCompleteNativeSemantics`、`workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers`、仓库跳转协议回归 |
 | RELEASE-01 | 版本和构建号按语义顺序比较，更新清单校验完整 | `releaseManifestUsesSemanticVersionAndBuildOrdering` |
+| RELEASE-02 | 更新前验证安装目录可写；替换失败必须保留并重新打开旧版，以一次性安全结果说明阶段和错误代码。反馈只预填版本、macOS、阶段和错误码，不得携带路径、行为记录、工作流或需求内容 | `updateFailureFeedbackUsesOnlySafeGitHubMetadata`、`Scripts/test-update.sh` 成功替换与只读目录回滚验收、仓库反馈入口回归 |
+| RELEASE-03 | 正式 tag 只能来自干净且与远端一致的受保护 `main`；Release 先保持草稿，上传资产通过哈希、大小、签名、版本、内置更新器和真实替换验收后才公开；工作流重跑不得创建重复 Release | `Scripts/release.sh`、`Scripts/verify-release-assets.sh`、`.github/workflows/release.yml` 仓库发版回归 |
 
 ## 当前性能基线
 

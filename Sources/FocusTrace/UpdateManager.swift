@@ -27,10 +27,22 @@ final class UpdateManager: ObservableObject {
     private let defaults: UserDefaults
     private let session: URLSession
     private var checkInProgress = false
+    private var lastUpdateResult: FocusTraceUpdateResult?
 
     init(defaults: UserDefaults = .standard, session: URLSession = .shared) {
         self.defaults = defaults
         self.session = session
+        if let result = Self.consumePendingUpdateResult() {
+            lastUpdateResult = result
+            switch result.outcome {
+            case .succeeded:
+                state = .upToDate
+                detail = result.userMessage
+            case .failed:
+                state = .failed
+                detail = "上次更新失败：\(result.userMessage)"
+            }
+        }
     }
 
     var currentVersionText: String {
@@ -39,6 +51,18 @@ final class UpdateManager: ObservableObject {
 
     var isBusy: Bool {
         state == .checking || state == .downloading || state == .readyToRestart
+    }
+
+    var feedbackURL: URL? {
+        lastUpdateResult?.issueURL(
+            installedVersion: currentVersion,
+            installedBuild: currentBuild,
+            systemVersion: ProcessInfo.processInfo.operatingSystemVersionString
+        )
+    }
+
+    var manualDownloadURL: URL {
+        URL(string: "https://github.com/cornliu26/FocusTrace/releases/latest")!
     }
 
     func checkAutomatically(enabled: Bool) async {
@@ -69,23 +93,31 @@ final class UpdateManager: ObservableObject {
 
             if manifest.isNewer(thanVersion: currentVersion, build: currentBuild) {
                 availableRelease = manifest
+                lastUpdateResult = nil
                 state = .available
                 detail = "发现新版本 \(manifest.version)（\(manifest.build)）"
             } else {
                 availableRelease = nil
+                lastUpdateResult = nil
                 state = .upToDate
                 detail = "当前已是最新版本"
             }
         } catch {
+            let result = Self.failureResult(
+                stage: .checking,
+                error: error
+            )
+            lastUpdateResult = result
             state = .failed
             detail = userInitiated
-                ? "检查更新失败：\(error.localizedDescription)"
+                ? "检查更新失败：\(result.userMessage)"
                 : "自动检查暂时失败，下次会重试"
         }
     }
 
     func installAvailableUpdate() async {
         guard let release = availableRelease, !isBusy else { return }
+        var stage = FocusTraceUpdateStage.downloading
         state = .downloading
         detail = "正在下载 FocusTrace \(release.version)…"
 
@@ -95,21 +127,31 @@ final class UpdateManager: ObservableObject {
             let (downloadURL, response) = try await session.download(for: request)
             try Self.validateHTTPResponse(response)
 
+            stage = .verifyingPackage
             let preparedApp = try await Task.detached(priority: .userInitiated) {
                 try Self.prepareUpdate(downloadURL: downloadURL, release: release)
             }.value
 
+            stage = .preparingInstall
             state = .readyToRestart
             detail = "更新已验证，正在重启…"
             try Self.launchUpdater(
                 sourceApp: preparedApp,
                 targetApp: Bundle.main.bundleURL,
-                parentPID: ProcessInfo.processInfo.processIdentifier
+                parentPID: ProcessInfo.processInfo.processIdentifier,
+                resultURL: Self.updateResultURL()
             )
             NSApp.terminate(nil)
         } catch {
+            let result = Self.failureResult(
+                stage: stage,
+                error: error,
+                targetVersion: release.version,
+                targetBuild: release.build
+            )
+            lastUpdateResult = result
             state = .failed
-            detail = "安装更新失败：\(error.localizedDescription)"
+            detail = "安装更新失败：\(result.userMessage)"
         }
     }
 
@@ -199,16 +241,19 @@ final class UpdateManager: ObservableObject {
     nonisolated private static func launchUpdater(
         sourceApp: URL,
         targetApp: URL,
-        parentPID: Int32
+        parentPID: Int32,
+        resultURL: URL
     ) throws {
         guard targetApp.lastPathComponent == "FocusTrace.app" else {
             throw UpdateError.unsupportedInstallLocation
         }
+        try verifyWritableInstallRoot(for: targetApp)
         let bundledHelper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/MacOS/FocusTraceUpdater")
         guard FileManager.default.isExecutableFile(atPath: bundledHelper.path) else {
             throw UpdateError.missingUpdater
         }
+        try? FileManager.default.removeItem(at: resultURL)
         let helper = FileManager.default.temporaryDirectory
             .appendingPathComponent("FocusTraceUpdater-\(UUID().uuidString)")
         try FileManager.default.copyItem(at: bundledHelper, to: helper)
@@ -218,8 +263,113 @@ final class UpdateManager: ObservableObject {
         )
         let process = Process()
         process.executableURL = helper
-        process.arguments = [sourceApp.path, targetApp.path, String(parentPID)]
+        process.arguments = [
+            sourceApp.path,
+            targetApp.path,
+            String(parentPID),
+            "--result",
+            resultURL.path
+        ]
         try process.run()
+    }
+
+    nonisolated private static func verifyWritableInstallRoot(
+        for targetApp: URL
+    ) throws {
+        let fileManager = FileManager.default
+        let installRoot = targetApp.deletingLastPathComponent()
+        guard fileManager.fileExists(atPath: installRoot.path) else {
+            throw UpdateError.installLocationNotWritable
+        }
+        let probe = installRoot.appendingPathComponent(
+            ".focustrace-update-preflight-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        do {
+            try fileManager.createDirectory(
+                at: probe,
+                withIntermediateDirectories: false
+            )
+            try fileManager.removeItem(at: probe)
+        } catch {
+            try? fileManager.removeItem(at: probe)
+            throw UpdateError.installLocationNotWritable
+        }
+    }
+
+    nonisolated private static func updateResultURL() throws -> URL {
+        let fileManager = FileManager.default
+        let supportRoot = try fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        let directory = supportRoot.appendingPathComponent(
+            "FocusTrace",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        let resultURL = directory.appendingPathComponent(
+            "last-update-result.json"
+        )
+        return resultURL
+    }
+
+    nonisolated private static func consumePendingUpdateResult()
+        -> FocusTraceUpdateResult? {
+        guard let resultURL = try? updateResultURL(),
+              let data = try? Data(contentsOf: resultURL),
+              let result = try? JSONDecoder().decode(
+                FocusTraceUpdateResult.self,
+                from: data
+              ),
+              result.schemaVersion == 1 else {
+            return nil
+        }
+        try? FileManager.default.removeItem(at: resultURL)
+        return result
+    }
+
+    nonisolated private static func failureResult(
+        stage: FocusTraceUpdateStage,
+        error: Error,
+        targetVersion: String? = nil,
+        targetBuild: String? = nil
+    ) -> FocusTraceUpdateResult {
+        FocusTraceUpdateResult(
+            outcome: .failed,
+            stage: stage,
+            failureCode: failureCode(for: error),
+            targetVersion: targetVersion,
+            targetBuild: targetBuild
+        )
+    }
+
+    nonisolated private static func failureCode(
+        for error: Error
+    ) -> FocusTraceUpdateFailureCode {
+        if let updateError = error as? UpdateError {
+            return updateError.failureCode
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet,
+                 .networkConnectionLost,
+                 .cannotFindHost,
+                 .cannotConnectToHost,
+                 .dnsLookupFailed:
+                return .networkUnavailable
+            case .timedOut:
+                return .requestTimedOut
+            default:
+                return .downloadFailed
+            }
+        }
+        return .unknown
     }
 
     nonisolated private static func run(executable: String, arguments: [String]) throws {
@@ -247,8 +397,23 @@ private enum UpdateError: LocalizedError {
     case checksumMismatch
     case bundleMismatch
     case unsupportedInstallLocation
+    case installLocationNotWritable
     case missingUpdater
     case commandFailed(String)
+
+    var failureCode: FocusTraceUpdateFailureCode {
+        switch self {
+        case .invalidManifest: .invalidManifest
+        case .downloadFailed: .downloadFailed
+        case .sizeMismatch: .sizeMismatch
+        case .checksumMismatch: .checksumMismatch
+        case .bundleMismatch: .bundleMismatch
+        case .unsupportedInstallLocation: .unsupportedInstallLocation
+        case .installLocationNotWritable: .installLocationNotWritable
+        case .missingUpdater: .missingUpdater
+        case .commandFailed: .signatureVerificationFailed
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -258,6 +423,7 @@ private enum UpdateError: LocalizedError {
         case .checksumMismatch: "下载文件校验失败"
         case .bundleMismatch: "应用版本或 Bundle ID 与发布清单不一致"
         case .unsupportedInstallLocation: "当前应用不在标准 FocusTrace.app 中"
+        case .installLocationNotWritable: "FocusTrace 所在目录不可写"
         case .missingUpdater: "应用包中缺少更新助手"
         case let .commandFailed(message): "系统校验失败：\(message)"
         }

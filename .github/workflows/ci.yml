@@ -27,3 +27,8 @@ jobs:
         env:
           FOCUSTRACE_NATIVE_TESTING: "1"
         run: ./Scripts/test.sh
+
+      - name: Build and exercise the real updater
+        run: |
+          ./Scripts/build-app.sh
+          ./Scripts/test-update.sh dist/FocusTrace.app --launch

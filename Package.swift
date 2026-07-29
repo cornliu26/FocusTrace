@@ -51,7 +51,10 @@ let package = Package(
             name: "FocusTrace",
             dependencies: ["FocusTraceCore", "FocusTraceMacSupport"]
         ),
-        .executableTarget(name: "FocusTraceUpdater"),
+        .executableTarget(
+            name: "FocusTraceUpdater",
+            dependencies: ["FocusTraceCore"]
+        ),
         .executableTarget(
             name: "FocusTraceReport",
             dependencies: ["FocusTraceCore"]

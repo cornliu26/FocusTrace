@@ -31,3 +31,15 @@
 - 不要提交 `.build`、`dist`、`.focustrace` 或真实 `store.json`。
 
 提交 Pull Request 前请运行测试，并在描述中说明用户结果、功能边界、流程闭环、回归证据和隐私影响。
+
+## 发版
+
+版本号和构建号必须先通过 Pull Request 进入受保护的 `main`。合并并同步本地 `main` 后，只使用：
+
+```bash
+./Scripts/release.sh vX.Y.Z
+```
+
+该命令会拒绝脏工作区、非 `main`、未同步的 `origin/main`、版本不匹配和重复 tag；随后执行完整测试、打包、签名、真实更新替换与回滚验收，再推送 tag。GitHub Release 会先保持草稿，上传后的安装包和更新清单再次验证通过才公开。
+
+不要手工创建 Release、直接上传 `dist/` 产物，或为重试删除历史 tag。

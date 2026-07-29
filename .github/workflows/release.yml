@@ -8,31 +8,82 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: focustrace-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-14
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Select Swift toolchain
         run: sudo xcode-select --switch /Applications/Xcode_16.2.app/Contents/Developer
 
-      - name: Test
+      - name: Verify tag belongs to main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Run unit, regression, privacy, and performance gates
         env:
           FOCUSTRACE_NATIVE_TESTING: "1"
         run: ./Scripts/test.sh
 
-      - name: Package Apple Silicon app
+      - name: Package and verify Apple Silicon update
+        env:
+          FOCUSTRACE_UPDATE_LAUNCH_ACCEPTANCE: "1"
         run: ./Scripts/package-release.sh "$GITHUB_REF_NAME" --skip-tests
 
-      - name: Publish GitHub Release
+      - name: Prepare draft and upload verified assets
+        id: prepare_release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/release/FocusTrace-macOS-arm64.zip#FocusTrace for macOS (Apple Silicon)" \
-            "dist/release/latest.json#FocusTrace update manifest" \
-            --verify-tag \
-            --generate-notes \
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            release_state="$(
+              gh release view "$GITHUB_REF_NAME" \
+                --json isDraft \
+                --jq 'if .isDraft then "draft" else "published" end'
+            )"
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --generate-notes \
+              --title "FocusTrace $GITHUB_REF_NAME"
+            release_state="draft"
+          fi
+
+          echo "state=$release_state" >> "$GITHUB_OUTPUT"
+          if [[ "$release_state" == "draft" ]]; then
+            gh release upload "$GITHUB_REF_NAME" \
+              "dist/release/FocusTrace-macOS-arm64.zip#FocusTrace for macOS (Apple Silicon)" \
+              "dist/release/latest.json#FocusTrace update manifest" \
+              --clobber
+          fi
+
+      - name: Download and verify uploaded assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist/published
+          gh release download "$GITHUB_REF_NAME" --dir dist/published
+          ./Scripts/verify-release-assets.sh \
+            "$GITHUB_REF_NAME" \
+            dist/published/FocusTrace-macOS-arm64.zip \
+            dist/published/latest.json
+
+      - name: Publish verified release
+        if: steps.prepare_release.outputs.state != 'published'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --draft=false \
+            --latest \
             --title "FocusTrace $GITHUB_REF_NAME"

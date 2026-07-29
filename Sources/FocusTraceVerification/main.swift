@@ -4304,7 +4304,13 @@ suite.run("README 首页保持面向用户且技术细节折叠") {
         isDirectory: true
     ).appendingPathComponent("README.md")
     let readme = try String(contentsOf: readmeURL, encoding: .utf8)
-    for heading in ["## 安装", "## 30 秒上手", "## 重要特性", "## 高级特性"] {
+    for heading in [
+        "## 安装",
+        "## 30 秒上手",
+        "## 重要特性",
+        "## 高级特性",
+        "## 反馈问题"
+    ] {
         try expect(readme.contains(heading), "README 缺少用户入口：\(heading)")
     }
     try expect(
@@ -4445,6 +4451,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     for contractID in [
         "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
         "SPACE-02", "DATA-02", "PRIV-01", "REVIEW-07", "REVIEW-09",
+        "RELEASE-01", "RELEASE-02", "RELEASE-03",
         "PERF-01", "PERF-04", "PERF-07", "PERF-09"
     ] {
         try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
@@ -4493,6 +4500,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
         "attentionDashboardDoesNotEscalateToolCollaborationAsFragmentation",
         "attentionDashboardEvaluatesTrainingAcrossDaysInRollingFiveSessions",
         "attentionDashboardDoesNotEscalateFragmentationWithoutAConsequence",
+        "updateFailureFeedbackUsesOnlySafeGitHubMetadata",
         "automationJSONIsStructuredAndAggregateOnly",
         "automationReportV7CarriesTheSameAggregateAttentionTrendAsTheApp",
         "codexReviewDecisionBriefRemainsShortAndCompatible",
@@ -4517,7 +4525,71 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let ci = try contents(".github/workflows/ci.yml")
     try expect(ci.contains("pull_request:"), "持续集成必须覆盖 Pull Request")
-    try expect(ci.contains("./Scripts/test.sh"), "持续集成必须运行完整质量门禁")
+    try expect(
+        ci.contains("./Scripts/test.sh")
+            && ci.contains("./Scripts/build-app.sh")
+            && ci.contains("./Scripts/test-update.sh"),
+        "持续集成必须运行完整质量门禁和真实更新验收"
+    )
+
+    let releaseWorkflow = try contents(".github/workflows/release.yml")
+    let releaseScript = try contents("Scripts/release.sh")
+    let packageScript = try contents("Scripts/package-release.sh")
+    let updateAcceptance = try contents("Scripts/test-update.sh")
+    let releaseVerification = try contents(
+        "Scripts/verify-release-assets.sh"
+    )
+    try expect(
+        releaseWorkflow.contains("Verify tag belongs to main")
+            && releaseWorkflow.contains("--draft")
+            && releaseWorkflow.contains("gh release upload")
+            && releaseWorkflow.contains("gh release download")
+            && releaseWorkflow.contains("verify-release-assets.sh")
+            && releaseWorkflow.contains("--draft=false")
+            && releaseWorkflow.contains("cancel-in-progress: false"),
+        "GitHub 发版必须先草稿上传和复验，再公开且不取消同 tag 的在途发布"
+    )
+    try expect(
+        releaseScript.contains("working tree must be clean")
+            && releaseScript.contains("local main is not identical to origin/main")
+            && releaseScript.contains("package-release.sh")
+            && releaseScript.contains("git tag -a")
+            && releaseScript.contains("git push origin"),
+        "本地发版入口必须拒绝未审查或未同步源码，并只在完整预检后推 tag"
+    )
+    try expect(
+        packageScript.contains("test-update.sh")
+            && packageScript.contains("verify-release-assets.sh")
+            && updateAcceptance.contains("Replacing a writable old app")
+            && updateAcceptance.contains("--launch-probe")
+            && updateAcceptance.contains("installLocationNotWritable")
+            && releaseVerification.contains("codesign --verify --deep --strict"),
+        "打包必须覆盖真实替换、失败回滚、清单、哈希、版本和签名验收"
+    )
+
+    let updateManager = try contents("Sources/FocusTrace/UpdateManager.swift")
+    let updater = try contents("Sources/FocusTraceUpdater/main.swift")
+    let settings = try contents("Sources/FocusTrace/Views/SettingsView.swift")
+    let updateIssue = try contents(
+        ".github/ISSUE_TEMPLATE/update_failure.yml"
+    )
+    try expect(
+        updateManager.contains("verifyWritableInstallRoot")
+            && updateManager.contains("consumePendingUpdateResult")
+            && updateManager.contains("last-update-result.json")
+            && updater.contains("try? updater.launchTarget()")
+            && updater.contains("--update-launch-probe")
+            && updater.contains("FocusTraceUpdateResult")
+            && settings.contains("报告更新问题")
+            && settings.contains("不会上传行为记录、工作流名称或应用使用数据"),
+        "更新失败必须在退出前预检，并在 helper 失败后恢复旧版和可解释反馈"
+    )
+    try expect(
+        updateIssue.contains("id: diagnostic")
+            && updateIssue.contains("不会上传活动记录或工作内容")
+            && updateIssue.contains("隐私确认"),
+        "GitHub 更新反馈表必须只接收安全诊断并明确隐私边界"
+    )
 
     let notificationRouter = try contents(
         "Sources/FocusTrace/NotificationRouter.swift"
@@ -4719,6 +4791,60 @@ suite.run("更新清单按语义版本和构建号判断") {
     try expect(
         FocusTraceSemanticVersion("1.10.0")! > FocusTraceSemanticVersion("1.9.9")!,
         "语义版本不应按字符串排序"
+    )
+}
+
+suite.run("更新失败反馈只使用安全 GitHub 元数据") {
+    let result = FocusTraceUpdateResult(
+        outcome: .failed,
+        stage: .replacingApplication,
+        failureCode: .installLocationNotWritable,
+        targetVersion: "0.5.0",
+        targetBuild: "11"
+    )
+    guard let url = result.issueURL(
+        installedVersion: "0.4.0",
+        installedBuild: "10",
+        systemVersion: "macOS 15.5"
+    ) else {
+        throw VerificationFailure(
+            message: "失败结果必须生成 GitHub 反馈链接"
+        )
+    }
+    guard let components = URLComponents(
+        url: url,
+        resolvingAgainstBaseURL: false
+    ) else {
+        throw VerificationFailure(message: "反馈链接必须可以解析")
+    }
+    let query = Dictionary(
+        uniqueKeysWithValues: (components.queryItems ?? []).compactMap {
+            item in item.value.map { (item.name, $0) }
+        }
+    )
+    try expect(
+        components.scheme == "https"
+            && components.host == "github.com"
+            && components.path == "/cornliu26/FocusTrace/issues/new",
+        "反馈必须只打开公开 FocusTrace GitHub Issues"
+    )
+    try expect(
+        query["template"] == "update_failure.yml"
+            && query["version"] == "0.4.0 (10)"
+            && query["system"] == "macOS 15.5"
+            && query["diagnostic"]?.contains(
+                "Stage: replacingApplication"
+            ) == true
+            && query["diagnostic"]?.contains(
+                "Code: installLocationNotWritable"
+            ) == true,
+        "反馈必须预填版本、系统、阶段和错误代码"
+    )
+    try expect(
+        !url.absoluteString.contains("/Users/")
+            && !url.absoluteString.contains("workflow")
+            && !url.absoluteString.contains("activity"),
+        "反馈链接不得携带用户路径或行为上下文"
     )
 }
 
