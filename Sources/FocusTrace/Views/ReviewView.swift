@@ -1012,15 +1012,25 @@ private struct AttentionTrendChart: View {
             let spread = max(1, maximum - minimum)
             let lower = max(0, minimum - spread * 0.12)
             let upper = maximum + spread * 0.12
+            let plotInset = min(
+                CGFloat(FocusTraceAttentionTrendLayout.plotInset),
+                min(size.width, size.height) / 2
+            )
+            let plotWidth = max(0, size.width - plotInset * 2)
+            let plotHeight = max(0, size.height - plotInset * 2)
 
             func x(_ index: Int) -> CGFloat {
-                guard trend.points.count > 1 else { return size.width / 2 }
-                return CGFloat(index) / CGFloat(trend.points.count - 1)
-                    * size.width
+                CGFloat(
+                    FocusTraceAttentionTrendLayout.pointX(
+                        index: index,
+                        pointCount: trend.points.count,
+                        availableWidth: Double(size.width)
+                    )
+                )
             }
             func y(_ value: Double) -> CGFloat {
                 let normalized = (value - lower) / max(0.0001, upper - lower)
-                return size.height * CGFloat(1 - normalized)
+                return plotInset + plotHeight * CGFloat(1 - normalized)
             }
 
             if let typicalLower = trend.typicalLowerBound,
@@ -1028,9 +1038,9 @@ private struct AttentionTrendChart: View {
                 let top = y(max(typicalLower, typicalUpper))
                 let bottom = y(min(typicalLower, typicalUpper))
                 let rect = CGRect(
-                    x: 0,
+                    x: plotInset,
                     y: min(top, bottom),
-                    width: size.width,
+                    width: plotWidth,
                     height: max(3, abs(bottom - top))
                 )
                 context.fill(
@@ -1041,9 +1051,14 @@ private struct AttentionTrendChart: View {
 
             if let baseline = trend.baselineMedian {
                 var baselinePath = Path()
-                baselinePath.move(to: CGPoint(x: 0, y: y(baseline)))
+                baselinePath.move(
+                    to: CGPoint(x: plotInset, y: y(baseline))
+                )
                 baselinePath.addLine(
-                    to: CGPoint(x: size.width, y: y(baseline))
+                    to: CGPoint(
+                        x: size.width - plotInset,
+                        y: y(baseline)
+                    )
                 )
                 context.stroke(
                     baselinePath,

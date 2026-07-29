@@ -351,6 +351,39 @@ func timelineLabelsAndEndpointHoursStayInsideThePlotAtNarrowWidths() {
 }
 
 @Test
+func attentionTrendPointsStayInsidePlotBoundsAtNarrowWidths() {
+    let plotWidth = 320.0
+    let pointCount = 10
+    let points = (0..<pointCount).map {
+        FocusTraceAttentionTrendLayout.pointX(
+            index: $0,
+            pointCount: pointCount,
+            availableWidth: plotWidth
+        )
+    }
+    #expect(points.first == FocusTraceAttentionTrendLayout.plotInset)
+    #expect(
+        points.last
+            == plotWidth - FocusTraceAttentionTrendLayout.plotInset
+    )
+    #expect(
+        FocusTraceAttentionTrendLayout.plotInset
+            > FocusTraceAttentionTrendLayout.pointRadius
+    )
+    #expect(points == points.sorted())
+
+    let veryNarrowWidth = 6.0
+    let narrowPoints = (0..<pointCount).map {
+        FocusTraceAttentionTrendLayout.pointX(
+            index: $0,
+            pointCount: pointCount,
+            availableWidth: veryNarrowWidth
+        )
+    }
+    #expect(narrowPoints.allSatisfy { $0 >= 0 && $0 <= veryNarrowWidth })
+}
+
+@Test
 func disclosureButtonsExpandHitAreaWithoutChangingLayout() {
     #expect(FocusTraceDisclosureInteraction.hitTargetSize == 36)
     let opened = FocusTraceDisclosureInteraction.stateAfterHeaderPress(

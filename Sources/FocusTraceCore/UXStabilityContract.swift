@@ -144,6 +144,28 @@ public enum FocusTraceTimelineLayout {
     }
 }
 
+/// Keeps trend strokes and point markers inside their Canvas instead of
+/// letting the first or final marker be clipped at a neighboring text column.
+public enum FocusTraceAttentionTrendLayout {
+    public static let plotInset = 5.0
+    public static let pointRadius = 3.5
+
+    public static func pointX(
+        index: Int,
+        pointCount: Int,
+        availableWidth: Double
+    ) -> Double {
+        guard availableWidth > 0 else { return 0 }
+        guard pointCount > 1 else { return availableWidth / 2 }
+        let finalIndex = pointCount - 1
+        let clampedIndex = min(max(0, index), finalIndex)
+        let inset = min(plotInset, availableWidth / 2)
+        let usableWidth = max(0, availableWidth - inset * 2)
+        return inset
+            + usableWidth * Double(clampedIndex) / Double(finalIndex)
+    }
+}
+
 /// The app has one durable work context, so every entry point must reuse the
 /// same main window instead of creating visual copies of that context.
 public enum FocusTraceWindowContract {

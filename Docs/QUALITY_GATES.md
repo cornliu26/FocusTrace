@@ -40,6 +40,7 @@
 | UX-07 | “数据与保留”固定按保留、导出、删除分为三条对齐设置行；删除行只显示一个“删除数据…”入口，再在二次确认中选择按日删除或清空全部；工作流定义继续保留 | `settingsDataControlsUseOneDeletionEntryWithTwoConfirmedScopes`、仓库呈现回归 |
 | UX-08 | 时间轴四字行标题在窄窗口保持单行完整可读，首尾时间刻度的文字中心始终收在绘图区安全边距内，不贴卡片边缘 | `timelineLabelsAndEndpointHoursStayInsideThePlotAtNarrowWidths`、仓库呈现回归 |
 | UX-09 | 首次使用只有工作流名称一个必填输入；创建后在同一流程继续说明状态栏绑定、正常记录和回顾出口，中断后从已创建工作流继续。可选教学与 README 固定使用“创建 → 绑定 → 工作 → 回顾”路径 | `gettingStartedFollowsCreateBindWorkReviewWithoutAddingInputs`、仓库首次使用与文档回归 |
+| UX-10 | 注意力趋势的折线、典型区间与首尾数据点必须完整收在各自绘图区安全边距内，不得被裁切或溢入右侧结论列 | `attentionTrendPointsStayInsidePlotBoundsAtNarrowWidths`、仓库呈现回归 |
 | REQ-01 | 新需求只进入收件箱，不自动绑定、切换或开始工作流 | `requirementCaptureStaysInInboxUntilExplicitlyPlanned` |
 | REQ-02 | 截止日期、重要程度和工作流归属彼此独立；旧版模糊安排不推断日期 | `requirementPlanningSeparatesDeadlineImportanceAndWorkflow`、`requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity` |
 | REQ-03 | 需求按逾期、今天、未来、无日期排序；到期提醒只发送一次且不在通知中显示需求标题 | `requirementQueueUsesUrgencyThenImportanceAndPreservesLegacyAmbiguity`、`requirementDueReminderIsOneShotAndOnlyForPlannedOpenWork`、仓库隐私回归 |

@@ -507,6 +507,25 @@ suite.run("已优化的日常交互契约保持稳定") {
             && finalHourX < narrowPlotWidth,
         "窄窗口时间轴必须完整显示四字行标题，并把首尾时间收在绘图区内"
     )
+    let trendPointCount = 10
+    let firstTrendX = FocusTraceAttentionTrendLayout.pointX(
+        index: 0,
+        pointCount: trendPointCount,
+        availableWidth: narrowPlotWidth
+    )
+    let finalTrendX = FocusTraceAttentionTrendLayout.pointX(
+        index: trendPointCount - 1,
+        pointCount: trendPointCount,
+        availableWidth: narrowPlotWidth
+    )
+    try expect(
+        FocusTraceAttentionTrendLayout.plotInset
+            > FocusTraceAttentionTrendLayout.pointRadius
+            && firstTrendX >= FocusTraceAttentionTrendLayout.plotInset
+            && finalTrendX
+                <= narrowPlotWidth - FocusTraceAttentionTrendLayout.plotInset,
+        "注意力趋势的首尾数据点必须完整收在绘图区，不能溢入说明列"
+    )
 }
 
 suite.run("新手教学沿创建绑定工作回顾形成可恢复闭环") {
@@ -4417,7 +4436,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let quality = try contents("Docs/QUALITY_GATES.md")
     for contractID in [
-        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
+        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
         "SPACE-02", "DATA-02", "PRIV-01", "REVIEW-07", "REVIEW-09",
         "PERF-01", "PERF-04", "PERF-07", "PERF-09"
     ] {
@@ -4599,6 +4618,9 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     try expect(
         reviewView.contains("注意力趋势")
             && reviewView.contains("AttentionTrendCard")
+            && reviewView.contains(
+                "FocusTraceAttentionTrendLayout.pointX"
+            )
             && reviewView.contains("下一步单项实验")
             && reviewView.contains("进行中的日期只显示为空心点")
             && reviewView.contains("不会抽样或丢弃原始时间轴")
@@ -4609,7 +4631,7 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
             && dashboardEngine.contains("不直接等于分心")
             && dashboardEngine.contains("trendWorkdayCount = 10")
             && dashboardEngine.contains("未结束日期不参与趋势结论"),
-        "回顾必须用十日五维趋势承接唯一问题、单项实验和动态分析来源"
+        "回顾必须用十日五维趋势承接唯一问题、单项实验和动态分析来源，首尾数据点不得溢出绘图区"
     )
     try expect(
         applicationState.contains("private var reviewAnalysisCache")
