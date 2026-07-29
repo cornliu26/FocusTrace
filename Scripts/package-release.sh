@@ -43,6 +43,11 @@ if [[ "$RUN_TESTS" == true ]]; then
 fi
 
 FOCUS_TRACE_BUILD_ARCH=arm64 "$SCRIPT_DIR/build-app.sh"
+UPDATE_ACCEPTANCE_ARGS=("$PROJECT_ROOT/dist/FocusTrace.app")
+if [[ "${FOCUSTRACE_UPDATE_LAUNCH_ACCEPTANCE:-0}" == "1" ]]; then
+  UPDATE_ACCEPTANCE_ARGS+=(--launch)
+fi
+"$SCRIPT_DIR/test-update.sh" "${UPDATE_ACCEPTANCE_ARGS[@]}"
 
 RELEASE_DIR="$PROJECT_ROOT/dist/release"
 ARCHIVE="$RELEASE_DIR/FocusTrace-macOS-arm64.zip"
@@ -76,6 +81,8 @@ pathlib.Path(manifest).write_text(
     encoding="utf-8",
 )
 PY
+
+"$SCRIPT_DIR/verify-release-assets.sh" "$TAG" "$ARCHIVE" "$MANIFEST"
 
 echo "Release archive: $ARCHIVE"
 echo "Update manifest: $MANIFEST"

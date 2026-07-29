@@ -181,6 +181,24 @@ struct SettingsView: View {
                                 )
                                 .textSelection(.enabled)
                         }
+                        if updateManager.state == .failed {
+                            HStack(spacing: 10) {
+                                Link(
+                                    "手动下载最新版",
+                                    destination: updateManager.manualDownloadURL
+                                )
+                                .buttonStyle(.bordered)
+                                if let feedbackURL = updateManager.feedbackURL {
+                                    Button("报告更新问题") {
+                                        NSWorkspace.shared.open(feedbackURL)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            Text("反馈只会预填版本、macOS、失败阶段和错误代码；不会上传行为记录、工作流名称或应用使用数据。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         Text("更新从公开 GitHub Release 下载，并在替换前校验文件哈希、版本和代码签名。")
                             .font(.caption)
                             .foregroundStyle(.secondary)

@@ -18,6 +18,8 @@
   <a href="#重要特性">重要特性</a>
   ·
   <a href="#高级特性">高级特性</a>
+  ·
+  <a href="https://github.com/cornliu26/FocusTrace/issues/new/choose">反馈问题</a>
 </p>
 
 ---
@@ -127,6 +129,14 @@ Codex 只读取 FocusTrace 生成的本地聚合报告。它优先复用 App 中
 ### 切换负荷实践
 
 FocusTrace 不生成“脑负荷分数”。它只在个人基线、切换后的恢复成本和主观难度至少两类证据收敛时，指出一项值得验证的切换问题。研究依据、全部 trace 的用途和一周实践方法见 [《从“切了多少次”到“这次切换是否值得”》](./Docs/SWITCHING_LOAD_PRACTICE.md)。
+
+## 反馈问题
+
+在 GitHub 的 [反馈入口](https://github.com/cornliu26/FocusTrace/issues/new/choose) 选择“问题反馈”即可，不需要单独的反馈账号或后台服务。
+
+如果软件更新失败，“设置与数据 → 软件更新”会显示“报告更新问题”。它只会预填 FocusTrace 版本、macOS 版本、失败阶段和错误代码；不会上传活动记录、工作流名称、需求内容或应用使用数据。最终提交前，你仍可以检查和修改全部内容。
+
+如果旧版本在更新后没有重新打开，请从 [最新版本页](https://github.com/cornliu26/FocusTrace/releases/latest) 手动覆盖安装一次；之后的版本会在失败时保留并重新打开旧版。
 
 ## 隐私边界
 

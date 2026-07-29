@@ -1,0 +1,46 @@
+name: 问题反馈
+description: 报告可复现的 FocusTrace 功能或界面问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。请不要粘贴 FocusTrace 原始活动记录、工作流名称、需求内容、窗口标题、网址或聊天内容。
+  - type: textarea
+    id: problem
+    attributes:
+      label: 发生了什么
+      description: 请说明预期结果和实际结果；截图前请遮挡私人内容。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 如何复现
+      placeholder: |
+        1. 打开……
+        2. 点击……
+        3. 看到……
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: FocusTrace 版本
+      placeholder: 例如 0.5.0 (11)
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: macOS 版本
+      placeholder: 例如 macOS 15.5
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 隐私确认
+      options:
+        - label: 我确认没有提交活动记录、工作流名称、需求内容或其他私人工作信息
+          required: true

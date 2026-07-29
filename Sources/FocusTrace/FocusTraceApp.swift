@@ -16,12 +16,19 @@ struct FocusTraceApp: App {
     @StateObject private var updateManager: UpdateManager
     private let store: FocusTraceStore
     private let isSpaceAnchorProbe: Bool
+    private let isUpdateLaunchProbe: Bool
 
     init() {
         let isSpaceAnchorProbe = CommandLine.arguments.contains("--space-anchor-probe")
+        let isUpdateLaunchProbe = CommandLine.arguments.contains(
+            "--update-launch-probe"
+        )
         self.isSpaceAnchorProbe = isSpaceAnchorProbe
+        self.isUpdateLaunchProbe = isUpdateLaunchProbe
         do {
-            let store = try FocusTraceStore(inMemory: isSpaceAnchorProbe)
+            let store = try FocusTraceStore(
+                inMemory: isSpaceAnchorProbe || isUpdateLaunchProbe
+            )
             self.store = store
             _state = StateObject(wrappedValue: ApplicationState(store: store))
             _updateManager = StateObject(wrappedValue: UpdateManager())
@@ -34,6 +41,9 @@ struct FocusTraceApp: App {
         Window("FocusTrace", id: FocusTraceWindowContract.mainWindowID) {
             if isSpaceAnchorProbe {
                 SpaceAnchorProbeView()
+                    .frame(width: 1, height: 1)
+            } else if isUpdateLaunchProbe {
+                Color.clear
                     .frame(width: 1, height: 1)
             } else {
                 RootView(state: state)

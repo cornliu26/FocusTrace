@@ -4203,3 +4203,56 @@ func releaseManifestUsesSemanticVersionAndBuildOrdering() throws {
     #expect(newerBuild.isNewer(thanVersion: "0.2.0", build: "3"))
     #expect(FocusTraceSemanticVersion("1.10.0")! > FocusTraceSemanticVersion("1.9.9")!)
 }
+
+@Test
+func updateFailureFeedbackUsesOnlySafeGitHubMetadata() throws {
+    let result = FocusTraceUpdateResult(
+        outcome: .failed,
+        stage: .replacingApplication,
+        failureCode: .installLocationNotWritable,
+        targetVersion: "0.5.0",
+        targetBuild: "11"
+    )
+    let url = try #require(
+        result.issueURL(
+            installedVersion: "0.4.0",
+            installedBuild: "10",
+            systemVersion: "macOS 15.5"
+        )
+    )
+    let components = try #require(
+        URLComponents(url: url, resolvingAgainstBaseURL: false)
+    )
+    let query = Dictionary(
+        uniqueKeysWithValues: (components.queryItems ?? []).compactMap {
+            item in item.value.map { (item.name, $0) }
+        }
+    )
+
+    #expect(components.scheme == "https")
+    #expect(components.host == "github.com")
+    #expect(components.path == "/cornliu26/FocusTrace/issues/new")
+    #expect(query["template"] == "update_failure.yml")
+    #expect(query["version"] == "0.4.0 (10)")
+    #expect(query["system"] == "macOS 15.5")
+    #expect(query["diagnostic"]?.contains("Stage: replacingApplication") == true)
+    #expect(query["diagnostic"]?.contains("Code: installLocationNotWritable") == true)
+    #expect(!url.absoluteString.contains("/Users/"))
+    #expect(!url.absoluteString.contains("workflow"))
+    #expect(!url.absoluteString.contains("activity"))
+
+    let encoded = try JSONEncoder().encode(result)
+    #expect(try JSONDecoder().decode(FocusTraceUpdateResult.self, from: encoded) == result)
+    #expect(
+        FocusTraceUpdateResult(
+            outcome: .succeeded,
+            stage: .completed,
+            targetVersion: "0.5.0",
+            targetBuild: "11"
+        ).issueURL(
+            installedVersion: "0.5.0",
+            installedBuild: "11",
+            systemVersion: "macOS 15.5"
+        ) == nil
+    )
+}
