@@ -521,10 +521,12 @@ suite.run("已优化的日常交互契约保持稳定") {
     try expect(
         FocusTraceAttentionTrendLayout.plotInset
             > FocusTraceAttentionTrendLayout.pointRadius
+            && FocusTraceAttentionTrendLayout.shouldPlot(isPartial: false)
+            && !FocusTraceAttentionTrendLayout.shouldPlot(isPartial: true)
             && firstTrendX >= FocusTraceAttentionTrendLayout.plotInset
             && finalTrendX
                 <= narrowPlotWidth - FocusTraceAttentionTrendLayout.plotInset,
-        "注意力趋势的首尾数据点必须完整收在绘图区，不能溢入说明列"
+        "注意力趋势只绘制完整日期，首尾数据点必须收在绘图区"
     )
 }
 
@@ -4701,7 +4703,10 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
                 "FocusTraceAttentionTrendLayout.pointX"
             )
             && reviewView.contains("下一步单项实验")
-            && reviewView.contains("进行中的日期只显示为空心点")
+            && reviewView.contains("今天仍在进行，暂不绘制到趋势图")
+            && reviewView.contains(
+                "FocusTraceAttentionTrendLayout.shouldPlot"
+            )
             && reviewView.contains("不会抽样或丢弃原始时间轴")
             && !reviewView.contains("LegacyAttentionDashboardCard")
             && dashboardEngine.contains("高频段")

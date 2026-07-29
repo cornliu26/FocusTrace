@@ -4256,3 +4256,9 @@ func updateFailureFeedbackUsesOnlySafeGitHubMetadata() throws {
         ) == nil
     )
 }
+
+@Test
+func attentionTrendLayoutOmitsPartialDaysFromThePlot() {
+    #expect(FocusTraceAttentionTrendLayout.shouldPlot(isPartial: false))
+    #expect(!FocusTraceAttentionTrendLayout.shouldPlot(isPartial: true))
+}
