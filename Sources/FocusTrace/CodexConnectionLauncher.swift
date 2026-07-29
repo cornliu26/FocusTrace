@@ -18,17 +18,6 @@ final class CodexConnectionLauncher: ObservableObject {
     }
 
     @Published private(set) var status: Status = .idle
-    private var didRefreshExistingWorkspace = false
-
-    func refreshExistingWorkspaceIfPresent() {
-        guard !didRefreshExistingWorkspace else { return }
-        didRefreshExistingWorkspace = true
-        do {
-            try CodexWorkspaceMaintenance.refreshExistingWorkspaceIfPresent()
-        } catch {
-            status = .failed("Codex 复盘协议更新失败：\(error.localizedDescription)")
-        }
-    }
 
     func connect() {
         guard status != .preparing else { return }
@@ -190,11 +179,25 @@ private struct CodexWorkspaceInstaller {
         try makeExecutable(reviewInstallerURL)
     }
 
-    private func write(_ text: String, to destination: URL) throws {
+    @discardableResult
+    private func write(_ text: String, to destination: URL) throws -> Bool {
         guard let data = text.data(using: .utf8) else {
             throw ConnectionError.couldNotEncodeWorkspace
         }
+        return try write(data, to: destination)
+    }
+
+    @discardableResult
+    private func write(_ data: Data, to destination: URL) throws -> Bool {
+        let existingData = try? Data(contentsOf: destination)
+        guard CodexWorkspaceRefreshPolicy.shouldReplace(
+            existingData: existingData,
+            replacementData: data
+        ) else {
+            return false
+        }
         try data.write(to: destination, options: .atomic)
+        return true
     }
 
     private func installBundledFile(
@@ -214,7 +217,7 @@ private struct CodexWorkspaceInstaller {
             )
         }
         let data = try Data(contentsOf: bundledURL)
-        try data.write(to: destination, options: .atomic)
+        try write(data, to: destination)
     }
 
     private func developmentToolURL(
@@ -233,6 +236,9 @@ private struct CodexWorkspaceInstaller {
     }
 
     private func makeExecutable(_ url: URL) throws {
+        guard !fileManager.isExecutableFile(atPath: url.path) else {
+            return
+        }
         try fileManager.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: url.path

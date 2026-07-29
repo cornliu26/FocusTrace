@@ -29,7 +29,6 @@ struct ReviewView: View {
         }
         .focusTraceScreen()
         .task(id: state.selectedDate) {
-            codexLauncher.refreshExistingWorkspaceIfPresent()
             await codexBridge.observe(for: state.selectedDate)
         }
     }
