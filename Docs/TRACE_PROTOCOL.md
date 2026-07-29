@@ -48,7 +48,7 @@ FocusTrace 不从跳转次数诊断注意力，也不把等待 Agent、到达检
 
 ## 给 Codex / LLM 的聚合协议
 
-`Reports/latest.json` 的报告协议为 `schemaVersion: 5`，并以
+`Reports/latest.json` 的报告协议为 `schemaVersion: 7`，并以
 `reportCivilDate` 显式保留用户选择的 `yyyy-MM-dd` 日期，避免 UTC 编码
 跨日。它不会输出原生逐条跳转，而只输出：
 
@@ -65,18 +65,23 @@ FocusTrace 不从跳转次数诊断注意力，也不把等待 Agent、到达检
 - `frequentSwitchEpisodes`、`interventionPrompts`、`assessedInterventionPrompts`、`postPromptQuietRate`：高频切换段、实际确认、完整观察窗和确认后 10 分钟稳定率；
 - `routes`：有界的起点—落点聚合，含原因、结果、时段、目的工作流停留中位数和 30 分钟内返回数。
 - `observationPlan`：固定采集边界、四类分析配额、当天与近 7 日来源，以及保守的提醒策略建议。
+- `switchingLoad`：不生成脑负荷分数，而是联合个人基线、恢复后果和主观难度输出行为切换负荷状态；`metrics.activeFiveMinuteWindows` 与 `highFragmentationWindows` 共同给出高碎片窗口的样本分母和计数；`traceCoverage` 逐项声明每类 trace 是已使用、无样本还是被质量门禁拦截。
+- `attentionTrend`：最近 10 个工作日的五个独立行为趋势、可靠样本数、一个主要问题和由同一证据生成的单项实验；最近 3 个可靠日与此前最多 7 日比较，进行中的日期只展示、不参与方向或主要问题。
 
 原生跳转和两秒内的兼容标记只计一次。报告不包含 UUID、逐事件时间戳、原始应用行、Bundle ID、窗口标题、URL、输入内容、需求来源或返回点文字。
 `timedOut + unstructured` 在报告中只显示为“超时 / 未说明”，不能解释成用户没有计划或发生了分心。
 
 `observationPlan.allocations` 是分析精力分配，不是原始事件抽样率。FocusTrace 不会因为某天的复盘结论而少记一类应用事件，或自动扩大到窗口标题、URL、输入内容等敏感数据。
 
+App 与 Codex 共用 `attentionTrend` 的连续工作、碎片化、切换边界、恢复闭环和训练反应五个纵向维度。每个维度独立门禁；只有恢复后果或两个维度收敛时才升级一个主要问题，训练反馈按跨日滚动 5 次计算。五个维度不会合成为总分。
+
 ## LLM 决策顺序
 
-1. 先检查 `dataQuality.isReliableForBehavior`；
-2. 再检查 `dataSource`、`unresolvedNavigations`、
+1. 先检查 `attentionTrend`；只要结论不是 `calibrating` 且存在可靠趋势，就沿用它的结论、证据与下一步。`stable` 或 `improving` 时不得从低层当天信号另造问题；
+2. 若没有可靠纵向结论，再检查 `dataQuality.isReliableForBehavior`；
+3. 再检查 `dataSource`、`unresolvedNavigations`、
    `explicitReasonCoverage` 和干预效果，决定证据是否足以解释跳转以及确认是否值得继续；
-3. 只选择一条同时具备路线、原因和后果证据的问题；
-4. 一次只改变一个交接动作，并在下一工作日检查同一路线的同一指标。
+4. 只选择一条同时具备路线、原因和后果证据的问题；
+5. 一次只改变一个交接动作，并在下一工作日检查同一路线的同一指标。
 
 数据不足时修复记录质量，不猜测注意力。任何建议都不得自动修改训练计划、允许应用、通知或工作流绑定。

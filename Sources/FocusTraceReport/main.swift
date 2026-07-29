@@ -100,7 +100,7 @@ private func previousIssuedReport(
         .compactMap { url -> AutomationReportArtifact? in
             guard let data = try? Data(contentsOf: url),
                   let report = try? decoder.decode(AutomationReportArtifact.self, from: data),
-                  (2...5).contains(report.schemaVersion),
+                  (2...7).contains(report.schemaVersion),
                   report.reportDate < cutoff else { return nil }
             return report
         }
@@ -122,8 +122,20 @@ private struct FocusTraceReportCommand {
                 reportDate: options.reportDate,
                 previousIssuedReport: previousReport
             )
-            let markdown = AutomationReportEngine.markdown(for: report)
-            let json = try AutomationReportEngine.jsonData(for: report)
+            let attentionTrend = AutomationReportEngine.makeAttentionDashboard(
+                snapshot: snapshot,
+                through: options.reportDate,
+                generatedAt: report.generatedAt,
+                currentReport: report
+            )
+            let markdown = AutomationReportEngine.markdown(
+                for: report,
+                attentionTrend: attentionTrend
+            )
+            let json = try AutomationReportEngine.jsonData(
+                for: report,
+                attentionTrend: attentionTrend
+            )
 
             try FileManager.default.createDirectory(
                 at: options.outputDirectory,

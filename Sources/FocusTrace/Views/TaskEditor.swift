@@ -4,7 +4,6 @@ import FocusTraceCore
 struct TaskEditorSheet: View {
     @ObservedObject var state: ApplicationState
     let editingTask: FocusTaskModel?
-    let bindCurrentSpaceOnCreate: Bool
     @Environment(\.dismiss) private var dismiss
 
     @State private var title: String
@@ -20,12 +19,10 @@ struct TaskEditorSheet: View {
 
     init(
         state: ApplicationState,
-        editingTask: FocusTaskModel? = nil,
-        bindCurrentSpaceOnCreate: Bool = false
+        editingTask: FocusTaskModel? = nil
     ) {
         self.state = state
         self.editingTask = editingTask
-        self.bindCurrentSpaceOnCreate = bindCurrentSpaceOnCreate
         _title = State(initialValue: editingTask?.title ?? "")
         _outcome = State(initialValue: editingTask?.expectedOutcome ?? "")
         _selectedApps = State(initialValue: Set(editingTask?.allowedBundleIDs ?? []))
@@ -117,19 +114,11 @@ struct TaskEditorSheet: View {
                             allowedBundleIDs: selectedApps
                         )
                     } else {
-                        if bindCurrentSpaceOnCreate {
-                            didSave = state.createWorkflowAndBindCurrentSpace(
-                                title: title,
-                                expectedOutcome: outcome,
-                                allowedBundleIDs: selectedApps
-                            )
-                        } else {
-                            didSave = state.createTask(
-                                title: title,
-                                expectedOutcome: outcome,
-                                allowedBundleIDs: selectedApps
-                            )
-                        }
+                        didSave = state.createTask(
+                            title: title,
+                            expectedOutcome: outcome,
+                            allowedBundleIDs: selectedApps
+                        )
                     }
                     if didSave { dismiss() }
                 }
@@ -222,15 +211,11 @@ struct TaskSwitcherSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(state.isSpaceWorkflowModeEnabled ? "绑定当前桌面到工作流" : "切换工作流")
+            Text("切换工作流")
                 .font(.title2.bold())
             List(state.activeTasks) { task in
                 Button {
-                    if state.isSpaceWorkflowModeEnabled {
-                        state.bindCurrentSpace(to: task.id)
-                    } else {
-                        state.switchTask(to: task.id)
-                    }
+                    state.switchTask(to: task.id)
                     dismiss()
                 } label: {
                     HStack {
@@ -266,10 +251,7 @@ struct TaskSwitcherSheet: View {
         .focusTraceScreen()
         .focusTraceVisualSystem()
         .sheet(isPresented: $showingNewTask) {
-            TaskEditorSheet(
-                state: state,
-                bindCurrentSpaceOnCreate: state.currentSpaceWorkflowID == nil
-            )
+            TaskEditorSheet(state: state)
         }
     }
 }
@@ -303,7 +285,7 @@ struct TaskParkingSheet: View {
                 Image(systemName: "bookmark.circle.fill")
                     .font(.title2)
                     .foregroundStyle(FocusTraceTheme.mint)
-                Text("当 Agent、编译或测试还在运行，而你想先做别的事时，用这里记下“回来后立刻做的第一步”。它不是工作总结，也不会把文字交给 Codex。")
+                Text("当 Agent、编译、测试或临时消息让你想先做别的事时，用这里记下“回来后立刻做的第一步”。它不是工作总结，也不会把文字交给 Codex。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

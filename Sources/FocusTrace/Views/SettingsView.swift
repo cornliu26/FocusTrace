@@ -5,8 +5,7 @@ struct SettingsView: View {
     @ObservedObject var state: ApplicationState
     @ObservedObject private var preferences: AppPreferences
     @EnvironmentObject private var updateManager: UpdateManager
-    @State private var showingDeleteDayConfirmation = false
-    @State private var showingDeleteAllConfirmation = false
+    @State private var showingDeletionScopeConfirmation = false
 
     init(state: ApplicationState) {
         self.state = state
@@ -76,15 +75,11 @@ struct SettingsView: View {
                     title: "数据与保留",
                     systemImage: "externaldrive"
                 ) {
-                    VStack(alignment: .leading, spacing: 13) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("自动保留行为数据")
-                                Text("到期数据会在本机自动清理")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
+                    VStack(spacing: 0) {
+                        SettingsControlRow(
+                            title: "自动保留行为数据",
+                            detail: "到期数据会在本机自动清理"
+                        ) {
                             Menu("\(preferences.retentionDays) 天") {
                                 ForEach([30, 90, 365], id: \.self) { days in
                                     Button {
@@ -102,19 +97,42 @@ struct SettingsView: View {
                             .fixedSize()
                         }
 
-                        HStack {
-                            Button("导出 JSON") { exportJSON() }
-                            Button("导出活动 CSV") { exportCSV() }
-                            Spacer()
+                        Divider()
+                            .padding(.vertical, 12)
+
+                        SettingsControlRow(
+                            title: "导出副本",
+                            detail: "生成本地文件，不会上传数据"
+                        ) {
+                            Group {
+                                Button {
+                                    exportJSON()
+                                } label: {
+                                    Label("JSON", systemImage: "doc.text")
+                                }
+                                Button {
+                                    exportCSV()
+                                } label: {
+                                    Label("活动 CSV", systemImage: "tablecells")
+                                }
+                            }
+                            .buttonStyle(.bordered)
                         }
-                        HStack {
-                            Button("删除所选日期数据", role: .destructive) {
-                                showingDeleteDayConfirmation = true
+
+                        Divider()
+                            .padding(.vertical, 12)
+
+                        SettingsControlRow(
+                            title: "删除数据",
+                            detail: "可删除某一天或清空全部"
+                        ) {
+                            Button(role: .destructive) {
+                                showingDeletionScopeConfirmation = true
+                            } label: {
+                                Label("删除数据…", systemImage: "trash")
                             }
-                            Button("清空所有行为数据", role: .destructive) {
-                                showingDeleteAllConfirmation = true
-                            }
-                            Spacer()
+                            .buttonStyle(.bordered)
+                            .tint(FocusTraceTheme.coral)
                         }
                     }
                     .padding(4)
@@ -193,16 +211,19 @@ struct SettingsView: View {
         }
         .focusTraceScreen()
         .confirmationDialog(
-            "删除 \(state.selectedDate.formatted(date: .abbreviated, time: .omitted)) 的行为数据？",
-            isPresented: $showingDeleteDayConfirmation
+            "要删除哪些行为数据？",
+            isPresented: $showingDeletionScopeConfirmation,
+            titleVisibility: .visible
         ) {
-            Button("删除当天数据", role: .destructive) { state.deleteSelectedDay() }
-        }
-        .confirmationDialog(
-            "清空所有时间轴、训练和分析数据？工作流定义会保留。此操作不可撤销。",
-            isPresented: $showingDeleteAllConfirmation
-        ) {
+            Button(
+                "只删除 \(state.selectedDate.formatted(date: .abbreviated, time: .omitted))",
+                role: .destructive
+            ) {
+                state.deleteSelectedDay()
+            }
             Button("清空所有行为数据", role: .destructive) { state.deleteAllBehaviorData() }
+        } message: {
+            Text("将删除对应的时间轴、训练和分析记录；工作流定义会保留。此操作不可撤销。")
         }
     }
 
@@ -224,6 +245,42 @@ struct SettingsView: View {
 
     private func dateStamp() -> String {
         Date().formatted(.iso8601.year().month().day())
+    }
+}
+
+private struct SettingsControlRow<Controls: View>: View {
+    let title: String
+    let detail: String
+    private let controls: Controls
+
+    init(
+        title: String,
+        detail: String,
+        @ViewBuilder controls: () -> Controls
+    ) {
+        self.title = title
+        self.detail = detail
+        self.controls = controls()
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 24) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .fontWeight(.medium)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 24)
+
+            HStack(spacing: 8) {
+                controls
+            }
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(minHeight: 42)
     }
 }
 

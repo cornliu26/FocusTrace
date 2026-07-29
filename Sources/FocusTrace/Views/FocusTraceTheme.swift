@@ -10,6 +10,12 @@ enum FocusTraceTheme {
     static let coral = Color(red: 1.0, green: 0.48, blue: 0.39)
     static let amber = Color(red: 0.98, green: 0.68, blue: 0.31)
     static let navy = Color(red: 0.045, green: 0.075, blue: 0.13)
+    // Radix-inspired accents: used sparingly to make dashboard dimensions
+    // distinguishable without tinting whole surfaces.
+    static let jade = Color(red: 0.16, green: 0.64, blue: 0.51)
+    static let cyan = Color(red: 0.00, green: 0.64, blue: 0.78)
+    static let indigo = Color(red: 0.24, green: 0.39, blue: 0.87)
+    static let violet = Color(red: 0.56, green: 0.31, blue: 0.78)
 
     static let accentGradient = LinearGradient(
         colors: [mint, sky],

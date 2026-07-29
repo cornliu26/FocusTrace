@@ -18,7 +18,7 @@ SPEC.loader.exec_module(VALIDATOR)
 
 def report(*, reliable: bool) -> dict:
     return {
-        "schemaVersion": 5,
+        "schemaVersion": 6,
         "reportID": "focustrace-report",
         "reportDate": "2026-07-25T00:00:00+08:00",
         "reportCivilDate": "2026-07-25",
@@ -48,7 +48,7 @@ def review(*, status: str, problem: str) -> dict:
 
 
 class CodexReviewContractTests(unittest.TestCase):
-    def test_current_v5_report_is_accepted(self) -> None:
+    def test_current_v6_report_is_accepted(self) -> None:
         payload = review(
             status="behaviorFinding",
             problem="无计划工作流跳转形成了重复返回。",
@@ -98,6 +98,145 @@ class CodexReviewContractTests(unittest.TestCase):
 
         payload["analysisAudit"]["selectedRoute"]["toWorkflow"] = "不存在的工作流"
         with self.assertRaisesRegex(ValueError, "至少两次聚合证据"):
+            VALIDATOR.validate(source, payload)
+
+    def test_partial_reliability_allows_local_action_but_blocks_workflow_route(self) -> None:
+        source = report(reliable=True)
+        source["dataQuality"]["analysisScopes"] = [
+            {"lens": "dataQuality", "isReliable": True, "reason": "可说明范围"},
+            {"lens": "fragmentation", "isReliable": True, "reason": "应用记录完整"},
+            {"lens": "contextRecovery", "isReliable": True, "reason": "显式动作完整"},
+            {"lens": "workflowSemantics", "isReliable": False, "reason": "覆盖不足"},
+        ]
+        local_payload = review(
+            status="behaviorFinding",
+            problem="今天还没有形成带结果反馈的专注训练样本。",
+        )
+        self.assertEqual(
+            VALIDATOR.validate(source, local_payload),
+            "2026-07-25",
+        )
+
+        source["transitionAudit"] = {
+            "dataSource": "semanticEvents",
+            "routes": [
+                {
+                    "fromWorkflow": "A",
+                    "toWorkflow": "B",
+                    "reasonCounts": {"unstructured": 2},
+                }
+            ],
+        }
+        route_payload = review(
+            status="behaviorFinding",
+            problem="A 到 B 的无结构切换形成重复返回。",
+        )
+        route_payload["analysisAudit"] = {
+            "source": "workflowRoute",
+            "selectedRoute": {
+                "fromWorkflow": "A",
+                "toWorkflow": "B",
+                "reason": "unstructured",
+            },
+            "contextRelation": "differentGoals",
+        }
+        with self.assertRaisesRegex(ValueError, "工作流路线"):
+            VALIDATOR.validate(source, route_payload)
+
+    def test_switching_load_requires_a_supported_converging_status(self) -> None:
+        source = report(reliable=True)
+        source["switchingLoad"] = {
+            "status": "elevated",
+            "confidence": "medium",
+            "boundary": "行为切换负荷估计，不是脑活动或临床测量",
+            "evidence": [
+                "工作流切换率较个人基线升高 30%",
+                "高恢复负担切换 2 次",
+            ],
+        }
+        payload = review(
+            status="behaviorFinding",
+            problem="跨工作流切换后的恢复负担高于个人近期基线。",
+        )
+        payload["analysisAudit"] = {
+            "source": "switchingLoad",
+            "selectedRoute": None,
+            "contextRelation": "notApplicable",
+        }
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+        source["switchingLoad"]["status"] = "calibrating"
+        with self.assertRaisesRegex(ValueError, "切换负荷来源缺少收敛证据"):
+            VALIDATOR.validate(source, payload)
+
+    def test_v7_longitudinal_trend_can_drive_a_review_on_a_partial_day(self) -> None:
+        source = report(reliable=False)
+        source["schemaVersion"] = 7
+        source["attentionTrend"] = {
+            "reliableDimensionCount": 4,
+            "includesPartialDay": True,
+            "finding": {
+                "state": "needsAttention",
+                "title": "高碎片工作段正在持续增加",
+                "detail": "高碎片工作段增加，并压缩连续工作时长。",
+                "evidence": [
+                    "近 3 日 50% · 此前典型 10%",
+                    "连续工作：近 3 日 10 分钟 · 此前典型 20 分钟",
+                ],
+            },
+            "recommendation": {
+                "title": "把下一段高碎片工作改成单一产出块",
+            },
+        }
+        payload = review(
+            status="behaviorFinding",
+            problem="高碎片工作段正在持续增加，并压缩连续工作时长。",
+        )
+        payload["recommendation"] = (
+            "把下一段高碎片工作改成单一产出块：开始前写下唯一交付结果。"
+        )
+        payload["evidence"] = source["attentionTrend"]["finding"]["evidence"]
+        payload["analysisAudit"] = {
+            "source": "attentionTrend",
+            "selectedRoute": None,
+            "contextRelation": "notApplicable",
+        }
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+        payload["evidence"] = ["今天切换很多"]
+        with self.assertRaisesRegex(ValueError, "偏离了本地唯一问题"):
+            VALIDATOR.validate(source, payload)
+
+    def test_v7_stable_trend_blocks_an_invented_daily_problem(self) -> None:
+        source = report(reliable=True)
+        source["schemaVersion"] = 7
+        source["attentionTrend"] = {
+            "reliableDimensionCount": 1,
+            "finding": {
+                "state": "stable",
+                "title": "1 个可靠趋势暂未持续恶化",
+                "detail": "其余维度仍在校准。",
+                "evidence": ["1/5 个维度已形成可比较趋势"],
+            },
+            "recommendation": {
+                "title": "保持当前方法，不增加训练负荷",
+            },
+        }
+        payload = review(
+            status="behaviorFinding",
+            problem="1 个可靠趋势暂未持续恶化，其余维度仍在校准。",
+        )
+        payload["recommendation"] = "保持当前方法，不增加训练负荷。"
+        payload["evidence"] = ["1/5 个维度已形成可比较趋势"]
+        payload["analysisAudit"] = {
+            "source": "attentionTrend",
+            "selectedRoute": None,
+            "contextRelation": "notApplicable",
+        }
+        self.assertEqual(VALIDATOR.validate(source, payload), "2026-07-25")
+
+        payload["problem"] = "今天应用切换偏多。"
+        with self.assertRaisesRegex(ValueError, "偏离了本地唯一问题"):
             VALIDATOR.validate(source, payload)
 
     def test_unreliable_report_accepts_one_repair_action(self) -> None:

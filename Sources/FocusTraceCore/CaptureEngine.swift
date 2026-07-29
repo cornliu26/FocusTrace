@@ -101,6 +101,153 @@ public enum SystemActivityGate {
     }
 }
 
+public enum WorkAccountingGate {
+    public static func shouldCountWorkflow(
+        isRecordingWindow: Bool,
+        isSystemActive: Bool,
+        workflowID: UUID?
+    ) -> Bool {
+        isRecordingWindow && isSystemActive && workflowID != nil
+    }
+
+    public static func shouldPauseFocusForSystemInactivity(
+        hasRunningFocus: Bool,
+        focusIsAlreadyPaused: Bool
+    ) -> Bool {
+        hasRunningFocus && !focusIsAlreadyPaused
+    }
+
+    public static func shouldResumeSystemPausedFocus(
+        wasPausedBySystem: Bool,
+        isRecordingWindow: Bool,
+        isSystemActive: Bool,
+        focusWorkflowID: UUID?,
+        currentWorkflowID: UUID?
+    ) -> Bool {
+        wasPausedBySystem
+            && isRecordingWindow
+            && isSystemActive
+            && focusWorkflowID != nil
+            && focusWorkflowID == currentWorkflowID
+    }
+}
+
+public struct CountedWorkflowInterval: Equatable, Identifiable, Sendable {
+    public let id: String
+    public let taskID: UUID
+    public let startedAt: Date
+    public let endedAt: Date
+
+    public init(
+        sourceIntervalID: UUID,
+        fragmentIndex: Int,
+        taskID: UUID,
+        startedAt: Date,
+        endedAt: Date
+    ) {
+        id = "\(sourceIntervalID.uuidString)-\(fragmentIndex)"
+        self.taskID = taskID
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+    }
+}
+
+public enum SystemInactiveIntervalEngine {
+    /// Derives periods in which either the display was asleep or the login
+    /// session was inactive. Keeping those two signals independent prevents a
+    /// screen-wake event at the lock screen from ending the inactive period.
+    public static func inactiveRanges(
+        markers: [TimelineMarkerRecord],
+        range: DateInterval,
+        now: Date
+    ) -> [DateInterval] {
+        var displayAsleep = false
+        var sessionInactive = false
+        var inactiveStartedAt: Date?
+        var ranges: [DateInterval] = []
+
+        for marker in markers.sorted(by: { $0.date < $1.date })
+        where marker.date < range.end && marker.date <= now {
+            let wasInactive = displayAsleep || sessionInactive
+            switch marker.kind {
+            case .screenSlept:
+                displayAsleep = true
+            case .screenWoke:
+                displayAsleep = false
+            case .sessionBecameInactive:
+                sessionInactive = true
+            case .sessionBecameActive:
+                sessionInactive = false
+            default:
+                continue
+            }
+            let isInactive = displayAsleep || sessionInactive
+            if !wasInactive, isInactive {
+                inactiveStartedAt = max(range.start, marker.date)
+            } else if wasInactive, !isInactive, let start = inactiveStartedAt {
+                let end = min(range.end, marker.date)
+                if end > start {
+                    ranges.append(DateInterval(start: start, end: end))
+                }
+                inactiveStartedAt = nil
+            }
+        }
+
+        if let start = inactiveStartedAt {
+            let end = min(range.end, now)
+            if end > start {
+                ranges.append(DateInterval(start: start, end: end))
+            }
+        }
+        return ranges
+    }
+
+    public static func countedWorkflowIntervals(
+        taskIntervals: [TaskIntervalRecord],
+        markers: [TimelineMarkerRecord],
+        range: DateInterval,
+        now: Date
+    ) -> [CountedWorkflowInterval] {
+        let inactive = inactiveRanges(markers: markers, range: range, now: now)
+        var result: [CountedWorkflowInterval] = []
+
+        for interval in taskIntervals {
+            let intervalStart = max(range.start, interval.startedAt)
+            let intervalEnd = min(range.end, interval.endedAt ?? now)
+            guard intervalEnd > intervalStart else { continue }
+
+            var cursor = intervalStart
+            var fragmentIndex = 0
+            for blocked in inactive
+            where blocked.end > cursor && blocked.start < intervalEnd {
+                let countedEnd = min(intervalEnd, blocked.start)
+                if countedEnd > cursor {
+                    result.append(CountedWorkflowInterval(
+                        sourceIntervalID: interval.id,
+                        fragmentIndex: fragmentIndex,
+                        taskID: interval.taskID,
+                        startedAt: cursor,
+                        endedAt: countedEnd
+                    ))
+                    fragmentIndex += 1
+                }
+                cursor = max(cursor, blocked.end)
+                if cursor >= intervalEnd { break }
+            }
+            if cursor < intervalEnd {
+                result.append(CountedWorkflowInterval(
+                    sourceIntervalID: interval.id,
+                    fragmentIndex: fragmentIndex,
+                    taskID: interval.taskID,
+                    startedAt: cursor,
+                    endedAt: intervalEnd
+                ))
+            }
+        }
+        return result
+    }
+}
+
 public enum TimelineDateEngine {
     /// Follow midnight only when the user was viewing the previous "today".
     /// A deliberately selected historical date is left untouched.

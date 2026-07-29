@@ -9,6 +9,7 @@ struct MenuBarView: View {
     @State private var workflowToComplete: FocusTaskModel?
     @State private var showingQuickWorkflowCreator = false
     @State private var showingRequirementCapture = false
+    @State private var showingReturnPoint = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -61,6 +62,9 @@ struct MenuBarView: View {
         }
         .sheet(isPresented: $showingRequirementCapture) {
             QuickRequirementCaptureSheet(state: state)
+        }
+        .sheet(isPresented: $showingReturnPoint) {
+            TaskParkingSheet(state: state)
         }
         .onAppear {
             state.start()
@@ -206,7 +210,9 @@ struct MenuBarView: View {
         case .bindWorkflow:
             Menu {
                 ForEach(state.activeTasks) { workflow in
-                    Button(workflow.title) { state.bindCurrentSpace(to: workflow.id) }
+                    Button(workflow.title) {
+                        state.bindCurrentSpaceFromMenuBar(to: workflow.id)
+                    }
                 }
                 Divider()
                 Button("新建工作流") { showingQuickWorkflowCreator = true }
@@ -253,7 +259,7 @@ struct MenuBarView: View {
         } label: {
             HStack(spacing: 7) {
                 Image(systemName: "bookmark")
-                Text("Agent 还在运行？保存返回点")
+                Text("离开前保存返回点")
                 Spacer()
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.semibold))
@@ -377,7 +383,7 @@ struct MenuBarView: View {
 
     private var moreMenu: some View {
         Menu {
-            Button("查看三步使用方法") {
+            Button("查看新手教学") {
                 openMain(.focus)
                 state.showQuickStart = true
             }
@@ -398,7 +404,9 @@ struct MenuBarView: View {
             }
             if state.currentSpaceWorkflowID != nil {
                 Divider()
-                Button("解除当前桌面") { state.unbindCurrentSpace() }
+                Button("解除当前桌面") {
+                    state.unbindCurrentSpaceFromMenuBar()
+                }
                 if let workflow = state.currentSpaceWorkflow {
                     Button("完成当前工作流") { workflowToComplete = workflow }
                 }
@@ -449,9 +457,7 @@ struct MenuBarView: View {
     }
 
     private func showReturnPointSheet() {
-        openWindow(id: FocusTraceWindowContract.mainWindowID)
-        NSApp.activate(ignoringOtherApps: true)
-        state.showTaskParking = true
+        showingReturnPoint = true
     }
 
     private var statusText: String {
@@ -534,7 +540,7 @@ private struct QuickWorkflowCreatorSheet: View {
                 Button("取消") { dismiss() }
                 Spacer()
                 Button("创建并绑定") {
-                    if state.createWorkflowAndBindCurrentSpace(
+                    if state.createWorkflowAndBindCurrentSpaceFromMenuBar(
                         title: title,
                         expectedOutcome: ""
                     ) {

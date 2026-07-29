@@ -11,7 +11,9 @@ struct TimelineView: View {
         let snapshot = state.selectedTimelineSnapshot
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                nextStepBanner
+                if let guidance = state.mainWindowFlowGuidance {
+                    nextStepBanner(guidance)
+                }
                 HStack {
                     FocusTraceDateNavigator(
                         selection: $state.selectedDate,
@@ -24,7 +26,7 @@ struct TimelineView: View {
                         Label("使用方法", systemImage: "questionmark.circle")
                     }
                     .buttonStyle(.borderless)
-                    .help("查看 FocusTrace 的三步使用方法")
+                    .help("查看 FocusTrace 新手教学")
                     Spacer()
                     Label(state.baselineProgressText, systemImage: state.baselineComplete ? "checkmark.circle" : "hourglass")
                         .foregroundStyle(.secondary)
@@ -56,12 +58,11 @@ struct TimelineView: View {
         .focusTraceScreen()
     }
 
-    private var nextStepBanner: some View {
-        let guidance = state.flowGuidance
-        return HStack(spacing: 14) {
-            Image(systemName: guidanceIcon)
+    private func nextStepBanner(_ guidance: FlowGuidance) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: guidanceIcon(guidance.action))
                 .font(.title2)
-                .foregroundStyle(guidanceColor)
+                .foregroundStyle(guidanceColor(guidance.action))
             VStack(alignment: .leading, spacing: 4) {
                 Text(guidance.title)
                     .font(.headline)
@@ -76,11 +77,14 @@ struct TimelineView: View {
             .buttonStyle(FocusTracePrimaryButtonStyle())
         }
         .padding(14)
-        .background(guidanceColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+        .background(
+            guidanceColor(guidance.action).opacity(0.1),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
     }
 
-    private var guidanceIcon: String {
-        switch state.flowGuidance.action {
+    private func guidanceIcon(_ action: FlowNextAction) -> String {
+        switch action {
         case .resumeCapture: return "pause.circle"
         case .createWorkflow: return "plus.circle"
         case .bindWorkflow: return "rectangle.badge.plus"
@@ -90,8 +94,8 @@ struct TimelineView: View {
         }
     }
 
-    private var guidanceColor: Color {
-        switch state.flowGuidance.action {
+    private func guidanceColor(_ action: FlowNextAction) -> Color {
+        switch action {
         case .resumeCapture, .createWorkflow, .bindWorkflow, .openSchedule: return .orange
         case .viewFocus, .startFocus: return FocusTraceTheme.sky
         }
@@ -104,7 +108,7 @@ struct TimelineView: View {
         case .createWorkflow:
             state.showTaskCreator = true
         case .bindWorkflow:
-            state.showTaskSwitcher = true
+            break
         case .viewFocus:
             state.selectedAppSection = .focus
         case .openSchedule:
@@ -189,7 +193,7 @@ struct TimelineView: View {
 
 struct TimelineChart: View, Equatable {
     let snapshotID: UInt64
-    let taskIntervals: [TaskIntervalModel]
+    let taskIntervals: [CountedWorkflowInterval]
     let taskNames: [UUID: String]
     let buckets: [TimelineBucket]
     let eventBuckets: [TimelineEventBucket]
@@ -199,6 +203,14 @@ struct TimelineChart: View, Equatable {
     let colorScheme: ColorScheme
     private let bucketMinutes = 5
     @State private var showSwitchingScale = false
+
+    private var rowLabelWidth: CGFloat {
+        CGFloat(FocusTraceTimelineLayout.rowLabelWidth)
+    }
+
+    private var rowSpacing: CGFloat {
+        CGFloat(FocusTraceTimelineLayout.rowSpacing)
+    }
 
     private var occupiedBuckets: [TimelineBucket] {
         buckets.filter { $0.activeSeconds > 0 }
@@ -259,11 +271,11 @@ struct TimelineChart: View, Equatable {
                 Spacer()
             }
 
-            HStack {
-                Text("工作流").frame(width: 50, alignment: .leading)
+            HStack(spacing: rowSpacing) {
+                rowLabel("工作流")
                 track(height: 36) { width in
                     ForEach(taskIntervals) { interval in
-                        let frame = frameFor(start: interval.startedAt, end: interval.endedAt ?? now, width: width)
+                        let frame = frameFor(start: interval.startedAt, end: interval.endedAt, width: width)
                         if frame.width > 0 {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(workflowColor(interval.taskID))
@@ -276,13 +288,13 @@ struct TimelineChart: View, Equatable {
                                 }
                                 .frame(width: max(1, frame.width - 1), height: 25)
                                 .offset(x: frame.offset + 0.5, y: 5)
-                                .help("\(taskName(interval.taskID)) · \(duration(interval.startedAt, interval.endedAt ?? now))")
+                                .help("\(taskName(interval.taskID)) · \(duration(interval.startedAt, interval.endedAt))")
                         }
                     }
                 }
             }
-            HStack {
-                Text("主应用").frame(width: 50, alignment: .leading)
+            HStack(spacing: rowSpacing) {
+                rowLabel("主应用")
                 track(height: 36) { width in
                     ForEach(applicationRuns) { run in
                         let frame = frameFor(start: run.start, end: run.end, width: width)
@@ -296,8 +308,8 @@ struct TimelineChart: View, Equatable {
                     }
                 }
             }
-            HStack(alignment: .bottom) {
-                Text("切换密度").frame(width: 50, alignment: .leading)
+            HStack(alignment: .bottom, spacing: rowSpacing) {
+                rowLabel("切换密度")
                 track(height: 45) { width in
                     let maximum = max(1, buckets.map(\.switchCount).max() ?? 1)
                     ForEach(buckets) { bucket in
@@ -314,8 +326,8 @@ struct TimelineChart: View, Equatable {
                 }
             }
             if !eventBuckets.isEmpty {
-                HStack {
-                    Text("工作节点").frame(width: 50, alignment: .leading)
+                HStack(spacing: rowSpacing) {
+                    rowLabel("工作节点")
                     track(height: 24) { width in
                         ForEach(eventBuckets) { bucket in
                             let frame = frameFor(start: bucket.start, end: bucket.end, width: width)
@@ -339,15 +351,13 @@ struct TimelineChart: View, Equatable {
                     }
                 }
             }
-            HStack {
-                Spacer().frame(width: 58)
+            HStack(spacing: rowSpacing) {
+                Color.clear.frame(width: rowLabelWidth, height: 1)
                 hourLabels
             }
             if !workflowLegendIDs.isEmpty {
                 HStack(spacing: 10) {
-                    Text("工作流")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 50, alignment: .leading)
+                    rowLabel("工作流", font: .caption.weight(.semibold))
                     ForEach(workflowLegendIDs, id: \.self) { id in
                         legendItem(taskName(id), workflowColor(id))
                     }
@@ -361,9 +371,7 @@ struct TimelineChart: View, Equatable {
             }
             if !applicationLegend.isEmpty {
                 HStack(spacing: 10) {
-                    Text("主应用")
-                        .font(.caption.weight(.semibold))
-                        .frame(width: 50, alignment: .leading)
+                    rowLabel("主应用", font: .caption.weight(.semibold))
                     ForEach(applicationLegend, id: \.bundleID) { app in
                         legendItem(app.name, applicationColor(app.bundleID))
                     }
@@ -416,16 +424,38 @@ struct TimelineChart: View, Equatable {
 
     private var hourLabels: some View {
         GeometryReader { geometry in
-            ForEach(0...4, id: \.self) { index in
-                let fraction = Double(index) / 4
+            ForEach(0..<FocusTraceTimelineLayout.hourLabelCount, id: \.self) { index in
+                let fraction = Double(index)
+                    / Double(FocusTraceTimelineLayout.hourLabelCount - 1)
                 let date = range.start.addingTimeInterval(range.duration * fraction)
                 Text(date, format: .dateTime.hour().minute())
                     .font(.caption2)
+                    .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    .position(x: geometry.size.width * fraction, y: 8)
+                    .fixedSize()
+                    .position(
+                        x: CGFloat(
+                            FocusTraceTimelineLayout.hourLabelCenterX(
+                                index: index,
+                                availableWidth: Double(geometry.size.width)
+                            )
+                        ),
+                        y: 8
+                    )
             }
         }
         .frame(height: 18)
+    }
+
+    private func rowLabel(
+        _ title: String,
+        font: Font = .body
+    ) -> some View {
+        Text(title)
+            .font(font)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .frame(width: rowLabelWidth, alignment: .leading)
     }
 
     private func frameFor(start: Date, end: Date, width trackWidth: CGFloat) -> (offset: CGFloat, width: CGFloat) {
@@ -481,7 +511,7 @@ struct TimelineChart: View, Equatable {
     private var workflowDurations: [UUID: TimeInterval] {
         taskIntervals.reduce(into: [:]) { result, interval in
             let start = max(range.start, interval.startedAt)
-            let end = min(range.end, interval.endedAt ?? now)
+            let end = min(range.end, interval.endedAt)
             result[interval.taskID, default: 0] += max(
                 0,
                 end.timeIntervalSince(start)

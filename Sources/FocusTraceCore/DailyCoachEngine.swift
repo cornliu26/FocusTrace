@@ -14,6 +14,17 @@ public enum DailyCoachKind: String, Codable, Equatable, Sendable {
     case recoveryRound
     case agentParkingDrill
     case maintainRound
+
+    public var analysisLens: ObservationLens {
+        switch self {
+        case .collectData, .repairAttribution, .verifySpaceTracking:
+            return .dataQuality
+        case .agentParkingDrill:
+            return .contextRecovery
+        case .startFocusRound, .recoveryRound, .maintainRound:
+            return .fragmentation
+        }
+    }
 }
 
 public enum DailyCoachAction: Codable, Equatable, Sendable {
@@ -75,6 +86,7 @@ public struct DailyNormalizedMetrics: Codable, Equatable, Sendable {
     public let successfulTrainingCount: Int
     public let feedbackCompletionRatio: Double?
     public let parkingCount: Int
+    public let workflowAttribution: WorkflowAttributionSummary?
 
     public init(
         recordedMinutes: Double,
@@ -86,7 +98,8 @@ public struct DailyNormalizedMetrics: Codable, Equatable, Sendable {
         trainingCount: Int,
         successfulTrainingCount: Int,
         feedbackCompletionRatio: Double?,
-        parkingCount: Int
+        parkingCount: Int,
+        workflowAttribution: WorkflowAttributionSummary? = nil
     ) {
         self.recordedMinutes = recordedMinutes
         self.attributedMinutes = attributedMinutes
@@ -98,16 +111,42 @@ public struct DailyNormalizedMetrics: Codable, Equatable, Sendable {
         self.successfulTrainingCount = successfulTrainingCount
         self.feedbackCompletionRatio = feedbackCompletionRatio
         self.parkingCount = parkingCount
+        self.workflowAttribution = workflowAttribution
+    }
+}
+
+public struct DailyAnalysisScopeReliability: Codable, Equatable, Sendable {
+    public let lens: ObservationLens
+    public let isReliable: Bool
+    public let reason: String
+
+    public init(lens: ObservationLens, isReliable: Bool, reason: String) {
+        self.lens = lens
+        self.isReliable = isReliable
+        self.reason = reason
     }
 }
 
 public struct DailyDataQuality: Codable, Equatable, Sendable {
     public let isReliableForBehavior: Bool
     public let warnings: [String]
+    public let analysisScopes: [DailyAnalysisScopeReliability]?
 
-    public init(isReliableForBehavior: Bool, warnings: [String]) {
+    public init(
+        isReliableForBehavior: Bool,
+        warnings: [String],
+        analysisScopes: [DailyAnalysisScopeReliability]? = nil
+    ) {
         self.isReliableForBehavior = isReliableForBehavior
         self.warnings = warnings
+        self.analysisScopes = analysisScopes
+    }
+
+    public func isReliable(_ lens: ObservationLens) -> Bool {
+        if let scope = analysisScopes?.first(where: { $0.lens == lens }) {
+            return scope.isReliable
+        }
+        return lens == .dataQuality || isReliableForBehavior
     }
 }
 
@@ -307,9 +346,14 @@ public enum DailyCoachEngine {
         let visible = activities.filter {
             ![.systemInactive, .trackerControl].contains($0.classification)
         }
-        let recordedSeconds = visible.reduce(0) { $0 + $1.duration(relativeTo: effectiveNow) }
-        let attributedSeconds = visible.filter { $0.taskID != nil }
-            .reduce(0) { $0 + $1.duration(relativeTo: effectiveNow) }
+        let workflowAttribution = WorkflowAttributionEngine.summarize(
+            activities: visible,
+            taskIntervals: intervals,
+            focusSessions: sessions,
+            now: effectiveNow
+        )
+        let recordedSeconds = workflowAttribution.recordedMinutes * 60
+        let attributedSeconds = workflowAttribution.attributedMinutes * 60
         let hours = recordedSeconds / 3600
         let feedbackCount = sessions.filter {
             $0.outcome != .pending && $0.difficulty != nil
@@ -328,7 +372,8 @@ public enum DailyCoachEngine {
                 trainingCount: sessions.count,
                 successfulTrainingCount: sessions.filter(\.isSuccessful).count,
                 feedbackCompletionRatio: sessions.isEmpty ? nil : Double(feedbackCount) / Double(sessions.count),
-                parkingCount: parkings.count
+                parkingCount: parkings.count,
+                workflowAttribution: workflowAttribution
             ),
             sessions: sessions,
             interruptions: interruptions,
@@ -362,11 +407,9 @@ public enum DailyCoachEngine {
     ) -> DailyDataQuality {
         var warnings: [String] = []
         let metrics = slice.metrics
-        if metrics.recordedMinutes < minimumRecordedSeconds / 60 {
+        let hasMinimumSample = metrics.recordedMinutes >= minimumRecordedSeconds / 60
+        if !hasMinimumSample {
             warnings.append("有效记录不足 30 分钟，今天的行为结论可信度较低。")
-        }
-        if metrics.recordedMinutes > 0, metrics.attributedRatio < minimumAttributedRatio {
-            warnings.append("只有 \(percent(metrics.attributedRatio)) 的记录归属于工作流，先补齐桌面绑定。")
         }
         let baselineWorkflowRate = median(baseline.map { $0.metrics.workflowSwitchesPerHour })
         let denseSpaceSignals = slice.summary.workflowSwitchCount >= 10
@@ -374,16 +417,60 @@ public enum DailyCoachEngine {
                 metrics.workflowSwitchesPerHour >= 30
                     || metrics.workflowSwitchesPerHour > max(18, (baselineWorkflowRate ?? 0) * 1.5)
             )
+        let workflowSemanticsReliable = hasMinimumSample
+            && metrics.attributedRatio >= minimumAttributedRatio
+            && !denseSpaceSignals
+        if metrics.recordedMinutes > 0, metrics.attributedRatio < minimumAttributedRatio {
+            warnings.append(
+                "命名工作流覆盖 \(percent(metrics.attributedRatio))；工作流路线暂缓，应用碎片与显式训练仍可分析。"
+            )
+        }
         if denseSpaceSignals {
-            warnings.append("桌面工作流切换信号异常密集，先排除 Space 识别噪声，不据此判断注意力。")
+            warnings.append("Space 识别噪声较高；暂停工作流路线判断，不影响应用碎片与显式训练分析。")
         }
         if let feedback = metrics.feedbackCompletionRatio, feedback < 1 {
             warnings.append("部分训练缺少完成结果或难度反馈，会削弱后续个性化分析。")
         }
-        let reliable = metrics.recordedMinutes >= minimumRecordedSeconds / 60
-            && metrics.attributedRatio >= minimumAttributedRatio
-            && !denseSpaceSignals
-        return DailyDataQuality(isReliableForBehavior: reliable, warnings: warnings)
+        let scopes = [
+            DailyAnalysisScopeReliability(
+                lens: .dataQuality,
+                isReliable: true,
+                reason: "用于说明记录覆盖、补全来源与受限分析"
+            ),
+            DailyAnalysisScopeReliability(
+                lens: .fragmentation,
+                isReliable: hasMinimumSample,
+                reason: hasMinimumSample
+                    ? "应用切换与连续片段不依赖命名工作流"
+                    : "有效记录不足 30 分钟"
+            ),
+            DailyAnalysisScopeReliability(
+                lens: .contextRecovery,
+                isReliable: hasMinimumSample,
+                reason: hasMinimumSample
+                    ? "保存与返回点来自用户显式动作"
+                    : "有效记录不足 30 分钟"
+            ),
+            DailyAnalysisScopeReliability(
+                lens: .workflowSemantics,
+                isReliable: workflowSemanticsReliable,
+                reason: workflowSemanticsReliable
+                    ? "工作流覆盖与 Space 信号达到语义分析门槛"
+                    : (
+                        denseSpaceSignals
+                            ? "Space 信号异常，暂停路线判断"
+                            : "命名工作流覆盖低于 70%"
+                    )
+            )
+        ]
+        let reliable = scopes.contains {
+            $0.lens != .dataQuality && $0.isReliable
+        }
+        return DailyDataQuality(
+            isReliableForBehavior: reliable,
+            warnings: warnings,
+            analysisScopes: scopes
+        )
     }
 
     private static func trend(
@@ -442,38 +529,8 @@ public enum DailyCoachEngine {
                 action: .none,
                 method: DailyTrainingMethod(
                     title: "低负担观察",
-                    steps: ["绑定当前桌面的工作流", "照常工作至少 30 分钟", "期间不刻意减少工具切换"],
-                    successMeasure: "有效记录达到 30 分钟且工作流归因达到 70%"
-                )
-            )
-        }
-        if slice.metrics.attributedRatio < minimumAttributedRatio {
-            return DailyCoachRecommendation(
-                kind: .repairAttribution,
-                title: "先修复工作流归因，再训练注意力",
-                rationale: "大量时间没有工作流标签，当前切换数据无法区分工作需要与走神。",
-                evidence: ["工作流归因率 \(percent(slice.metrics.attributedRatio))", "可靠分析门槛为 70%"],
-                confidence: .high,
-                action: .bindWorkflow,
-                method: DailyTrainingMethod(
-                    title: "桌面绑定校准",
-                    steps: ["把当前桌面绑定到正在推进的工作流", "在该桌面连续工作 30 分钟", "需要换主线时再切到另一个已绑定桌面"],
-                    successMeasure: "下一份报告的工作流归因率达到 70%"
-                )
-            )
-        }
-        if quality.warnings.contains(where: { $0.contains("Space 识别噪声") }) {
-            return DailyCoachRecommendation(
-                kind: .verifySpaceTracking,
-                title: "先验证两次真实桌面切换",
-                rationale: "当前 Space 信号密度异常，先确认记录器是否把刷新误算成工作流切换。",
-                evidence: ["桌面工作流切换 \(rounded(slice.metrics.workflowSwitchesPerHour)) 次/小时", "今天共 \(slice.summary.workflowSwitchCount) 次"],
-                confidence: .high,
-                action: .reviewTimeline,
-                method: DailyTrainingMethod(
-                    title: "两次切换校准",
-                    steps: ["记住当前工作流名称", "只主动切换桌面两次", "回顾中确认新增工作流切换接近两次"],
-                    successMeasure: "实际两次切换与时间轴新增记录基本一致"
+                    steps: ["照常工作至少 30 分钟", "有明确主线时再绑定工作流", "期间不刻意减少工具切换"],
+                    successMeasure: "有效记录达到 30 分钟，报告标出至少一个可用分析镜头"
                 )
             )
         }
@@ -514,7 +571,9 @@ public enum DailyCoachEngine {
             WorkflowSwitchInterventionEngine.isFinalWorkflowSwitch($0)
                 && [.waitingForResult, .forcedInterruption].contains($0.reason)
         }
-        if returnPointHandoffs.count >= 2, slice.taskParkings.isEmpty {
+        if quality.isReliable(.contextRecovery),
+           returnPointHandoffs.count >= 2,
+           slice.taskParkings.isEmpty {
             let waitingCount = returnPointHandoffs.filter {
                 $0.reason == .waitingForResult
             }.count

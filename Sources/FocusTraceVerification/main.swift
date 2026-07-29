@@ -171,6 +171,171 @@ private func phaseTwoFixture() -> (
     )
 }
 
+private func verificationDashboardAnalysis(
+    appSwitchDelta: Double? = 10,
+    withinReliableLenses reliableLenses: Set<ObservationLens> =
+        Set(ObservationLens.allCases),
+    medianFocusMinutes: Double? = 20,
+    trainingCount: Int = 5,
+    successfulTrainingCount: Int = 4,
+    feedbackCompletionRatio: Double? = 1
+) -> DailyCoachingAnalysis {
+    DailyCoachingAnalysis(
+        metrics: DailyNormalizedMetrics(
+            recordedMinutes: 240,
+            attributedMinutes: 220,
+            attributedRatio: 0.92,
+            appSwitchesPerHour: 8,
+            workflowSwitchesPerHour: 2,
+            medianFocusMinutes: medianFocusMinutes,
+            trainingCount: trainingCount,
+            successfulTrainingCount: successfulTrainingCount,
+            feedbackCompletionRatio: feedbackCompletionRatio,
+            parkingCount: 2
+        ),
+        quality: DailyDataQuality(
+            isReliableForBehavior: !reliableLenses.isEmpty,
+            warnings: [],
+            analysisScopes: ObservationLens.allCases.map {
+                DailyAnalysisScopeReliability(
+                    lens: $0,
+                    isReliable: reliableLenses.contains($0),
+                    reason: reliableLenses.contains($0)
+                        ? "验收样本可靠"
+                        : "验收样本不足"
+                )
+            }
+        ),
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: appSwitchDelta,
+            workflowSwitchRateDeltaPercent: 5,
+            attributedRatioDeltaPoints: 2,
+            medianFocusDeltaMinutes: 3
+        ),
+        recommendation: DailyCoachRecommendation(
+            kind: .maintainRound,
+            title: "保持当前训练",
+            rationale: "验收",
+            evidence: [],
+            confidence: .high,
+            action: .none,
+            method: DailyTrainingMethod(
+                title: "验收",
+                steps: [],
+                successMeasure: "验收"
+            )
+        ),
+        previousRecommendationEvaluation: nil
+    )
+}
+
+private func verificationDashboardSwitchingLoad(
+    withinWorkflowRatio: Double = 0.4,
+    highFragmentationWindows: Int = 2
+) -> SwitchingLoadAssessment {
+    SwitchingLoadAssessment(
+        status: .stable,
+        confidence: .high,
+        headline: "验收",
+        convergingSignals: [],
+        evidence: [],
+        recommendedExperiment: "验收",
+        metrics: SwitchingLoadMetrics(
+            activeMinutes: 240,
+            appSwitchesPerHour: 8,
+            withinWorkflowAppSwitchRatio: withinWorkflowRatio,
+            peakFiveMinuteAppSwitches: 7,
+            highFragmentationWindows: highFragmentationWindows,
+            activeFiveMinuteWindows: 40,
+            finalWorkflowSwitches: 4,
+            plannedWorkflowSwitches: 3,
+            highRecoveryBurdenSwitches: 0,
+            navigationEventsPerBurst: 1.5,
+            explicitReasonCoverage: 1,
+            shortDestinationSwitches: 0,
+            returnedWithin30Minutes: 0,
+            returnPointResumeRate: 0.5,
+            averageInterruptionReturnSeconds: 75,
+            averageSubjectiveDifficulty: 2.5,
+            subjectiveDifficultySamples: 5,
+            focusSuccessRate: 0.8,
+            comparableBaselineDays: 5,
+            systemInactiveMinutes: 30
+        ),
+        traceCoverage: []
+    )
+}
+
+private func verificationDashboardDay(
+    date: Date,
+    isPartial: Bool = false,
+    medianFocusMinutes: Double? = 20,
+    highFragmentationWindows: Int = 4,
+    withinWorkflowRatio: Double = 0.3,
+    focusSessions: [FocusSessionRecord] = []
+) -> AttentionDashboardDay {
+    let successful = focusSessions.filter(\.isSuccessful).count
+    let feedbackCount = focusSessions.compactMap(\.difficulty).count
+    return AttentionDashboardDay(
+        date: date,
+        isPartial: isPartial,
+        coaching: verificationDashboardAnalysis(
+            medianFocusMinutes: medianFocusMinutes,
+            trainingCount: focusSessions.count,
+            successfulTrainingCount: successful,
+            feedbackCompletionRatio: focusSessions.isEmpty
+                ? nil
+                : Double(feedbackCount) / Double(focusSessions.count)
+        ),
+        summary: DailySummary(
+            appSwitchCount: 0,
+            taskSwitchCount: 0,
+            workflowSwitchCount: 0,
+            suspectedDistractionCount: 0,
+            confirmedDistractionCount: 0,
+            averageReturnLatency: nil,
+            medianFocusStreak: medianFocusMinutes.map { $0 * 60 },
+            taskParkingCount: 2,
+            resumedTaskCount: 2,
+            averageTaskResumeLatency: 8 * 60,
+            appDurations: [:],
+            taskDurations: [:]
+        ),
+        switchingLoad: verificationDashboardSwitchingLoad(
+            withinWorkflowRatio: withinWorkflowRatio,
+            highFragmentationWindows: highFragmentationWindows
+        ),
+        interventionAudit: WorkflowInterventionAudit(
+            frequentSwitchEpisodes: 0,
+            promptsShown: 0,
+            confirmedPrompts: 0,
+            timedOutPrompts: 0,
+            assessedPrompts: 0,
+            quietAfterPromptCount: 0
+        ),
+        focusSessions: focusSessions
+    )
+}
+
+private func verificationDashboardSession(
+    date: Date,
+    successful: Bool,
+    difficulty: Int
+) -> FocusSessionRecord {
+    FocusSessionRecord(
+        taskID: UUID(),
+        startedAt: date.addingTimeInterval(9 * 60 * 60),
+        endedAt: date.addingTimeInterval(
+            9 * 60 * 60 + (successful ? 15 * 60 : 5 * 60)
+        ),
+        targetSeconds: 15 * 60,
+        outcome: successful ? .completed : .notCompleted,
+        difficulty: difficulty,
+        confirmedDistractionCount: 0
+    )
+}
+
 private var suite = VerificationSuite()
 
 suite.run("流程引导始终只给出当前下一步") {
@@ -236,6 +401,38 @@ suite.run("流程引导始终只给出当前下一步") {
     try expect(outsideSchedule.action == .openSchedule, "工作时段外应只引导调整记录时段")
 }
 
+suite.run("桌面绑定只允许由状态栏表面发起") {
+    let binding = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: nil,
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    try expect(
+        WorkflowBindingSurfacePolicy.canPresent(binding, on: .menuBar),
+        "目标工作桌面的状态栏必须能够展示绑定行动"
+    )
+    try expect(
+        !WorkflowBindingSurfacePolicy.canPresent(binding, on: .mainWindow),
+        "主窗口可能位于错误 Space，不能展示绑定行动"
+    )
+
+    let focus = FlowGuidanceEngine.guidance(
+        hasOpenWorkflows: true,
+        currentWorkflowTitle: "排查登录问题",
+        capturePaused: false,
+        isWithinSchedule: true,
+        focusRemainingSeconds: nil,
+        planMinutes: 15
+    )
+    try expect(
+        WorkflowBindingSurfacePolicy.canPresent(focus, on: .mainWindow),
+        "主窗口仍应保留非绑定类的日常下一步"
+    )
+}
+
 suite.run("工作流确认位于中上方且不复用被动专注浮层") {
     let visibleFrame = CGRect(x: 0, y: 25, width: 1_440, height: 875)
     let decision = FocusTraceConfirmationLayout.frame(
@@ -294,6 +491,107 @@ suite.run("已优化的日常交互契约保持稳定") {
     try expect(
         !FocusTraceUXContract.timelineCurrentWorkflowOutlineEnabled,
         "当前工作流不能给每个碎片添加深色描边"
+    )
+    let narrowPlotWidth = 240.0
+    let firstHourX = FocusTraceTimelineLayout.hourLabelCenterX(
+        index: 0,
+        availableWidth: narrowPlotWidth
+    )
+    let finalHourX = FocusTraceTimelineLayout.hourLabelCenterX(
+        index: FocusTraceTimelineLayout.hourLabelCount - 1,
+        availableWidth: narrowPlotWidth
+    )
+    try expect(
+        FocusTraceTimelineLayout.rowLabelWidth >= 76
+            && firstHourX > 0
+            && finalHourX < narrowPlotWidth,
+        "窄窗口时间轴必须完整显示四字行标题，并把首尾时间收在绘图区内"
+    )
+    let trendPointCount = 10
+    let firstTrendX = FocusTraceAttentionTrendLayout.pointX(
+        index: 0,
+        pointCount: trendPointCount,
+        availableWidth: narrowPlotWidth
+    )
+    let finalTrendX = FocusTraceAttentionTrendLayout.pointX(
+        index: trendPointCount - 1,
+        pointCount: trendPointCount,
+        availableWidth: narrowPlotWidth
+    )
+    try expect(
+        FocusTraceAttentionTrendLayout.plotInset
+            > FocusTraceAttentionTrendLayout.pointRadius
+            && firstTrendX >= FocusTraceAttentionTrendLayout.plotInset
+            && finalTrendX
+                <= narrowPlotWidth - FocusTraceAttentionTrendLayout.plotInset,
+        "注意力趋势的首尾数据点必须完整收在绘图区，不能溢入说明列"
+    )
+}
+
+suite.run("新手教学沿创建绑定工作回顾形成可恢复闭环") {
+    let phases = [
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: false,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: false,
+            hasRecordedActivity: false
+        ),
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: false,
+            hasRecordedActivity: false
+        ),
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: true,
+            hasRecordedActivity: false
+        ),
+        FocusTraceGettingStartedContract.phase(
+            hasOpenWorkflow: true,
+            requiresDesktopBinding: true,
+            hasVerifiedDesktopBinding: true,
+            hasRecordedActivity: true
+        )
+    ]
+    try expect(
+        phases == [.createWorkflow, .bindDesktop, .workNormally, .reviewEvidence],
+        "新手路径必须依次完成创建、状态栏绑定、正常工作和证据回顾"
+    )
+    try expect(
+        FocusTraceGettingStartedContract.steps.map(\.id) == phases,
+        "教学内容顺序必须与可执行阶段一致"
+    )
+
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    func contents(_ path: String) throws -> String {
+        try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+    let onboarding = try contents(
+        "Sources/FocusTrace/Views/OnboardingView.swift"
+    )
+    let state = try contents("Sources/FocusTrace/ApplicationState.swift")
+    let menu = try contents("Sources/FocusTrace/Views/MenuBarView.swift")
+    try expect(
+        onboarding.contains("if state.activeTasks.isEmpty")
+            && onboarding.contains("state.createFirstWorkflowForOnboarding(")
+            && onboarding.contains("firstUseGuide")
+            && onboarding.contains("state.completeOnboarding()")
+            && !onboarding.contains("completeOnboardingAndCreateTask"),
+        "创建工作流后必须留在首次使用流程，并能在中断后从已有工作流继续"
+    )
+    try expect(
+        state.contains("var gettingStartedPhase:")
+            && state.contains("func createFirstWorkflowForOnboarding(")
+            && menu.contains("Button(\"查看新手教学\")"),
+        "状态层必须提供当前教学阶段，状态栏必须保留重看入口"
     )
 }
 
@@ -1104,6 +1402,90 @@ suite.run("锁屏 loginwindow 被视为系统非活动") {
     let unlocked = machine.becomeActive(normalApp, at: start.addingTimeInterval(40))
     try expect(locked.closedAt == start.addingTimeInterval(10), "锁屏时应立即闭合前台片段")
     try expect(unlocked.opened?.startedAt == start.addingTimeInterval(40), "解锁后应从实际返回时间重开")
+}
+
+suite.run("锁屏同时排除工作流与专注计时") {
+    let start = Date(timeIntervalSince1970: 2_000)
+    let workflowID = UUID()
+    let range = DateInterval(start: start, duration: 60)
+    let interval = TaskIntervalRecord(
+        taskID: workflowID,
+        startedAt: start,
+        endedAt: range.end,
+        workflowSource: .manual
+    )
+    let markers = [
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(10),
+            kind: .sessionBecameInactive,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(15),
+            kind: .screenSlept,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(30),
+            kind: .screenWoke,
+            taskID: workflowID
+        ),
+        TimelineMarkerRecord(
+            date: start.addingTimeInterval(40),
+            kind: .sessionBecameActive,
+            taskID: workflowID
+        )
+    ]
+    let counted = SystemInactiveIntervalEngine.countedWorkflowIntervals(
+        taskIntervals: [interval],
+        markers: markers,
+        range: range,
+        now: range.end
+    )
+    let countedSeconds = counted.reduce(0) {
+        $0 + $1.endedAt.timeIntervalSince($1.startedAt)
+    }
+
+    try expect(counted.count == 2, "锁屏应把工作流区间切成锁前和解锁后两段")
+    try expect(countedSeconds == 30, "锁屏的 30 秒不得计入工作流时间")
+    try expect(
+        WorkAccountingGate.shouldPauseFocusForSystemInactivity(
+            hasRunningFocus: true,
+            focusIsAlreadyPaused: false
+        ),
+        "锁屏应暂停运行中的专注计时"
+    )
+    try expect(
+        !WorkAccountingGate.shouldResumeSystemPausedFocus(
+            wasPausedBySystem: true,
+            isRecordingWindow: true,
+            isSystemActive: true,
+            focusWorkflowID: workflowID,
+            currentWorkflowID: UUID()
+        ),
+        "返回到不同工作流时不得自动恢复原专注计时"
+    )
+}
+
+suite.run("锁屏采集链路有冗余信号并闭合全部计时") {
+    let monitor = try repositoryFileContents(
+        "Sources/FocusTrace/WorkspaceMonitor.swift"
+    )
+    let state = try repositoryFileContents(
+        "Sources/FocusTrace/ApplicationState.swift"
+    )
+    try expect(
+        monitor.contains("com.apple.screenIsLocked")
+            && monitor.contains("com.apple.screenIsUnlocked")
+            && monitor.contains("isScreenLocked ? nil : frontmostApp"),
+        "WorkspaceMonitor 必须区分屏幕唤醒和会话真正解锁"
+    )
+    try expect(
+        state.contains("closeActiveTaskInterval(at: date)")
+            && state.contains("focusPausedBySystem")
+            && state.contains("resumeSystemPausedFocusIfPossible"),
+        "锁屏必须同时闭合工作流区间并暂停专注计时"
+    )
 }
 
 suite.run("跨天自动跟随今天但保留历史查看") {
@@ -2096,7 +2478,34 @@ suite.run("阶段 2 完整 10 日 / 20 次样本识别模式") {
     try expect(result.insights.first(where: { $0.id == "necessary-app" })?.value == "Safari", "必要应用统计错误")
 }
 
-suite.run("每日教练先校验数据质量再给行为建议") {
+suite.run("工作流归因只用明确 trace 补全且冲突保持未归因") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let activities = [
+        ActivityRecord(app: app, startedAt: day, endedAt: day.addingTimeInterval(10 * 60), taskID: workflowA, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(10 * 60), endedAt: day.addingTimeInterval(30 * 60), taskID: nil, focusSessionID: nil, classification: .allowed),
+        ActivityRecord(app: app, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(40 * 60), taskID: nil, focusSessionID: nil, classification: .allowed)
+    ]
+    let intervals = [
+        TaskIntervalRecord(taskID: workflowA, startedAt: day.addingTimeInterval(10 * 60), endedAt: day.addingTimeInterval(30 * 60)),
+        TaskIntervalRecord(taskID: workflowA, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(40 * 60)),
+        TaskIntervalRecord(taskID: workflowB, startedAt: day.addingTimeInterval(30 * 60), endedAt: day.addingTimeInterval(40 * 60))
+    ]
+    let result = WorkflowAttributionEngine.summarize(
+        activities: activities,
+        taskIntervals: intervals,
+        focusSessions: [],
+        now: day.addingTimeInterval(40 * 60)
+    )
+    try expect(result.directMinutes == 10, "直接归因错误")
+    try expect(result.intervalRecoveredMinutes == 20, "明确工作流区间应补全缺失归因")
+    try expect(result.unresolvedMinutes == 10, "冲突区间必须保持未归因")
+}
+
+suite.run("缺少工作流归因时仍保留可靠的非工作流分析") {
     let calendar = utcCalendar()
     let day = calendar.date(from: DateComponents(year: 2026, month: 7, day: 20, hour: 9))!
     let task = UUID()
@@ -2115,8 +2524,10 @@ suite.run("每日教练先校验数据质量再给行为建议") {
         calendar: calendar
     )
     try expect(result.metrics.attributedRatio == 0.5, "归因率应为 50%")
-    try expect(!result.quality.isReliableForBehavior, "低归因率不得生成可靠行为结论")
-    try expect(result.recommendation.kind == .repairAttribution, "应先建议修复桌面绑定")
+    try expect(result.quality.isReliableForBehavior, "应用碎片与显式训练不应被低工作流归因封死")
+    try expect(result.quality.isReliable(.fragmentation), "应用碎片镜头应可用")
+    try expect(!result.quality.isReliable(.workflowSemantics), "工作流路线必须继续受 70% 门槛保护")
+    try expect(result.recommendation.kind == .startFocusRound, "应从可靠镜头给出一个训练行动")
 }
 
 suite.run("每日教练把极密 Space 信号视为采集风险") {
@@ -2143,9 +2554,10 @@ suite.run("每日教练把极密 Space 信号视为采集风险") {
         generatedAt: day.addingTimeInterval(60 * 60),
         calendar: calendar
     )
-    try expect(!result.quality.isReliableForBehavior, "极密 Space 信号不得用于行为判断")
+    try expect(result.quality.isReliableForBehavior, "Space 噪声不得封死独立的应用碎片分析")
+    try expect(!result.quality.isReliable(.workflowSemantics), "极密 Space 信号不得用于路线判断")
     try expect(result.quality.warnings.contains { $0.contains("Space 识别噪声") }, "应给出 Space 数据质量警告")
-    try expect(result.recommendation.kind == .verifySpaceTracking, "应先建议校准 Space 记录")
+    try expect(result.recommendation.kind == .startFocusRound, "应从可靠镜头继续给出训练行动")
 }
 
 suite.run("每日教练执行训练并在下一工作日验证结果") {
@@ -2657,6 +3069,795 @@ suite.run("工作流跳转审计在固定大样本下不超过性能预算") {
     try expect(elapsed < 1, "两千区间、两千标记与一千需求应在一秒内完成，实测 \(elapsed) 秒")
 }
 
+suite.run("工作流归因在固定大样本下不超过性能预算") {
+    let day = Date(timeIntervalSince1970: 10_000)
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let app = AppIdentity(bundleID: "app", name: "App")
+    let activities = (0..<2_000).map { index in
+        let start = day.addingTimeInterval(Double(index * 10))
+        return ActivityRecord(
+            app: app,
+            startedAt: start,
+            endedAt: start.addingTimeInterval(8),
+            taskID: nil,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let intervals = (0..<2_000).map { index in
+        let start = day.addingTimeInterval(Double(index * 10))
+        return TaskIntervalRecord(
+            taskID: index.isMultiple(of: 2) ? workflowA : workflowB,
+            startedAt: start,
+            endedAt: start.addingTimeInterval(8),
+            workflowSource: .space
+        )
+    }
+    let startedAt = Date()
+    let result = WorkflowAttributionEngine.summarize(
+        activities: activities,
+        taskIntervals: intervals,
+        focusSessions: [],
+        now: day.addingTimeInterval(20_000)
+    )
+    let elapsed = Date().timeIntervalSince(startedAt)
+
+    try expect(result.intervalRecoveredMinutes > 260, "明确区间应补全全部大样本")
+    try expect(result.unresolvedMinutes == 0, "无冲突大样本不应残留未归因")
+    try expect(elapsed < 1, "两千活动与两千区间应在一秒内完成，实测 \(elapsed) 秒")
+}
+
+suite.run("切换负荷拒绝伪脑部结论并审计全部 trace") {
+    let day = Date(timeIntervalSince1970: 30_000)
+    let assessment = SwitchingLoadEngine.assess(
+        activities: [],
+        taskIntervals: [],
+        focusSessions: [],
+        interruptions: [],
+        workflowTransitions: [],
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 0,
+        range: DateInterval(start: day, duration: 60 * 60),
+        now: day.addingTimeInterval(60 * 60),
+        quality: DailyDataQuality(
+            isReliableForBehavior: false,
+            warnings: ["有效工作分钟不足"]
+        ),
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 100,
+            workflowSwitchRateDeltaPercent: 100,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: AutomationWorkflowTransitionAuditArtifact(
+            reasonedSwitches: 0,
+            unreasonedSwitches: 0,
+            cancelledNavigations: 8,
+            reasonCounts: [:],
+            routes: []
+        )
+    )
+
+    try expect(assessment.status == .unavailable, "数据不可靠时必须拒绝切换负荷判断")
+    try expect(assessment.headline.contains("不能据此判断"), "不可判断必须显式写入结论")
+    try expect(assessment.boundary.contains("不是脑活动"), "不得把行为代理量称为脑负荷")
+    try expect(
+        Set(assessment.traceCoverage.map(\.family))
+            == Set(SwitchingLoadTraceFamily.allCases),
+        "每一个既有 trace 家族都必须声明使用状态"
+    )
+    try expect(
+        assessment.traceCoverage.first {
+            $0.family == .semanticTransitions
+        }?.status == .qualityBlocked,
+        "语义 trace 存在但行为镜头不可靠时仍必须被质量门阻断"
+    )
+}
+
+suite.run("切换负荷只在行为恢复与主观证据收敛时升高") {
+    let start = Date(timeIntervalSince1970: 40_000)
+    let range = DateInterval(start: start, duration: 60 * 60)
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let endpointA = WorkflowTransitionEndpoint(kind: .workflow, workflowID: workflowA)
+    let endpointB = WorkflowTransitionEndpoint(kind: .workflow, workflowID: workflowB)
+    let activities = (0..<8).map { index in
+        ActivityRecord(
+            app: AppIdentity(
+                bundleID: index.isMultiple(of: 2) ? "editor" : "terminal",
+                name: index.isMultiple(of: 2) ? "Editor" : "Terminal"
+            ),
+            startedAt: start.addingTimeInterval(Double(index) * 7 * 60),
+            endedAt: start.addingTimeInterval(Double(index + 1) * 7 * 60),
+            taskID: index < 4 ? workflowA : workflowB,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let sessions = (0..<3).map { index in
+        FocusSessionRecord(
+            taskID: workflowA,
+            startedAt: start.addingTimeInterval(Double(index) * 20 * 60),
+            endedAt: start.addingTimeInterval(Double(index) * 20 * 60 + 10 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .partial,
+            difficulty: 4,
+            confirmedDistractionCount: 0
+        )
+    }
+    let transitionMinutes: [Int] = [10, 30]
+    let transitions: [WorkflowTransitionRecord] = transitionMinutes.map { minute in
+        let resolvedAt = start.addingTimeInterval(Double(minute) * 60)
+        return WorkflowTransitionRecord(
+            navigationStartedAt: resolvedAt.addingTimeInterval(-2),
+            settledAt: resolvedAt.addingTimeInterval(-1),
+            resolvedAt: resolvedAt,
+            origin: endpointA,
+            destination: endpointB,
+            outcome: .confirmed,
+            reason: .forcedInterruption,
+            navigationEventCount: 2
+        )
+    }
+    let route = AutomationWorkflowTransitionRouteArtifact(
+        fromWorkflow: "工作流 A",
+        toWorkflow: "工作流 B",
+        count: 2,
+        reasonCounts: ["forcedInterruption": 2],
+        medianDestinationMinutes: 3,
+        returnedWithin30Minutes: 2,
+        timeBucketCounts: ["morning": 2]
+    )
+    let taskIntervals = [
+        TaskIntervalRecord(
+            taskID: workflowA,
+            startedAt: start,
+            endedAt: start.addingTimeInterval(30 * 60),
+            workflowSource: .space
+        ),
+        TaskIntervalRecord(
+            taskID: workflowB,
+            startedAt: start.addingTimeInterval(30 * 60),
+            endedAt: range.end,
+            workflowSource: .space
+        )
+    ]
+    let reliableQuality = DailyDataQuality(
+        isReliableForBehavior: true,
+        warnings: [],
+        analysisScopes: ObservationLens.allCases.map {
+            DailyAnalysisScopeReliability(
+                lens: $0,
+                isReliable: true,
+                reason: "验收样本可靠"
+            )
+        }
+    )
+    let lowDifficultySessions = (0..<3).map { index in
+        FocusSessionRecord(
+            taskID: workflowA,
+            startedAt: start.addingTimeInterval(Double(index) * 20 * 60),
+            endedAt: start.addingTimeInterval(Double(index) * 20 * 60 + 15 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .completed,
+            difficulty: 2,
+            confirmedDistractionCount: 0
+        )
+    }
+    let behaviorOnly = SwitchingLoadEngine.assess(
+        activities: activities,
+        taskIntervals: taskIntervals,
+        focusSessions: lowDifficultySessions,
+        interruptions: [],
+        workflowTransitions: [],
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 2,
+        range: range,
+        now: range.end,
+        quality: reliableQuality,
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 35,
+            workflowSwitchRateDeltaPercent: 30,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: AutomationWorkflowTransitionAuditArtifact(
+            reasonedSwitches: 0,
+            unreasonedSwitches: 0,
+            cancelledNavigations: 0,
+            reasonCounts: [:],
+            routes: []
+        )
+    )
+    try expect(
+        behaviorOnly.status == .mixedEvidence,
+        "应用与工作流切换都属于行为通道，不能伪装成两类证据"
+    )
+    try expect(
+        behaviorOnly.metrics.finalWorkflowSwitches == 0
+            && behaviorOnly.recommendedExperiment.contains(
+                "不减少同一工作流"
+            ),
+        "没有实际跨工作流事件时不得生成跨工作流干预"
+    )
+    let assessment = SwitchingLoadEngine.assess(
+        activities: activities,
+        taskIntervals: taskIntervals,
+        focusSessions: sessions,
+        interruptions: [],
+        workflowTransitions: transitions,
+        taskParkings: [],
+        markers: [],
+        workflowContextCount: 2,
+        range: range,
+        now: range.end,
+        quality: reliableQuality,
+        trend: DailyTrendComparison(
+            baselineDays: 5,
+            appSwitchRateDeltaPercent: 35,
+            workflowSwitchRateDeltaPercent: 30,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: AutomationWorkflowTransitionAuditArtifact(
+            protocolVersion: 2,
+            dataSource: "semanticEvents",
+            finalSwitches: 2,
+            explicitReasonSwitches: 2,
+            explicitReasonCoverage: 1,
+            reasonedSwitches: 2,
+            unreasonedSwitches: 0,
+            cancelledNavigations: 0,
+            reasonCounts: ["forcedInterruption": 2],
+            routes: [route]
+        )
+    )
+
+    try expect(assessment.status == .elevated, "至少两类独立证据收敛后才可升高")
+    try expect(assessment.convergingSignals.count >= 3, "应保留行为、恢复和主观驱动")
+    try expect(assessment.metrics.highRecoveryBurdenSwitches == 2, "被迫中断必须进入恢复负担")
+    try expect(assessment.metrics.returnedWithin30Minutes == 2, "快速返回后果必须进入模型")
+    try expect(
+        assessment.recommendedExperiment.contains("回来先做什么"),
+        "恢复压力应产生单一 ready-to-resume 实验"
+    )
+}
+
+suite.run("切换负荷聚合在固定大样本下不超过性能预算") {
+    let start = Date(timeIntervalSince1970: 50_000)
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let range = DateInterval(start: start, duration: 8 * 60 * 60)
+    let activities = (0..<2_000).map { index in
+        let began = start.addingTimeInterval(Double(index * 10))
+        return ActivityRecord(
+            app: AppIdentity(
+                bundleID: index.isMultiple(of: 2) ? "a" : "b",
+                name: index.isMultiple(of: 2) ? "A" : "B"
+            ),
+            startedAt: began,
+            endedAt: began.addingTimeInterval(8),
+            taskID: index.isMultiple(of: 2) ? workflowA : workflowB,
+            focusSessionID: nil,
+            classification: .allowed
+        )
+    }
+    let endpointA = WorkflowTransitionEndpoint(kind: .workflow, workflowID: workflowA)
+    let endpointB = WorkflowTransitionEndpoint(kind: .workflow, workflowID: workflowB)
+    let transitions = (0..<1_000).map { index in
+        let resolvedAt = start.addingTimeInterval(Double(index * 20 + 2))
+        return WorkflowTransitionRecord(
+            navigationStartedAt: resolvedAt.addingTimeInterval(-2),
+            settledAt: resolvedAt.addingTimeInterval(-1),
+            resolvedAt: resolvedAt,
+            origin: index.isMultiple(of: 2) ? endpointA : endpointB,
+            destination: index.isMultiple(of: 2) ? endpointB : endpointA,
+            outcome: .automatic,
+            reason: nil,
+            navigationEventCount: 2
+        )
+    }
+    let parkings = (0..<1_000).map { index in
+        TaskParkingRecord(
+            taskID: index.isMultiple(of: 2) ? workflowA : workflowB,
+            parkedAt: start.addingTimeInterval(Double(index * 20)),
+            resumeCue: "验收占位，不进入聚合报告",
+            resumedAt: start.addingTimeInterval(Double(index * 20 + 10))
+        )
+    }
+    let began = Date()
+    let assessment = SwitchingLoadEngine.assess(
+        activities: activities,
+        taskIntervals: [],
+        focusSessions: [],
+        interruptions: [],
+        workflowTransitions: transitions,
+        taskParkings: parkings,
+        markers: [],
+        workflowContextCount: 2,
+        range: range,
+        now: range.end,
+        quality: DailyDataQuality(isReliableForBehavior: false, warnings: ["性能样本"]),
+        trend: DailyTrendComparison(
+            baselineDays: 0,
+            appSwitchRateDeltaPercent: nil,
+            workflowSwitchRateDeltaPercent: nil,
+            attributedRatioDeltaPoints: nil,
+            medianFocusDeltaMinutes: nil
+        ),
+        transitionAudit: AutomationWorkflowTransitionAuditArtifact(
+            reasonedSwitches: 0,
+            unreasonedSwitches: 1_000,
+            cancelledNavigations: 0,
+            reasonCounts: [:],
+            routes: []
+        )
+    )
+    let elapsed = Date().timeIntervalSince(began)
+
+    try expect(assessment.traceCoverage.count == 10, "大样本仍须审计全部 trace 家族")
+    try expect(elapsed < 1, "切换负荷大样本聚合应在一秒内完成，实测 \(elapsed) 秒")
+}
+
+suite.run("注意力看板固定五维且不生成伪总分") {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: verificationDashboardAnalysis(),
+        summary: DailySummary(
+            appSwitchCount: 32,
+            taskSwitchCount: 0,
+            workflowSwitchCount: 4,
+            suspectedDistractionCount: 0,
+            confirmedDistractionCount: 0,
+            averageReturnLatency: 75,
+            medianFocusStreak: 20 * 60,
+            taskParkingCount: 2,
+            resumedTaskCount: 1,
+            averageTaskResumeLatency: 8 * 60,
+            appDurations: [:],
+            taskDurations: [:]
+        ),
+        switchingLoad: verificationDashboardSwitchingLoad(),
+        interventionAudit: WorkflowInterventionAudit(
+            frequentSwitchEpisodes: 2,
+            promptsShown: 1,
+            confirmedPrompts: 1,
+            timedOutPrompts: 0,
+            assessedPrompts: 1,
+            quietAfterPromptCount: 1
+        )
+    )
+
+    try expect(
+        dashboard.metrics.map(\.kind)
+            == AttentionDashboardMetricKind.allCases,
+        "看板必须固定沉淀五个精选维度"
+    )
+    try expect(
+        dashboard.reliableDimensionCount == 5,
+        "可靠样本应允许五个维度分别判断"
+    )
+    try expect(
+        dashboard.boundary.contains("不合成为")
+            && !dashboard.boundary.contains("脑负荷分数"),
+        "看板必须拒绝单一注意力或脑负荷总分"
+    )
+    let switching = dashboard.metrics.first {
+        $0.kind == .switchingBoundary
+    }
+    try expect(
+        switching?.evidence.contains {
+            $0.contains("高频段 2")
+                && $0.contains("实际确认 1")
+                && $0.contains("确认后稳定 100%")
+        } == true,
+        "切换边界必须承接原有干预效果，不再额外堆叠一张卡"
+    )
+}
+
+suite.run("同工作流工具切换不会被看板直接判为注意力失败") {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: verificationDashboardAnalysis(appSwitchDelta: 60),
+        summary: DailySummary(
+            appSwitchCount: 40,
+            taskSwitchCount: 0,
+            workflowSwitchCount: 1,
+            suspectedDistractionCount: 0,
+            confirmedDistractionCount: 0,
+            averageReturnLatency: nil,
+            medianFocusStreak: 20 * 60,
+            taskParkingCount: 0,
+            resumedTaskCount: 0,
+            averageTaskResumeLatency: nil,
+            appDurations: [:],
+            taskDurations: [:]
+        ),
+        switchingLoad: verificationDashboardSwitchingLoad(
+            withinWorkflowRatio: 0.85
+        ),
+        interventionAudit: WorkflowInterventionAudit(
+            frequentSwitchEpisodes: 0,
+            promptsShown: 0,
+            confirmedPrompts: 0,
+            timedOutPrompts: 0,
+            assessedPrompts: 0,
+            quietAfterPromptCount: 0
+        )
+    )
+    let fragmentation = dashboard.metrics.first {
+        $0.kind == .fragmentation
+    }
+
+    try expect(
+        fragmentation?.state == .observed,
+        "多数切换属于同工作流工具协作时不得直接标红"
+    )
+    try expect(
+        fragmentation?.evidence.contains {
+            $0.contains("不直接等于分心")
+        } == true,
+        "看板必须向用户解释工具协作的限定条件"
+    )
+}
+
+suite.run("长期高基线不会掩盖集中出现的高碎片窗口") {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: verificationDashboardAnalysis(appSwitchDelta: -12),
+        summary: DailySummary(
+            appSwitchCount: 120,
+            taskSwitchCount: 0,
+            workflowSwitchCount: 4,
+            suspectedDistractionCount: 0,
+            confirmedDistractionCount: 0,
+            averageReturnLatency: nil,
+            medianFocusStreak: 10,
+            taskParkingCount: 0,
+            resumedTaskCount: 0,
+            averageTaskResumeLatency: nil,
+            appDurations: [:],
+            taskDurations: [:]
+        ),
+        switchingLoad: verificationDashboardSwitchingLoad(
+            withinWorkflowRatio: 0.3,
+            highFragmentationWindows: 30
+        ),
+        interventionAudit: WorkflowInterventionAudit(
+            frequentSwitchEpisodes: 0,
+            promptsShown: 0,
+            confirmedPrompts: 0,
+            timedOutPrompts: 0,
+            assessedPrompts: 0,
+            quietAfterPromptCount: 0
+        )
+    )
+    let fragmentation = dashboard.metrics.first {
+        $0.kind == .fragmentation
+    }
+
+    try expect(
+        fragmentation?.state == .needsAttention
+            && fragmentation?.comparison.contains("75%") == true,
+        "个人基线本身很碎时，集中高碎片仍必须被看见"
+    )
+}
+
+suite.run("看板分项降级且训练满五次前保持校准") {
+    let dashboard = AttentionDashboardEngine.make(
+        coaching: verificationDashboardAnalysis(
+            appSwitchDelta: nil,
+            withinReliableLenses: [.contextRecovery],
+            trainingCount: 4,
+            successfulTrainingCount: 4
+        ),
+        summary: DailySummary(
+            appSwitchCount: 0,
+            taskSwitchCount: 0,
+            workflowSwitchCount: 0,
+            suspectedDistractionCount: 0,
+            confirmedDistractionCount: 0,
+            averageReturnLatency: nil,
+            medianFocusStreak: nil,
+            taskParkingCount: 2,
+            resumedTaskCount: 1,
+            averageTaskResumeLatency: 5 * 60,
+            appDurations: [:],
+            taskDurations: [:]
+        ),
+        switchingLoad: verificationDashboardSwitchingLoad(),
+        interventionAudit: WorkflowInterventionAudit(
+            frequentSwitchEpisodes: 0,
+            promptsShown: 0,
+            confirmedPrompts: 0,
+            timedOutPrompts: 0,
+            assessedPrompts: 0,
+            quietAfterPromptCount: 0
+        )
+    )
+    let states = Dictionary(
+        uniqueKeysWithValues: dashboard.metrics.map {
+            ($0.kind, $0.state)
+        }
+    )
+
+    try expect(
+        states[.sustainedProgress] == .unavailable
+            && states[.fragmentation] == .unavailable
+            && states[.switchingBoundary] == .unavailable,
+        "一个镜头不可靠时只能降级对应维度"
+    )
+    try expect(
+        states[.contextRecovery] == .observed,
+        "显式返回点仍应独立提供恢复证据"
+    )
+    try expect(
+        states[.trainingFeedback] == .calibrating,
+        "训练不足五次时不得提前判断计划好坏"
+    )
+}
+
+suite.run("纵向看板用十个工作日锁定唯一问题并联动实验") {
+    let start = Date(timeIntervalSince1970: 2_000_000)
+    let days = (0..<10).map { index in
+        verificationDashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: index < 7 ? 20 : 10,
+            highFragmentationWindows: index < 7 ? 4 : 20
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+    let fragmentation = dashboard.metrics.first {
+        $0.kind == .fragmentation
+    }
+    let sustained = dashboard.metrics.first {
+        $0.kind == .sustainedProgress
+    }
+
+    try expect(dashboard.version == 2, "纵向看板必须使用新协议")
+    try expect(dashboard.baselineDays == 10, "必须展示最近十个完整工作日")
+    try expect(
+        fragmentation?.trend?.direction == .worsening
+            && sustained?.trend?.direction == .worsening,
+        "近期碎片和连续工作后果必须分别形成趋势"
+    )
+    try expect(
+        dashboard.finding?.kind == .fragmentation
+            && dashboard.finding?.state == .needsAttention,
+        "收敛证据必须只升级一个主要问题"
+    )
+    try expect(
+        dashboard.recommendation?.evidence == dashboard.finding?.evidence
+            && dashboard.recommendation?.title.contains("单一产出") == true,
+        "实验必须由主要问题的同一组证据直接驱动"
+    )
+}
+
+suite.run("未结束日期不改变趋势方向") {
+    let start = Date(timeIntervalSince1970: 3_000_000)
+    let completed = (0..<9).map { index in
+        verificationDashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: 20,
+            highFragmentationWindows: 4
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: completed + [
+            verificationDashboardDay(
+                date: start.addingTimeInterval(9 * 86_400),
+                isPartial: true,
+                medianFocusMinutes: 2,
+                highFragmentationWindows: 35
+            )
+        ],
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+
+    try expect(dashboard.includesPartialDay == true, "进行中日期必须显式标记")
+    try expect(
+        dashboard.finding?.state == .stable
+            && dashboard.metrics.first {
+                $0.kind == .fragmentation
+            }?.trend?.direction == .stable,
+        "未结束日期的极端值不得制造恶化结论"
+    )
+}
+
+suite.run("训练反馈按跨天滚动五次而不是单日计数") {
+    let start = Date(timeIntervalSince1970: 4_000_000)
+    let days = (0..<5).map { index in
+        let date = start.addingTimeInterval(Double(index) * 86_400)
+        return verificationDashboardDay(
+            date: date,
+            focusSessions: [
+                verificationDashboardSession(
+                    date: date,
+                    successful: index == 0,
+                    difficulty: 4
+                )
+            ]
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+    let training = dashboard.metrics.first {
+        $0.kind == .trainingFeedback
+    }
+
+    try expect(
+        training?.trend?.reliableDayCount == 5
+            && training?.trend?.recentMedian == 20,
+        "跨五个工作日各一次训练也必须形成最近五次窗口"
+    )
+    try expect(
+        dashboard.finding?.kind == .trainingFeedback
+            && dashboard.recommendation?.title.contains("5 次训练") == true,
+        "低成功和高难度必须联动训练负荷校准"
+    )
+}
+
+suite.run("碎片增加但没有恢复后果时不升级干预") {
+    let start = Date(timeIntervalSince1970: 5_000_000)
+    let days = (0..<10).map { index in
+        verificationDashboardDay(
+            date: start.addingTimeInterval(Double(index) * 86_400),
+            medianFocusMinutes: 20,
+            highFragmentationWindows: index < 7 ? 4 : 20
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+
+    try expect(
+        dashboard.finding?.state == .stable
+            && dashboard.finding?.title.contains("没有出现恢复后果") == true
+            && dashboard.recommendation?.action == DailyCoachAction.none,
+        "单一切换计数变化不足以触发行为实验"
+    )
+}
+
+suite.run("完整十日回顾与趋势看板在固定大样本下不超过性能预算") {
+    let calendar = utcCalendar()
+    let day = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 29,
+        hour: 9
+    ))!
+    let workflowA = UUID()
+    let workflowB = UUID()
+    let activities = (0..<FocusTracePerformanceBudget.reviewDashboardActivityCount)
+        .map { index in
+            let startedAt = day.addingTimeInterval(Double(index * 10))
+            return ActivityRecord(
+                app: AppIdentity(
+                    bundleID: index.isMultiple(of: 2) ? "app.a" : "app.b",
+                    name: index.isMultiple(of: 2) ? "A" : "B"
+                ),
+                startedAt: startedAt,
+                endedAt: startedAt.addingTimeInterval(8),
+                taskID: index.isMultiple(of: 2) ? workflowA : workflowB,
+                focusSessionID: nil,
+                classification: .allowed
+            )
+        }
+    let endpointA = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowA
+    )
+    let endpointB = WorkflowTransitionEndpoint(
+        kind: .workflow,
+        workflowID: workflowB
+    )
+    let transitions = (0..<FocusTracePerformanceBudget.reviewDashboardTransitionCount)
+        .map { index in
+            let resolvedAt = day.addingTimeInterval(Double(index * 20 + 2))
+            return WorkflowTransitionRecord(
+                navigationStartedAt: resolvedAt.addingTimeInterval(-2),
+                settledAt: resolvedAt.addingTimeInterval(-1),
+                resolvedAt: resolvedAt,
+                origin: index.isMultiple(of: 2) ? endpointA : endpointB,
+                destination: index.isMultiple(of: 2) ? endpointB : endpointA,
+                outcome: .automatic,
+                reason: nil,
+                navigationEventCount: 2
+            )
+        }
+    let parkings = (0..<FocusTracePerformanceBudget.reviewDashboardParkingCount)
+        .map { index in
+            TaskParkingRecord(
+                taskID: index.isMultiple(of: 2) ? workflowA : workflowB,
+                parkedAt: day.addingTimeInterval(Double(index * 20)),
+                resumeCue: "性能占位，不进入聚合看板",
+                resumedAt: day.addingTimeInterval(Double(index * 20 + 10))
+            )
+        }
+    let snapshot = FocusTraceLocalSnapshot(
+        tasks: [
+            TaskRecord(id: workflowA, title: "工作流 A"),
+            TaskRecord(id: workflowB, title: "工作流 B")
+        ],
+        activities: activities,
+        workflowTransitions: transitions,
+        taskParkings: parkings
+    )
+    let startedAt = Date()
+    let trendDays = (0..<10).map { index -> AttentionDashboardDay in
+        let reportDate = calendar.date(
+            byAdding: .day,
+            value: index - 9,
+            to: day
+        )!
+        let report = AutomationReportEngine.makeReport(
+            snapshot: snapshot,
+            reportDate: reportDate,
+            generatedAt: day.addingTimeInterval(8 * 60 * 60),
+            calendar: calendar
+        )
+        let dayStart = calendar.startOfDay(for: reportDate)
+        let dayEnd = calendar.date(
+            byAdding: .day,
+            value: 1,
+            to: dayStart
+        )!
+        return AttentionDashboardDay(
+            date: dayStart,
+            isPartial: false,
+            coaching: report.coaching,
+            summary: report.summary,
+            switchingLoad: report.switchingLoad,
+            interventionAudit: WorkflowSwitchInterventionEngine.audit(
+                transitions: transitions,
+                range: dayStart..<dayEnd,
+                now: min(dayEnd, day.addingTimeInterval(8 * 60 * 60))
+            ),
+            focusSessions: []
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: trendDays,
+        currentPlan: snapshot.currentPlan
+    )
+    let elapsed = Date().timeIntervalSince(startedAt)
+
+    try expect(dashboard.metrics.count == 5, "大样本仍须生成完整五维看板")
+    try expect(
+        elapsed < FocusTracePerformanceBudget.reviewDashboardMaximumSeconds,
+        "完整十日日报与趋势看板应在一秒内完成，实测 \(elapsed) 秒"
+    )
+}
+
 suite.run("Codex 日报只暴露聚合结果") {
     let fixture = phaseTwoFixture()
     let report = AutomationReportEngine.makeReport(
@@ -2665,7 +3866,18 @@ suite.run("Codex 日报只暴露聚合结果") {
         generatedAt: fixture.lastDay.addingTimeInterval(9 * 60 * 60),
         calendar: fixture.calendar
     )
-    let markdown = AutomationReportEngine.markdown(for: report, timeZone: fixture.calendar.timeZone)
+    let attentionTrend = AutomationReportEngine.makeAttentionDashboard(
+        snapshot: fixture.snapshot,
+        through: fixture.lastDay,
+        generatedAt: report.generatedAt,
+        calendar: fixture.calendar,
+        currentReport: report
+    )
+    let markdown = AutomationReportEngine.markdown(
+        for: report,
+        attentionTrend: attentionTrend,
+        timeZone: fixture.calendar.timeZone
+    )
     try expect(markdown.contains("状态：已解锁"), "日报应显示阶段 2 状态")
     try expect(markdown.contains("Codex → 微信"), "日报应包含聚合模式")
     try expect(markdown.contains("本周单项建议"), "日报应限制为单项建议")
@@ -2673,9 +3885,12 @@ suite.run("Codex 日报只暴露聚合结果") {
     try expect(!markdown.contains("PRIVATE_RESUME_CUE"), "日报不应暴露恢复线索")
     try expect(!markdown.contains("com.openai.codex"), "日报不应泄露 Bundle ID")
     try expect(!markdown.contains(fixture.snapshot.activities[0].id.uuidString), "日报不应泄露原始事件 ID")
-    let json = try AutomationReportEngine.jsonData(for: report)
+    let json = try AutomationReportEngine.jsonData(
+        for: report,
+        attentionTrend: attentionTrend
+    )
     let jsonText = String(decoding: json, as: UTF8.self)
-    try expect(jsonText.contains("\"schemaVersion\" : 5"), "结构化日报应包含协议版本")
+    try expect(jsonText.contains("\"schemaVersion\" : 7"), "结构化日报应包含纵向趋势协议版本")
     try expect(
         jsonText.contains("\"reportCivilDate\" : \"2026-06-10\""),
         "结构化日报必须显式保留用户所选民用日期"
@@ -2685,6 +3900,19 @@ suite.run("Codex 日报只暴露聚合结果") {
         jsonText.contains("\"observationPlan\"")
             && jsonText.contains("\"minimalEventDrivenFixed\""),
         "结构化日报应声明动态分析配置与固定采集边界"
+    )
+    try expect(
+        jsonText.contains("\"switchingLoad\"")
+            && jsonText.contains("\"traceCoverage\"")
+            && markdown.contains("## 切换负荷证据")
+            && markdown.contains("今日无样本 trace"),
+        "结构化日报必须审计切换负荷证据与全部 trace 家族"
+    )
+    try expect(
+        jsonText.contains("\"attentionTrend\"")
+            && markdown.contains("## 最近十个工作日注意力趋势")
+            && markdown.contains("下一步单项实验"),
+        "App 与 Codex 日报必须共享同一份纵向主要问题与单项实验"
     )
     try expect(!jsonText.contains("PRIVATE_RESUME_CUE"), "结构化日报不应暴露恢复线索")
     try expect(!jsonText.contains("com.openai.codex"), "结构化日报不应泄露 Bundle ID")
@@ -2787,6 +4015,8 @@ suite.run("Codex 一键接入使用官方深链和聚合工作区") {
         "at most 360 characters",
         "Do not add a preface",
         "`transitionAudit.routes`",
+        "`attentionTrend` first",
+        "includesPartialDay=true",
         "`observationPlan.source`",
         "`openRequirementTitles`",
         "untrusted data label",
@@ -2839,11 +4069,11 @@ suite.run("Codex 一键接入使用官方深链和聚合工作区") {
         "Sources/FocusTrace/CodexReviewBridge.swift"
     )
     try expect(
-        reportCommand.contains("(2...5).contains(report.schemaVersion)")
-            && validator.contains("{2, 3, 4, 5}")
-            && codexBridge.contains("(2...5).contains(report.schemaVersion)")
+        reportCommand.contains("(2...7).contains(report.schemaVersion)")
+            && validator.contains("{2, 3, 4, 5, 6, 7}")
+            && codexBridge.contains("(2...7).contains(report.schemaVersion)")
             && codexBridge.contains("review.isGrounded(in: report)"),
-        "当前 v5 聚合报告必须参与上一项建议验证、保留民用日期、通过写回校验并在 App 中展示"
+        "当前 v7 聚合报告必须参与纵向建议验证、保留民用日期、通过写回校验并在 App 中展示"
     )
 }
 
@@ -2986,8 +4216,9 @@ suite.run("需求保持两态且工作流列表没有重复动作") {
     )
     try expect(
         !focusView.contains("绑定此桌面")
+            && !focusView.contains("state.bindCurrentSpace")
             && !focusView.contains("workflowToDelete"),
-        "工作流整行已经负责绑定，列表不能再展示重复绑定或删除动作"
+        "主窗口工作流列表不能展示或执行桌面绑定，也不能恢复删除快捷动作"
     )
     try expect(
         focusView.contains("Button(\"编辑\")")
@@ -3009,6 +4240,61 @@ suite.run("需求保持两态且工作流列表没有重复动作") {
         state.contains("func workflowNameValidationMessage(")
             && state.contains("func deleteWorkflow("),
         "所有创建路径必须共用名称校验，工作流删除必须由状态层负责"
+    )
+}
+
+suite.run("主窗口没有桌面绑定旁路且状态栏返回点命名清晰") {
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    func contents(_ path: String) throws -> String {
+        try String(
+            contentsOf: root.appendingPathComponent(path),
+            encoding: .utf8
+        )
+    }
+
+    let menu = try contents("Sources/FocusTrace/Views/MenuBarView.swift")
+    try expect(
+        menu.contains("bindCurrentSpaceFromMenuBar")
+            && menu.contains("createWorkflowAndBindCurrentSpaceFromMenuBar")
+            && menu.contains("离开前保存返回点")
+            && !menu.contains("Agent 还在运行？"),
+        "状态栏必须独占桌面绑定，并直接说明返回点行为"
+    )
+
+    for path in [
+        "Sources/FocusTrace/Views/FocusTrainingView.swift",
+        "Sources/FocusTrace/Views/TimelineView.swift",
+        "Sources/FocusTrace/Views/TaskEditor.swift",
+        "Sources/FocusTrace/Views/OnboardingView.swift",
+        "Sources/FocusTrace/Views/ReviewView.swift",
+        "Sources/FocusTrace/Views/RootView.swift",
+    ] {
+        let source = try contents(path)
+        try expect(
+            !source.contains("bindCurrentSpaceFromMenuBar")
+                && !source.contains("createWorkflowAndBindCurrentSpaceFromMenuBar")
+                && !source.contains("bindCurrentSpaceOnCreate"),
+            "\(path) 不能绕过状态栏发起桌面绑定"
+        )
+    }
+
+    let onboarding = try contents(
+        "Sources/FocusTrace/Views/OnboardingView.swift"
+    )
+    try expect(
+        !onboarding.contains("自动绑定当前桌面")
+            && !onboarding.contains("Button(\"绑定当前桌面\")"),
+        "首次使用不能把 FocusTrace 主窗口所在 Space 误绑为工作流"
+    )
+
+    let state = try contents("Sources/FocusTrace/ApplicationState.swift")
+    try expect(
+        state.contains("func bindCurrentSpaceFromMenuBar(")
+            && !state.contains("func bindCurrentSpace(to workflowID:"),
+        "状态层的绑定入口必须明确标记为状态栏专用"
     )
 }
 
@@ -3054,6 +4340,31 @@ suite.run("README 首页保持面向用户且技术细节折叠") {
             "README 没有准确描述当前能力：\(currentCapability)"
         )
     }
+    try expect(
+        readme.contains("./Docs/GETTING_STARTED.md")
+            && readme.contains("创建后，App 会继续显示绑定、记录和回顾三步"),
+        "README 必须链接完整新手教学，并说明首次创建后的下一步"
+    )
+
+    let gettingStartedURL = readmeURL
+        .deletingLastPathComponent()
+        .appendingPathComponent("Docs/GETTING_STARTED.md")
+    let gettingStarted = try String(
+        contentsOf: gettingStartedURL,
+        encoding: .utf8
+    )
+    for heading in [
+        "## 1. 创建当前工作流",
+        "## 2. 在真正工作的桌面绑定",
+        "## 3. 正常工作",
+        "## 4. 下班后再回顾",
+        "## 没有看到数据怎么办"
+    ] {
+        try expect(
+            gettingStarted.contains(heading),
+            "完整新手教学缺少：\(heading)"
+        )
+    }
 
     let reportScript = try String(
         contentsOf: URL(
@@ -3065,6 +4376,45 @@ suite.run("README 首页保持面向用户且技术细节折叠") {
     try expect(
         reportScript.components(separatedBy: "\"$@\"").count == 3,
         "历史日报生成必须把日期参数同时传给预构建与 SwiftPM 两条路径"
+    )
+}
+
+suite.run("数据与保留保持三行对齐且删除只用一个入口") {
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    let settings = try String(
+        contentsOf: root.appendingPathComponent(
+            "Sources/FocusTrace/Views/SettingsView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    try expect(
+        settings.components(separatedBy: "SettingsControlRow(").count == 4,
+        "数据与保留必须保持保留、导出、删除三条对齐设置行"
+    )
+    let retentionRange = settings.range(of: "title: \"自动保留行为数据\"")
+    let exportRange = settings.range(of: "title: \"导出副本\"")
+    let deletionRange = settings.range(of: "title: \"删除数据\"")
+    try expect(
+        retentionRange != nil
+            && exportRange != nil
+            && deletionRange != nil
+            && retentionRange!.lowerBound < exportRange!.lowerBound
+            && exportRange!.lowerBound < deletionRange!.lowerBound,
+        "数据设置必须按保留、导出、删除的决策顺序排列"
+    )
+    try expect(
+        settings.contains(".tint(FocusTraceTheme.coral)")
+            && settings.contains("Label(\"删除数据…\", systemImage: \"trash\")")
+            && settings.contains("showingDeletionScopeConfirmation = true")
+            && settings.contains("只删除 \\(state.selectedDate.formatted")
+            && settings.contains("Button(\"清空所有行为数据\", role: .destructive)")
+            && !settings.contains("showingDeleteDayConfirmation")
+            && !settings.contains("showingDeleteAllConfirmation"),
+        "删除设置必须只有一个可见入口，再在二次确认中选择按日或全部"
     )
 }
 
@@ -3093,8 +4443,9 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let quality = try contents("Docs/QUALITY_GATES.md")
     for contractID in [
-        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
-        "SPACE-02", "DATA-02", "PRIV-01", "PERF-01", "PERF-04"
+        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
+        "SPACE-02", "DATA-02", "PRIV-01", "REVIEW-07", "REVIEW-09",
+        "PERF-01", "PERF-04", "PERF-07", "PERF-09"
     ] {
         try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
     }
@@ -3109,6 +4460,9 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
         "workflowInterventionAuditMeasuresPromptAndFollowingQuietWindow",
         "calendarPopoverAnchorPressesAlternateExactlyOnce",
         "disclosureButtonsExpandHitAreaWithoutChangingLayout",
+        "settingsDataControlsUseOneDeletionEntryWithTwoConfirmedScopes",
+        "timelineLabelsAndEndpointHoursStayInsideThePlotAtNarrowWidths",
+        "gettingStartedFollowsCreateBindWorkReviewWithoutAddingInputs",
         "requirementCalendarBoundsAllowFutureAndRespectEarliestDate",
         "requirementCaptureStaysInInboxUntilExplicitlyPlanned",
         "requirementPlanningSeparatesDeadlineImportanceAndWorkflow",
@@ -3130,10 +4484,17 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
         "workflowTransitionKeepsCompleteNativeSemantics",
         "workflowTransitionAuditPrefersNativeSemanticsWithoutDoubleCountingMarkers",
         "timelinePresentationCacheInvalidatesOnlyForMeaningfulChanges",
-        "dailyCoachRefusesBehaviorAdviceWhenWorkflowAttributionIsLow",
+        "workflowAttributionRecoversOnlyUnambiguousExplicitTrace",
+        "dailyCoachKeepsNonWorkflowAnalysisWhenAttributionIsLow",
         "dailyCoachDoesNotTreatSwitchCountAloneAsRecoveryFailure",
         "dailyCoachRequiresRepeatedExplicitHandoffsBeforeParkingAdvice",
+        "attentionDashboardUsesTenWorkdaysAndLinksTheExperimentToTheMainProblem",
+        "attentionDashboardExcludesAnUnfinishedDayFromTrendConclusions",
+        "attentionDashboardDoesNotEscalateToolCollaborationAsFragmentation",
+        "attentionDashboardEvaluatesTrainingAcrossDaysInRollingFiveSessions",
+        "attentionDashboardDoesNotEscalateFragmentationWithoutAConsequence",
         "automationJSONIsStructuredAndAggregateOnly",
+        "automationReportV7CarriesTheSameAggregateAttentionTrendAsTheApp",
         "codexReviewDecisionBriefRemainsShortAndCompatible",
         "codexReviewV3RejectsUngroundedWorkflowSemantics",
         "codexReviewKeepsLegacyReadCompatibility",
@@ -3185,9 +4546,13 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
             && timelineView.contains("applicationLegend")
             && timelineView.contains("TimelineApplicationRunEngine.runs")
             && timelineView.contains("segmentSeparator")
+            && timelineView.contains("rowLabel(\"切换密度\")")
+            && timelineView.contains(
+                "FocusTraceTimelineLayout.hourLabelCenterX"
+            )
             && !timelineView.contains("StablePaletteAssignment.index")
             && !timelineView.contains("currentWorkflowStroke"),
-        "时间轴必须合并主应用、使用统一浅色分隔并按排名使用参考色板"
+        "时间轴必须合并主应用、使用统一浅色分隔、按排名使用参考色板，并保持标签与首尾时间在安全边距内"
     )
 
     let spaceSwitchGate = try contents(
@@ -3254,13 +4619,36 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
     let reviewView = try contents(
         "Sources/FocusTrace/Views/ReviewView.swift"
     )
+    let dashboardEngine = try contents(
+        "Sources/FocusTraceCore/AttentionDashboardEngine.swift"
+    )
     try expect(
-        reviewView.contains("切换干预是否值得")
-            && reviewView.contains("高频切换段")
-            && reviewView.contains("确认后稳定")
-            && reviewView.contains("今天重点观察")
-            && reviewView.contains("不会抽样或丢弃原始时间轴"),
-        "回顾必须解释确认为何出现、确认后的稳定性与动态分析来源"
+        reviewView.contains("注意力趋势")
+            && reviewView.contains("AttentionTrendCard")
+            && reviewView.contains(
+                "FocusTraceAttentionTrendLayout.pointX"
+            )
+            && reviewView.contains("下一步单项实验")
+            && reviewView.contains("进行中的日期只显示为空心点")
+            && reviewView.contains("不会抽样或丢弃原始时间轴")
+            && !reviewView.contains("LegacyAttentionDashboardCard")
+            && dashboardEngine.contains("高频段")
+            && dashboardEngine.contains("实际确认")
+            && dashboardEngine.contains("确认后稳定")
+            && dashboardEngine.contains("不直接等于分心")
+            && dashboardEngine.contains("trendWorkdayCount = 10")
+            && dashboardEngine.contains("未结束日期不参与趋势结论"),
+        "回顾必须用十日五维趋势承接唯一问题、单项实验和动态分析来源，首尾数据点不得溢出绘图区"
+    )
+    try expect(
+        applicationState.contains("private var reviewAnalysisCache")
+            && applicationState.contains(
+                "reviewAnalysisCache.key == key"
+            )
+            && applicationState.contains(
+                "TimelinePresentationEngine.renderMinute"
+            ),
+        "完整本地日报与五维看板必须按数据版本和分钟复用，不能随专注秒钟重算"
     )
     try expect(
         !notificationRouter.contains("本轮专注目标已完成")

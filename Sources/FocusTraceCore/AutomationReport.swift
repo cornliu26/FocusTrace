@@ -107,6 +107,7 @@ public struct AutomationDailyReport: Equatable, Sendable {
     public let workflowContexts: [AutomationWorkflowContextArtifact]
     public let transitionAudit: AutomationWorkflowTransitionAuditArtifact
     public let observationPlan: DailyObservationPlan
+    public let switchingLoad: SwitchingLoadAssessment
 
     public init(
         reportDate: Date,
@@ -122,7 +123,8 @@ public struct AutomationDailyReport: Equatable, Sendable {
         coaching: DailyCoachingAnalysis,
         workflowContexts: [AutomationWorkflowContextArtifact],
         transitionAudit: AutomationWorkflowTransitionAuditArtifact,
-        observationPlan: DailyObservationPlan
+        observationPlan: DailyObservationPlan,
+        switchingLoad: SwitchingLoadAssessment
     ) {
         self.reportDate = reportDate
         self.reportCivilDate = reportCivilDate
@@ -138,6 +140,7 @@ public struct AutomationDailyReport: Equatable, Sendable {
         self.workflowContexts = workflowContexts
         self.transitionAudit = transitionAudit
         self.observationPlan = observationPlan
+        self.switchingLoad = switchingLoad
     }
 }
 
@@ -196,9 +199,14 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     public let workflowContexts: [AutomationWorkflowContextArtifact]?
     public let transitionAudit: AutomationWorkflowTransitionAuditArtifact?
     public let observationPlan: DailyObservationPlan?
+    public let switchingLoad: SwitchingLoadAssessment?
+    public let attentionTrend: AttentionDashboard?
 
-    public init(report: AutomationDailyReport) {
-        schemaVersion = 5
+    public init(
+        report: AutomationDailyReport,
+        attentionTrend: AttentionDashboard? = nil
+    ) {
+        schemaVersion = attentionTrend == nil ? 6 : 7
         reportID = "focustrace-\(Int(report.reportDate.timeIntervalSince1970))-\(Int(report.generatedAt.timeIntervalSince1970))"
         reportDate = report.reportDate
         reportCivilDate = report.reportCivilDate
@@ -222,6 +230,8 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
         workflowContexts = report.workflowContexts
         transitionAudit = report.transitionAudit
         observationPlan = report.observationPlan
+        switchingLoad = report.switchingLoad
+        self.attentionTrend = attentionTrend
         currentPlan = AutomationPlanArtifact(
             version: report.currentPlan.version,
             focusMinutes: report.currentPlan.focusMinutes,
@@ -271,6 +281,8 @@ public enum CodexReviewAnalysisSource: String, Codable, Equatable, Sendable {
     case workflowRoute
     case previousRecommendation
     case normalizedTrend
+    case attentionTrend
+    case switchingLoad
     case phaseTwo
     case localRecommendation
 }
@@ -472,7 +484,7 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
         case .dataQuality:
             return !report.dataQuality.isReliableForBehavior && noRoute
         case .workflowRoute:
-            guard report.dataQuality.isReliableForBehavior,
+            guard report.dataQuality.isReliable(.workflowSemantics),
                   let selection = analysisAudit.selectedRoute,
                   analysisAudit.contextRelation != .notApplicable,
                   let transitionAudit = report.transitionAudit,
@@ -493,7 +505,8 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
             }
             return status == .needsAdjustment || status == .notRun
         case .normalizedTrend:
-            return report.dataQuality.isReliableForBehavior
+            return report.dataQuality.isReliable(.fragmentation)
+                && report.dataQuality.isReliable(.workflowSemantics)
                 && noRoute
                 && report.trend.baselineDays >= 2
                 && (
@@ -502,8 +515,28 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
                         || report.trend.attributedRatioDeltaPoints != nil
                         || report.trend.medianFocusDeltaMinutes != nil
                 )
+        case .attentionTrend:
+            guard noRoute,
+                  let trend = report.attentionTrend,
+                  trend.reliableDimensionCount > 0,
+                  let finding = trend.finding,
+                  finding.state != .calibrating,
+                  !finding.evidence.isEmpty,
+                  let recommendation = trend.recommendation else {
+                return false
+            }
+            return recommendation.evidence == finding.evidence
+        case .switchingLoad:
+            guard report.dataQuality.isReliableForBehavior,
+                  noRoute,
+                  let switchingLoad = report.switchingLoad else {
+                return false
+            }
+            return [.mixedEvidence, .elevated].contains(
+                switchingLoad.status
+            ) && !switchingLoad.evidence.isEmpty
         case .phaseTwo:
-            return report.dataQuality.isReliableForBehavior
+            return report.dataQuality.isReliable(.workflowSemantics)
                 && noRoute
                 && report.phaseTwo.status == "ready"
                 && (
@@ -511,7 +544,10 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
                         || report.phaseTwo.suggestionTitle != nil
                 )
         case .localRecommendation:
-            return report.dataQuality.isReliableForBehavior && noRoute
+            let lens = report.recommendation.kind.analysisLens
+            return lens != .dataQuality
+                && report.dataQuality.isReliable(lens)
+                && noRoute
         }
     }
 
@@ -583,6 +619,12 @@ public enum AutomationReportEngine {
         let taskParkings = snapshot.taskParkings.filter {
             $0.parkedAt >= start && $0.parkedAt < end
         }
+        let markers = snapshot.markers.filter {
+            $0.date >= start && $0.date < end
+        }
+        let workflowTransitions = snapshot.workflowTransitions.filter {
+            $0.resolvedAt >= start && $0.resolvedAt < end
+        }
         let completedSessions = snapshot.focusSessions.filter { $0.endedAt != nil }
         let plan = snapshot.currentPlan
         let analysis = AdaptiveAnalyzer.analyze(
@@ -627,6 +669,21 @@ public enum AutomationReportEngine {
                 now: effectiveNow
             )
         )
+        let switchingLoad = SwitchingLoadEngine.assess(
+            activities: activities,
+            taskIntervals: taskIntervals,
+            focusSessions: sessions,
+            interruptions: interruptions,
+            workflowTransitions: workflowTransitions,
+            taskParkings: taskParkings,
+            markers: markers,
+            workflowContextCount: transitionResult.contexts.count,
+            range: DateInterval(start: start, end: end),
+            now: effectiveNow,
+            quality: coaching.quality,
+            trend: coaching.trend,
+            transitionAudit: transitionResult.audit
+        )
 
         return AutomationDailyReport(
             reportDate: start,
@@ -642,12 +699,74 @@ public enum AutomationReportEngine {
             coaching: coaching,
             workflowContexts: transitionResult.contexts,
             transitionAudit: transitionResult.audit,
-            observationPlan: observationPlan
+            observationPlan: observationPlan,
+            switchingLoad: switchingLoad
+        )
+    }
+
+    public static func makeAttentionDashboard(
+        snapshot: FocusTraceLocalSnapshot,
+        through reportDate: Date,
+        generatedAt: Date = Date(),
+        calendar: Calendar = .current,
+        currentReport: AutomationDailyReport? = nil
+    ) -> AttentionDashboard {
+        let selectedDay = calendar.startOfDay(for: reportDate)
+        let dates = AttentionDashboardEngine.candidateDates(
+            in: snapshot,
+            through: selectedDay,
+            calendar: calendar
+        )
+        let days = dates.map { date -> AttentionDashboardDay in
+            let report: AutomationDailyReport
+            if let currentReport,
+               calendar.isDate(date, inSameDayAs: selectedDay) {
+                report = currentReport
+            } else {
+                report = makeReport(
+                    snapshot: snapshot,
+                    reportDate: date,
+                    generatedAt: generatedAt,
+                    calendar: calendar
+                )
+            }
+            let dayStart = calendar.startOfDay(for: date)
+            let dayEnd = calendar.date(
+                byAdding: .day,
+                value: 1,
+                to: dayStart
+            ) ?? dayStart.addingTimeInterval(86_400)
+            let sessions = snapshot.focusSessions.filter {
+                $0.startedAt >= dayStart
+                    && $0.startedAt < dayEnd
+                    && $0.endedAt != nil
+            }
+            return AttentionDashboardDay(
+                date: dayStart,
+                isPartial: calendar.isDate(
+                    dayStart,
+                    inSameDayAs: generatedAt
+                ) && generatedAt < dayEnd,
+                coaching: report.coaching,
+                summary: report.summary,
+                switchingLoad: report.switchingLoad,
+                interventionAudit: WorkflowSwitchInterventionEngine.audit(
+                    transitions: snapshot.workflowTransitions,
+                    range: dayStart..<dayEnd,
+                    now: min(generatedAt, dayEnd)
+                ),
+                focusSessions: sessions
+            )
+        }
+        return AttentionDashboardEngine.make(
+            days: days,
+            currentPlan: snapshot.currentPlan
         )
     }
 
     public static func markdown(
         for report: AutomationDailyReport,
+        attentionTrend: AttentionDashboard? = nil,
         timeZone: TimeZone = .current
     ) -> String {
         let dateFormatter = DateFormatter()
@@ -687,8 +806,29 @@ public enum AutomationReportEngine {
             "- 工作流归因：\(formatPercent(report.coaching.metrics.attributedRatio))（\(formatMinutes(report.coaching.metrics.attributedMinutes))）",
             "- 应用切换率：\(formatDecimal(report.coaching.metrics.appSwitchesPerHour)) 次/小时",
             "- 工作流切换率：\(formatDecimal(report.coaching.metrics.workflowSwitchesPerHour)) 次/小时",
-            "- 行为结论可信：\(report.coaching.quality.isReliableForBehavior ? "是" : "否")",
+            "- 至少一个行为分析镜头可用：\(report.coaching.quality.isReliableForBehavior ? "是" : "否")",
         ]
+        if let attribution = report.coaching.metrics.workflowAttribution {
+            lines.append(
+                "- 归因来源：直接 \(formatMinutes(attribution.directMinutes))；"
+                    + "trace 补全 \(formatMinutes(attribution.recoveredMinutes))；"
+                    + "仍未归因 \(formatMinutes(attribution.unresolvedMinutes))"
+            )
+        }
+        if let scopes = report.coaching.quality.analysisScopes {
+            let available = scopes
+                .filter { $0.lens != .dataQuality && $0.isReliable }
+                .map { observationLensTitle($0.lens) }
+            let blocked = scopes
+                .filter { $0.lens != .dataQuality && !$0.isReliable }
+                .map { observationLensTitle($0.lens) }
+            lines.append(
+                "- 可用分析：\(available.isEmpty ? "无" : available.joined(separator: "、"))"
+            )
+            lines.append(
+                "- 暂缓分析：\(blocked.isEmpty ? "无" : blocked.joined(separator: "、"))"
+            )
+        }
         if report.coaching.quality.warnings.isEmpty {
             lines.append("- 数据质量提醒：无")
         } else {
@@ -696,6 +836,69 @@ public enum AutomationReportEngine {
                 lines.append("- 数据质量提醒：\(clean(warning))")
             }
         }
+        if let attentionTrend {
+            let finding = attentionTrend.finding
+            let recommendation = attentionTrend.recommendation
+            let findingLabel = finding?.state == .needsAttention
+                ? "当前问题"
+                : "当前结论"
+            lines.append(contentsOf: [
+                "",
+                "## 最近十个工作日注意力趋势",
+                "",
+                "- 边界：\(clean(attentionTrend.boundary))",
+                "- 可靠趋势：\(attentionTrend.reliableDimensionCount)/\(attentionTrend.metrics.count) 个维度",
+                "- \(findingLabel)：\(clean(finding?.title ?? "正在建立趋势样本"))",
+                "- 判断：\(clean(finding?.detail ?? "当前不能据此判断注意力"))"
+            ])
+            for evidence in finding?.evidence ?? [] {
+                lines.append("- 证据：\(clean(evidence))")
+            }
+            if let recommendation {
+                lines.append(
+                    "- 下一步单项实验：\(clean(recommendation.title))"
+                )
+                lines.append(
+                    "- 验收：\(clean(recommendation.method.successMeasure))"
+                )
+            }
+            for metric in attentionTrend.metrics {
+                let direction = metric.trend?.direction.rawValue
+                    ?? AttentionTrendDirection.calibrating.rawValue
+                lines.append(
+                    "- \(clean(metric.title))：\(clean(metric.value))；"
+                        + "\(clean(metric.comparison))；方向 \(direction)"
+                )
+            }
+        }
+        let switchingLoad = report.switchingLoad
+        let usedTrace = switchingLoad.traceCoverage.filter {
+            $0.status == .used
+        }.map { switchingLoadTraceTitle($0.family) }
+        let blockedTrace = switchingLoad.traceCoverage.filter {
+            $0.status == .qualityBlocked
+        }.map { switchingLoadTraceTitle($0.family) }
+        let noSampleTrace = switchingLoad.traceCoverage.filter {
+            $0.status == .noSample
+        }.map { switchingLoadTraceTitle($0.family) }
+        lines.append(contentsOf: [
+            "",
+            "## 切换负荷证据",
+            "",
+            "- 边界：\(clean(switchingLoad.boundary))",
+            "- 状态：\(switchingLoadStatusText(switchingLoad.status))",
+            "- 可信度：\(switchingLoadConfidenceText(switchingLoad.confidence))",
+            "- 判断：\(clean(switchingLoad.headline))",
+            "- 收敛信号：\(switchingLoad.convergingSignals.isEmpty ? "暂无" : switchingLoad.convergingSignals.map(clean).joined(separator: "；"))",
+            "- 五分钟峰值 / 高碎片窗口：\(switchingLoad.metrics.peakFiveMinuteAppSwitches) 次 / \(switchingLoad.metrics.highFragmentationWindows) 个",
+            "- 最终工作流切换：\(switchingLoad.metrics.finalWorkflowSwitches) 次；计划边界 \(switchingLoad.metrics.plannedWorkflowSwitches) 次；高恢复负担 \(switchingLoad.metrics.highRecoveryBurdenSwitches) 次",
+            "- 快速返回 / 返回点恢复率：\(switchingLoad.metrics.returnedWithin30Minutes) 次 / \(switchingLoad.metrics.returnPointResumeRate.map(formatPercent) ?? "暂无")",
+            "- 主观难度：\(switchingLoad.metrics.averageSubjectiveDifficulty.map { "\(formatDecimal($0))/5" } ?? "暂无")（\(switchingLoad.metrics.subjectiveDifficultySamples) 次）",
+            "- 已使用 trace：\(usedTrace.isEmpty ? "暂无" : usedTrace.joined(separator: "、"))",
+            "- 今日无样本 trace：\(noSampleTrace.isEmpty ? "无" : noSampleTrace.joined(separator: "、"))",
+            "- 质量门禁拦截：\(blockedTrace.isEmpty ? "无" : blockedTrace.joined(separator: "、"))",
+            "- 今日单项实验：\(clean(switchingLoad.recommendedExperiment))"
+        ])
         lines.append(contentsOf: [
             "",
             "## 今日观察配置",
@@ -831,11 +1034,19 @@ public enum AutomationReportEngine {
         return lines.joined(separator: "\n")
     }
 
-    public static func jsonData(for report: AutomationDailyReport) throws -> Data {
+    public static func jsonData(
+        for report: AutomationDailyReport,
+        attentionTrend: AttentionDashboard? = nil
+    ) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         encoder.dateEncodingStrategy = .iso8601
-        return try encoder.encode(AutomationReportArtifact(report: report))
+        return try encoder.encode(
+            AutomationReportArtifact(
+                report: report,
+                attentionTrend: attentionTrend
+            )
+        )
     }
 
     private static func civilDate(_ date: Date, calendar: Calendar) -> String {
@@ -929,6 +1140,45 @@ public enum AutomationReportEngine {
         case .low: return "低"
         case .medium: return "中"
         case .high: return "高"
+        }
+    }
+
+    private static func switchingLoadStatusText(
+        _ value: SwitchingLoadStatus
+    ) -> String {
+        switch value {
+        case .unavailable: return "不可判断"
+        case .calibrating: return "个人校准中"
+        case .mixedEvidence: return "证据未收敛"
+        case .stable: return "与个人基线相近"
+        case .elevated: return "多证据升高"
+        }
+    }
+
+    private static func switchingLoadConfidenceText(
+        _ value: SwitchingLoadConfidence
+    ) -> String {
+        switch value {
+        case .low: return "低"
+        case .medium: return "中"
+        case .high: return "高"
+        }
+    }
+
+    private static func switchingLoadTraceTitle(
+        _ family: SwitchingLoadTraceFamily
+    ) -> String {
+        switch family {
+        case .applicationActivity: return "应用片段"
+        case .workflowIntervals: return "工作流区间"
+        case .semanticTransitions: return "最终工作流跳转"
+        case .transitionReasons: return "切换原因"
+        case .navigationBursts: return "连续桌面导航"
+        case .interruptions: return "分心与返回"
+        case .focusFeedback: return "训练结果与难度"
+        case .returnPoints: return "保存返回点"
+        case .workflowRequirements: return "工作流与需求语义"
+        case .systemInactive: return "锁屏与睡眠"
         }
     }
 
