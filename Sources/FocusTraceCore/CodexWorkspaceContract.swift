@@ -61,9 +61,9 @@ public enum CodexWorkspaceContract {
          and the matching `recommendation` without replacing them with a generic
          productivity tip. Set the hidden source to `attentionTrend`.
        - `attentionTrend.includesPartialDay=true` means the current unfinished
-         day may be shown as a point but was excluded from direction and finding
-         selection. Never use that partial point to strengthen or weaken the
-         conclusion.
+         day is explained in the App but not plotted and was excluded from
+         direction and finding selection. Never use it to strengthen or weaken
+         the conclusion.
        - `finding.state=stable` or `improving` forbids inventing an attention
          problem from lower-level daily signals. Write the longitudinal
          conclusion and its maintenance action, then stop. Only `calibrating`
@@ -266,41 +266,16 @@ public enum CodexWorkspaceContract {
     REPORT_TOOL="$WORKSPACE_ROOT/Tools/FocusTraceReport"
     REPORT_DIR="$WORKSPACE_ROOT/Reports"
     STORE_PATH="${FOCUSTRACE_STORE_PATH:-$HOME/Library/Application Support/FocusTrace/store.json}"
-    BRIDGE_DIR="$HOME/Library/Application Support/FocusTrace/CodexBridge"
 
     if [[ ! -x "$REPORT_TOOL" ]]; then
       echo "error: FocusTraceReport 工具缺失，请回到 FocusTrace 点击“在 Codex 中接入每日复盘”重建工作区" >&2
       exit 1
     fi
 
-    mkdir -p "$REPORT_DIR" "$BRIDGE_DIR"
+    mkdir -p "$REPORT_DIR"
     "$REPORT_TOOL" --store "$STORE_PATH" --output-dir "$REPORT_DIR" "$@"
 
-    /usr/bin/python3 - "$BRIDGE_DIR/bridge.json" "$REPORT_DIR" <<'PY'
-    import datetime
-    import json
-    import os
-    import pathlib
-    import sys
-
-    destination, report_directory = sys.argv[1:]
-    destination_path = pathlib.Path(destination)
-    temporary_path = destination_path.with_suffix(".tmp")
-    payload = {
-        "schemaVersion": 1,
-        "reportDirectory": str(pathlib.Path(report_directory).resolve()),
-        "updatedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(
-            timespec="seconds"
-        ).replace("+00:00", "Z"),
-    }
-    temporary_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    os.replace(temporary_path, destination_path)
-    PY
-
-    echo "FocusTrace Codex 文件桥已连接：$BRIDGE_DIR/bridge.json"
+    echo "FocusTrace 聚合报告已更新；文件桥由 App 在首次接入时登记。"
     """#
 
     public static func deepLink(workspaceURL: URL) -> URL? {

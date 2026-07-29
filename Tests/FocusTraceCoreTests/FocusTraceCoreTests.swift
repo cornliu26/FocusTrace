@@ -4038,6 +4038,30 @@ func codexWorkspaceDeepLinkPrefillsTheSupportedLocalChatContract() throws {
 }
 
 @Test
+func codexWorkspaceRefreshReplacesOnlyChangedFiles() {
+    let generated = Data("generated workspace".utf8)
+
+    #expect(
+        CodexWorkspaceRefreshPolicy.shouldReplace(
+            existingData: nil,
+            replacementData: generated
+        )
+    )
+    #expect(
+        !CodexWorkspaceRefreshPolicy.shouldReplace(
+            existingData: generated,
+            replacementData: generated
+        )
+    )
+    #expect(
+        CodexWorkspaceRefreshPolicy.shouldReplace(
+            existingData: Data("old workspace".utf8),
+            replacementData: generated
+        )
+    )
+}
+
+@Test
 func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
     let instructions = CodexWorkspaceContract.agentsInstructions
     let script = CodexWorkspaceContract.reportScript
@@ -4048,8 +4072,9 @@ func codexWorkspaceMakesTheAggregateOnlyBoundaryDurable() {
     #expect(instructions.contains("Select exactly one problem"))
     #expect(instructions.contains("second recommendation"))
     #expect(script.contains("FocusTraceReport"))
-    #expect(script.contains("Application Support/FocusTrace/CodexBridge"))
-    #expect(script.contains("$BRIDGE_DIR/bridge.json"))
+    #expect(!script.contains("Application Support/FocusTrace/CodexBridge"))
+    #expect(!script.contains("bridge.json"))
+    #expect(script.contains("文件桥由 App 在首次接入时登记"))
     #expect(!CodexWorkspaceContract.setupPrompt.contains("API key"))
 }
 
@@ -4120,6 +4145,8 @@ func dailyReportScriptPreservesDateArgumentsForHistoricalRegeneration() throws {
 
     #expect(script.contains("--output-dir \"$FOCUS_TRACE_REPORT_DIR\""))
     #expect(script.components(separatedBy: "\"$@\"").count == 3)
+    #expect(script.contains("--register-bridge"))
+    #expect(script.contains("if [[ \"$REGISTER_BRIDGE\" == true ]]"))
 }
 
 @Test @MainActor
@@ -4255,4 +4282,10 @@ func updateFailureFeedbackUsesOnlySafeGitHubMetadata() throws {
             systemVersion: "macOS 15.5"
         ) == nil
     )
+}
+
+@Test
+func attentionTrendLayoutOmitsPartialDaysFromThePlot() {
+    #expect(FocusTraceAttentionTrendLayout.shouldPlot(isPartial: false))
+    #expect(!FocusTraceAttentionTrendLayout.shouldPlot(isPartial: true))
 }

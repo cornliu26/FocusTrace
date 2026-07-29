@@ -150,6 +150,10 @@ public enum FocusTraceAttentionTrendLayout {
     public static let plotInset = 5.0
     public static let pointRadius = 3.5
 
+    public static func shouldPlot(isPartial: Bool) -> Bool {
+        !isPartial
+    }
+
     public static func pointX(
         index: Int,
         pointCount: Int,

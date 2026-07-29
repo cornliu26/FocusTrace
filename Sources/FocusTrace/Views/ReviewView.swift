@@ -29,7 +29,6 @@ struct ReviewView: View {
         }
         .focusTraceScreen()
         .task(id: state.selectedDate) {
-            codexLauncher.refreshExistingWorkspaceIfPresent()
             await codexBridge.observe(for: state.selectedDate)
         }
     }
@@ -114,8 +113,8 @@ struct ReviewView: View {
 
             if dashboard.includesPartialDay == true {
                 Label(
-                    "进行中的日期只显示为空心点，不参与趋势方向和主要问题判断。",
-                    systemImage: "circle.dashed"
+                    "今天仍在进行，暂不绘制到趋势图，也不参与趋势方向和主要问题判断。",
+                    systemImage: "clock"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -880,18 +879,23 @@ private struct AttentionTrendCard: View {
             .frame(width: 170, alignment: .leading)
 
             if let trend = metric.trend {
+                let plottedPoints = trend.points.filter {
+                    FocusTraceAttentionTrendLayout.shouldPlot(
+                        isPartial: $0.isPartial
+                    )
+                }
                 VStack(spacing: 4) {
                     AttentionTrendChart(trend: trend, accent: accent)
                         .frame(height: 62)
                     HStack {
                         Text(
-                            trend.points.first?.date.formatted(
+                            plottedPoints.first?.date.formatted(
                                 .dateTime.month().day()
                             ) ?? ""
                         )
                         Spacer()
                         Text(
-                            trend.points.last?.date.formatted(
+                            plottedPoints.last?.date.formatted(
                                 .dateTime.month().day()
                             ) ?? ""
                         )
@@ -1003,7 +1007,12 @@ private struct AttentionTrendChart: View {
 
     var body: some View {
         Canvas { context, size in
-            let values = trend.points.compactMap(\.value)
+            let plottedPoints = trend.points.filter {
+                FocusTraceAttentionTrendLayout.shouldPlot(
+                    isPartial: $0.isPartial
+                )
+            }
+            let values = plottedPoints.compactMap(\.value)
                 + [trend.typicalLowerBound, trend.typicalUpperBound]
                     .compactMap { $0 }
             guard !values.isEmpty else { return }
@@ -1023,7 +1032,7 @@ private struct AttentionTrendChart: View {
                 CGFloat(
                     FocusTraceAttentionTrendLayout.pointX(
                         index: index,
-                        pointCount: trend.points.count,
+                        pointCount: plottedPoints.count,
                         availableWidth: Double(size.width)
                     )
                 )
@@ -1069,10 +1078,9 @@ private struct AttentionTrendChart: View {
 
             var line = Path()
             var hasOpenSegment = false
-            for (index, point) in trend.points.enumerated() {
+            for (index, point) in plottedPoints.enumerated() {
                 guard let value = point.value,
-                      point.isReliable,
-                      !point.isPartial else {
+                      point.isReliable else {
                     hasOpenSegment = false
                     continue
                 }
@@ -1094,10 +1102,10 @@ private struct AttentionTrendChart: View {
                 )
             )
 
-            for (index, point) in trend.points.enumerated() {
+            for (index, point) in plottedPoints.enumerated() {
                 guard let value = point.value else { continue }
                 let location = CGPoint(x: x(index), y: y(value))
-                let diameter: CGFloat = point.isPartial ? 7 : 6
+                let diameter: CGFloat = 6
                 let dot = Path(
                     ellipseIn: CGRect(
                         x: location.x - diameter / 2,
@@ -1106,13 +1114,7 @@ private struct AttentionTrendChart: View {
                         height: diameter
                     )
                 )
-                if point.isPartial {
-                    context.stroke(
-                        dot,
-                        with: .color(accent),
-                        style: StrokeStyle(lineWidth: 1.5)
-                    )
-                } else if point.isReliable {
+                if point.isReliable {
                     context.fill(dot, with: .color(accent))
                 } else {
                     context.fill(

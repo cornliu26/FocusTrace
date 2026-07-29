@@ -521,10 +521,12 @@ suite.run("已优化的日常交互契约保持稳定") {
     try expect(
         FocusTraceAttentionTrendLayout.plotInset
             > FocusTraceAttentionTrendLayout.pointRadius
+            && FocusTraceAttentionTrendLayout.shouldPlot(isPartial: false)
+            && !FocusTraceAttentionTrendLayout.shouldPlot(isPartial: true)
             && firstTrendX >= FocusTraceAttentionTrendLayout.plotInset
             && finalTrendX
                 <= narrowPlotWidth - FocusTraceAttentionTrendLayout.plotInset,
-        "注意力趋势的首尾数据点必须完整收在绘图区，不能溢入说明列"
+        "注意力趋势只绘制完整日期，首尾数据点必须收在绘图区"
     )
 }
 
@@ -3977,6 +3979,137 @@ suite.run("Codex 旧写回只保留可行动部分") {
     try expect(review.displayedStatus == .dataQualityBlocked, "旧版数据阻塞应保留语义")
 }
 
+suite.run("Codex 文件桥只在显式接入时登记一次") {
+    let fileManager = FileManager.default
+    let root = URL(
+        fileURLWithPath: FileManager.default.currentDirectoryPath,
+        isDirectory: true
+    )
+    let temporaryRoot = fileManager.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    let scriptsURL = temporaryRoot.appendingPathComponent(
+        "Scripts",
+        isDirectory: true
+    )
+    let distURL = temporaryRoot.appendingPathComponent(
+        "dist",
+        isDirectory: true
+    )
+    let bridgeURL = temporaryRoot.appendingPathComponent(
+        "bridge",
+        isDirectory: true
+    )
+    try fileManager.createDirectory(
+        at: scriptsURL,
+        withIntermediateDirectories: true
+    )
+    try fileManager.createDirectory(
+        at: distURL,
+        withIntermediateDirectories: true
+    )
+    defer { try? fileManager.removeItem(at: temporaryRoot) }
+
+    let reportScript = try String(
+        contentsOf: root.appendingPathComponent(
+            "Scripts/generate-daily-report.sh"
+        ),
+        encoding: .utf8
+    )
+    let scriptURL = scriptsURL.appendingPathComponent(
+        "generate-daily-report.sh"
+    )
+    try reportScript.write(
+        to: scriptURL,
+        atomically: true,
+        encoding: .utf8
+    )
+    try fileManager.setAttributes(
+        [.posixPermissions: 0o755],
+        ofItemAtPath: scriptURL.path
+    )
+
+    let reportToolURL = distURL.appendingPathComponent("FocusTraceReport")
+    try """
+    #!/bin/bash
+    set -euo pipefail
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --output-dir)
+          mkdir -p "$2"
+          printf '{}\\n' > "$2/latest.json"
+          shift 2
+          ;;
+        *)
+          shift
+          ;;
+      esac
+    done
+    """.write(
+        to: reportToolURL,
+        atomically: true,
+        encoding: .utf8
+    )
+    try fileManager.setAttributes(
+        [.posixPermissions: 0o755],
+        ofItemAtPath: reportToolURL.path
+    )
+
+    func runReportScript(arguments: [String]) throws -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [scriptURL.path] + arguments
+        process.environment = ProcessInfo.processInfo.environment.merging([
+            "FOCUSTRACE_STORE_PATH": temporaryRoot
+                .appendingPathComponent("store.json").path,
+            "FOCUSTRACE_BRIDGE_DIR": bridgeURL.path,
+            "HOME": temporaryRoot
+                .appendingPathComponent("home", isDirectory: true).path
+        ]) { _, replacement in replacement }
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    let ordinaryStatus = try runReportScript(arguments: [])
+    try expect(
+        ordinaryStatus == 0,
+        "普通日报生成必须成功"
+    )
+    try expect(
+        !fileManager.fileExists(atPath: bridgeURL.path),
+        "普通日报不得创建或重写 App Support 文件桥"
+    )
+    let registrationStatus = try runReportScript(
+        arguments: ["--register-bridge"]
+    )
+    try expect(
+        registrationStatus == 0,
+        "显式文件桥登记必须成功"
+    )
+    let registrationURL = bridgeURL.appendingPathComponent("bridge.json")
+    try expect(
+        fileManager.fileExists(atPath: registrationURL.path),
+        "只有显式接入才应写入 bridge.json"
+    )
+
+    let reviewView = try repositoryFileContents(
+        "Sources/FocusTrace/Views/ReviewView.swift"
+    )
+    let launcher = try repositoryFileContents(
+        "Sources/FocusTrace/CodexConnectionLauncher.swift"
+    )
+    try expect(
+        !reviewView.contains("codexLauncher.refreshExistingWorkspaceIfPresent"),
+        "进入回顾页不得再次刷新或改写 Codex 工作区"
+    )
+    try expect(
+        launcher.contains("CodexWorkspaceRefreshPolicy.shouldReplace"),
+        "App 启动刷新必须跳过内容相同的生成文件"
+    )
+}
+
 suite.run("Codex 一键接入使用官方深链和聚合工作区") {
     let workspace = URL(
         fileURLWithPath: "/Users/example/Library/Application Support/FocusTrace/CodexWorkspace",
@@ -4701,7 +4834,10 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
                 "FocusTraceAttentionTrendLayout.pointX"
             )
             && reviewView.contains("下一步单项实验")
-            && reviewView.contains("进行中的日期只显示为空心点")
+            && reviewView.contains("今天仍在进行，暂不绘制到趋势图")
+            && reviewView.contains(
+                "FocusTraceAttentionTrendLayout.shouldPlot"
+            )
             && reviewView.contains("不会抽样或丢弃原始时间轴")
             && !reviewView.contains("LegacyAttentionDashboardCard")
             && dashboardEngine.contains("高频段")
