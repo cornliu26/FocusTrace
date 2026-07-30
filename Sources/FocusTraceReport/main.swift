@@ -100,7 +100,7 @@ private func previousIssuedReport(
         .compactMap { url -> AutomationReportArtifact? in
             guard let data = try? Data(contentsOf: url),
                   let report = try? decoder.decode(AutomationReportArtifact.self, from: data),
-                  (2...7).contains(report.schemaVersion),
+                  (2...8).contains(report.schemaVersion),
                   report.reportDate < cutoff else { return nil }
             return report
         }
@@ -128,13 +128,31 @@ private struct FocusTraceReportCommand {
                 generatedAt: report.generatedAt,
                 currentReport: report
             )
+            let activeExperiment = snapshot.attentionExperiments
+                .filter { $0.status == .active }
+                .max { $0.startedAt < $1.startedAt }
+            let attentionExperiment = activeExperiment.map { experiment in
+                AutomationAttentionExperimentArtifact(
+                    experiment: experiment,
+                    progress: AttentionExperimentEngine.evaluate(
+                        experiment,
+                        dashboard: attentionTrend,
+                        taskIntervals: snapshot.taskIntervals,
+                        focusSessions: snapshot.focusSessions,
+                        taskParkings: snapshot.taskParkings,
+                        now: report.generatedAt
+                    )
+                )
+            }
             let markdown = AutomationReportEngine.markdown(
                 for: report,
-                attentionTrend: attentionTrend
+                attentionTrend: attentionTrend,
+                attentionExperiment: attentionExperiment
             )
             let json = try AutomationReportEngine.jsonData(
                 for: report,
-                attentionTrend: attentionTrend
+                attentionTrend: attentionTrend,
+                attentionExperiment: attentionExperiment
             )
 
             try FileManager.default.createDirectory(

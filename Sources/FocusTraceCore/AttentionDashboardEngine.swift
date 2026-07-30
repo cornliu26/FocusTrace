@@ -32,6 +32,15 @@ public enum AttentionDashboardFindingState: String, Codable, Equatable, Sendable
     case needsAttention
 }
 
+public enum AttentionMeasurementAvailability: String, Codable, Equatable, Sendable {
+    case reliable
+    case noOpportunity
+    case missingInput
+    case qualityBlocked
+    case calibrating
+    case partial
+}
+
 public struct AttentionTrendPoint: Identifiable, Codable, Equatable, Sendable {
     public var id: Date { date }
     public let date: Date
@@ -40,6 +49,7 @@ public struct AttentionTrendPoint: Identifiable, Codable, Equatable, Sendable {
     public let sampleCount: Int
     public let isReliable: Bool
     public let isPartial: Bool
+    public let availability: AttentionMeasurementAvailability?
 
     public init(
         date: Date,
@@ -47,7 +57,8 @@ public struct AttentionTrendPoint: Identifiable, Codable, Equatable, Sendable {
         secondaryValue: Double? = nil,
         sampleCount: Int,
         isReliable: Bool,
-        isPartial: Bool
+        isPartial: Bool,
+        availability: AttentionMeasurementAvailability? = nil
     ) {
         self.date = date
         self.value = value
@@ -55,6 +66,15 @@ public struct AttentionTrendPoint: Identifiable, Codable, Equatable, Sendable {
         self.sampleCount = max(0, sampleCount)
         self.isReliable = isReliable
         self.isPartial = isPartial
+        self.availability = availability
+    }
+
+    public var effectiveAvailability: AttentionMeasurementAvailability {
+        if isPartial { return .partial }
+        if let availability { return availability }
+        if isReliable && value != nil { return .reliable }
+        if sampleCount == 0 { return .noOpportunity }
+        return .calibrating
     }
 }
 
@@ -88,7 +108,11 @@ public struct AttentionMetricTrend: Codable, Equatable, Sendable {
         self.unit = unit
         self.lowerIsBetter = lowerIsBetter
         self.direction = direction
-        self.points = Array(points.suffix(10))
+        // The visible dashboard still renders the latest ten points. Keep up
+        // to twenty aggregate points so a short, user-confirmed experiment can
+        // retain its first ten-day evidence window while the normal trend
+        // continues to move forward.
+        self.points = Array(points.suffix(20))
         self.baselineMedian = baselineMedian
         self.recentMedian = recentMedian
         self.typicalLowerBound = typicalLowerBound
@@ -236,6 +260,7 @@ public enum AttentionDashboardEngine {
     public static let minimumTrainingSamples = 5
     public static let minimumReasonCoverage = 0.5
     public static let trendWorkdayCount = 10
+    public static let experimentEvidenceWorkdayCount = 10
     public static let minimumTrendDays = 5
     public static let recentTrendDays = 3
 
@@ -284,9 +309,21 @@ public enum AttentionDashboardEngine {
             let day = calendar.startOfDay(for: activity.startedAt)
             return day <= limit ? day : nil
         })
-        return Array(
-            dates.union([limit]).sorted().suffix(trendWorkdayCount)
+        let ordered = dates.union([limit]).sorted()
+        let trendDates = ordered.suffix(trendWorkdayCount)
+        guard let activeExperiment = snapshot.attentionExperiments
+            .filter({ $0.status == .active })
+            .max(by: { $0.startedAt < $1.startedAt })
+        else {
+            return Array(trendDates)
+        }
+        let measurementDay = calendar.startOfDay(
+            for: activeExperiment.measurementStartsAt
         )
+        let experimentDates = ordered
+            .filter { $0 >= measurementDay }
+            .prefix(experimentEvidenceWorkdayCount)
+        return Array(Set(trendDates).union(experimentDates)).sorted()
     }
 
     public static func make(
@@ -327,12 +364,12 @@ public enum AttentionDashboardEngine {
             version: 2,
             boundary: "纵向行为趋势，不合成为注意力、脑负荷或临床总分；未结束日期不参与趋势结论",
             recordedMinutes: current.coaching.metrics.recordedMinutes,
-            baselineDays: ordered.filter {
+            baselineDays: ordered.suffix(trendWorkdayCount).filter {
                 !$0.isPartial && $0.coaching.metrics.recordedMinutes > 0
             }.count,
             reliableDimensionCount: reliableCount,
             metrics: metrics,
-            periodStart: ordered.first?.date,
+            periodStart: ordered.suffix(trendWorkdayCount).first?.date,
             periodEnd: ordered.last?.date,
             includesPartialDay: ordered.contains(where: \.isPartial),
             finding: finding,
@@ -564,18 +601,21 @@ public enum AttentionDashboardEngine {
         guard coaching.quality.isReliable(.contextRecovery) else {
             return unavailable(
                 kind: .contextRecovery,
-                title: "恢复能力",
+                title: "恢复闭环",
                 reason: "需要有效工作记录和返回样本"
             )
         }
         let hasParkingSample = summary.taskParkingCount > 0
+        let hasWorkflowRecoverySample =
+            (switchingLoad.metrics.workflowRecoveryOpportunities ?? 0) > 0
         let hasInterruptionSample =
             switchingLoad.metrics.averageInterruptionReturnSeconds != nil
-        guard hasParkingSample || hasInterruptionSample else {
+        guard hasParkingSample || hasWorkflowRecoverySample
+                || hasInterruptionSample else {
             return unavailable(
                 kind: .contextRecovery,
-                title: "恢复能力",
-                reason: "今天还没有保存返回点或确认返回样本"
+                title: "恢复闭环",
+                reason: "今天没有需要返回原工作流的中断机会"
             )
         }
 
@@ -583,14 +623,19 @@ public enum AttentionDashboardEngine {
         let recoveryPressure = metrics.highRecoveryBurdenSwitches >= 2
             && (
                 metrics.shortDestinationSwitches >= 2
-                    || metrics.returnedWithin30Minutes >= 2
+                    || (metrics.workflowRecoveryRate.map { $0 < 0.5 } == true)
                     || (metrics.returnPointResumeRate.map { $0 < 0.5 } == true)
             )
         let state: AttentionDashboardMetricState =
             recoveryPressure ? .needsAttention : .observed
         let value: String
         let comparison: String
-        if let rate = metrics.returnPointResumeRate {
+        if let rate = metrics.workflowRecoveryRate,
+           let opportunities = metrics.workflowRecoveryOpportunities,
+           let recovered = metrics.workflowRecoveriesWithin30Minutes {
+            value = percent(rate)
+            comparison = "\(recovered)/\(opportunities) 次中断后在 30 分钟内回到原工作流"
+        } else if let rate = metrics.returnPointResumeRate {
             value = percent(rate)
             comparison = "\(summary.resumedTaskCount)/\(summary.taskParkingCount) 个返回点已恢复"
         } else {
@@ -601,6 +646,13 @@ public enum AttentionDashboardEngine {
         if let latency = summary.averageTaskResumeLatency {
             evidence.append("从保存返回点到继续：平均 \(duration(latency))")
         }
+        if let opportunities = metrics.workflowRecoveryOpportunities,
+           opportunities > 0,
+           let recovered = metrics.workflowRecoveriesWithin30Minutes {
+            evidence.append(
+                "明确等待或被迫中断后，\(recovered)/\(opportunities) 次回到原工作流"
+            )
+        }
         if let latency = metrics.averageInterruptionReturnSeconds {
             evidence.append("确认偏离后返回当前工作流：平均 \(duration(latency))")
         }
@@ -610,11 +662,24 @@ public enum AttentionDashboardEngine {
         return AttentionDashboardMetric(
             kind: .contextRecovery,
             state: state,
-            title: "恢复能力",
+            title: "恢复闭环",
             value: value,
             comparison: comparison,
             evidence: evidence,
-            bars: hasParkingSample
+            bars: hasWorkflowRecoverySample
+                ? [
+                    bar(
+                        "已返回原工作流",
+                        Double(metrics.workflowRecoveriesWithin30Minutes ?? 0),
+                        "\(metrics.workflowRecoveriesWithin30Minutes ?? 0)"
+                    ),
+                    bar(
+                        "中断机会",
+                        Double(metrics.workflowRecoveryOpportunities ?? 0),
+                        "\(metrics.workflowRecoveryOpportunities ?? 0)"
+                    )
+                ]
+                : hasParkingSample
                 ? [
                     bar(
                         "已恢复",
@@ -684,6 +749,7 @@ public enum AttentionDashboardEngine {
         let secondaryValue: Double?
         let sampleCount: Int
         let isReliable: Bool
+        let availability: AttentionMeasurementAvailability
     }
 
     private static func trend(
@@ -702,7 +768,10 @@ public enum AttentionDashboardEngine {
                     secondaryValue: measurement.secondaryValue,
                     sampleCount: measurement.sampleCount,
                     isReliable: measurement.isReliable,
-                    isPartial: day.isPartial
+                    isPartial: day.isPartial,
+                    availability: day.isPartial
+                        ? .partial
+                        : measurement.availability
                 )
             }
         }
@@ -710,7 +779,8 @@ public enum AttentionDashboardEngine {
             return trainingTrend(days: days, points: points)
         }
 
-        let reliable = points.filter {
+        let analysisPoints = points.suffix(trendWorkdayCount)
+        let reliable = analysisPoints.filter {
             !$0.isPartial && $0.isReliable && $0.value != nil
         }
         guard reliable.count >= minimumTrendDays else {
@@ -816,7 +886,15 @@ public enum AttentionDashboardEngine {
                 sampleCount: Int(coaching.metrics.recordedMinutes.rounded()),
                 isReliable: value != nil
                     && coaching.quality.isReliable(.fragmentation)
-                    && coaching.quality.isReliable(.workflowSemantics)
+                    && coaching.quality.isReliable(.workflowSemantics),
+                availability: measurementAvailability(
+                    hasOpportunity: coaching.metrics.recordedMinutes >= 30,
+                    hasValue: value != nil,
+                    qualityIsReliable:
+                        coaching.quality.isReliable(.fragmentation)
+                            && coaching.quality.isReliable(.workflowSemantics),
+                    sampleIsCalibrating: false
+                )
             )
         case .fragmentation:
             let activeWindows = metrics.activeFiveMinuteWindows ?? 0
@@ -832,7 +910,15 @@ public enum AttentionDashboardEngine {
                 sampleCount: activeWindows,
                 isReliable: value != nil
                     && activeWindows >= 4
-                    && coaching.quality.isReliable(.fragmentation)
+                    && coaching.quality.isReliable(.fragmentation),
+                availability: measurementAvailability(
+                    hasOpportunity: activeWindows > 0,
+                    hasValue: value != nil,
+                    qualityIsReliable:
+                        coaching.quality.isReliable(.fragmentation),
+                    sampleIsCalibrating: activeWindows > 0
+                        && activeWindows < 4
+                )
             )
         case .switchingBoundary:
             let total = metrics.finalWorkflowSwitches
@@ -847,23 +933,53 @@ public enum AttentionDashboardEngine {
                 isReliable: value != nil
                     && (metrics.explicitReasonCoverage ?? 0)
                         >= minimumReasonCoverage
-                    && coaching.quality.isReliable(.workflowSemantics)
+                    && coaching.quality.isReliable(.workflowSemantics),
+                availability: measurementAvailability(
+                    hasOpportunity: total > 0,
+                    hasValue: value != nil,
+                    qualityIsReliable:
+                        coaching.quality.isReliable(.workflowSemantics),
+                    sampleIsCalibrating: total > 0
+                        && (metrics.explicitReasonCoverage ?? 0)
+                            < minimumReasonCoverage,
+                    missingInput: total > 0
+                        && (metrics.explicitReasonCoverage ?? 0)
+                            < minimumReasonCoverage
+                )
             )
         case .contextRecovery:
+            let workflowOpportunities =
+                metrics.workflowRecoveryOpportunities ?? 0
+            let parkingOpportunities = day.summary.taskParkingCount
+            let value = workflowOpportunities > 0
+                ? metrics.workflowRecoveryRate.map { $0 * 100 }
+                : metrics.returnPointResumeRate.map { $0 * 100 }
+            let sampleCount = workflowOpportunities > 0
+                ? workflowOpportunities
+                : parkingOpportunities
             return TrendMeasurement(
-                value: metrics.returnPointResumeRate.map { $0 * 100 },
+                value: value,
                 secondaryValue: metrics.averageInterruptionReturnSeconds,
-                sampleCount: day.summary.taskParkingCount,
-                isReliable: day.summary.taskParkingCount > 0
-                    && metrics.returnPointResumeRate != nil
-                    && coaching.quality.isReliable(.contextRecovery)
+                sampleCount: sampleCount,
+                isReliable: sampleCount > 0
+                    && value != nil
+                    && coaching.quality.isReliable(.contextRecovery),
+                availability: measurementAvailability(
+                    hasOpportunity: sampleCount > 0,
+                    hasValue: value != nil,
+                    qualityIsReliable:
+                        coaching.quality.isReliable(.contextRecovery),
+                    sampleIsCalibrating: false,
+                    missingInput: sampleCount > 0 && value == nil
+                )
             )
         case .trainingFeedback:
             return TrendMeasurement(
                 value: nil,
                 secondaryValue: nil,
                 sampleCount: 0,
-                isReliable: false
+                isReliable: false,
+                availability: .noOpportunity
             )
         }
     }
@@ -962,10 +1078,22 @@ public enum AttentionDashboardEngine {
     ) -> [AttentionTrendPoint] {
         var completed: [FocusSessionRecord] = []
         return days.map { day in
-            completed.append(contentsOf: day.focusSessions.filter {
+            let completedToday = day.focusSessions.filter {
                 $0.endedAt != nil && $0.outcome != .pending
-            })
+            }
+            completed.append(contentsOf: completedToday)
             completed.sort { $0.startedAt < $1.startedAt }
+            guard !completedToday.isEmpty else {
+                return AttentionTrendPoint(
+                    date: day.date,
+                    value: nil,
+                    secondaryValue: nil,
+                    sampleCount: 0,
+                    isReliable: false,
+                    isPartial: day.isPartial,
+                    availability: day.isPartial ? .partial : .noOpportunity
+                )
+            }
             let recent = Array(completed.suffix(minimumTrainingSamples))
             let feedback = recent.compactMap { session -> Double? in
                 session.difficulty.map(Double.init)
@@ -984,9 +1112,32 @@ public enum AttentionDashboardEngine {
                 sampleCount: recent.count,
                 isReliable: recent.count >= minimumTrainingSamples
                     && feedbackCoverage >= 0.8,
-                isPartial: day.isPartial
+                isPartial: day.isPartial,
+                availability: day.isPartial
+                    ? .partial
+                    : recent.isEmpty
+                        ? .noOpportunity
+                        : feedbackCoverage < 0.8
+                            ? .missingInput
+                            : recent.count < minimumTrainingSamples
+                                ? .calibrating
+                                : .reliable
             )
         }
+    }
+
+    private static func measurementAvailability(
+        hasOpportunity: Bool,
+        hasValue: Bool,
+        qualityIsReliable: Bool,
+        sampleIsCalibrating: Bool,
+        missingInput: Bool = false
+    ) -> AttentionMeasurementAvailability {
+        guard hasOpportunity else { return .noOpportunity }
+        guard qualityIsReliable else { return .qualityBlocked }
+        if missingInput || !hasValue { return .missingInput }
+        if sampleIsCalibrating { return .calibrating }
+        return .reliable
     }
 
     private static func trendDirection(
@@ -1096,7 +1247,7 @@ public enum AttentionDashboardEngine {
                     ? "高碎片工作段持续增加，并同时压缩连续工作时长。"
                     : "高碎片工作段持续增加，但恢复后果仍需继续验证。"
             case .switchingBoundary:
-                detail = "高恢复负担的工作流切换持续增加，并伴随恢复能力下降。"
+                detail = "高恢复负担的工作流切换持续增加，并伴随恢复闭环下降。"
             case .contextRecovery:
                 detail = "保存返回点后的恢复闭环率持续下降；问题在于切走后难以顺利回来。"
             case .trainingFeedback:

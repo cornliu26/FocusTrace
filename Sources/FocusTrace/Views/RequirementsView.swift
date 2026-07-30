@@ -138,20 +138,12 @@ struct RequirementsView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(FocusTraceTheme.sky.opacity(0.13))
-                Image(systemName: "tray.and.arrow.down")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(FocusTraceTheme.sky)
-            }
-            .frame(width: 46, height: 46)
-
+        HStack(alignment: .center, spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("需求箱")
-                    .font(.system(.title2, design: .rounded, weight: .bold))
+                Text("临时需求先收下，不打断当前工作流")
+                    .font(.headline)
                 Text("先收下；准备做时点“处理”，时间和归属可以在详情里补。")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -160,6 +152,8 @@ struct RequirementsView: View {
             }
             .buttonStyle(FocusTracePrimaryButtonStyle())
         }
+        .padding(12)
+        .focusTraceFunctionalSurface(cornerRadius: 12)
     }
 
     @ViewBuilder

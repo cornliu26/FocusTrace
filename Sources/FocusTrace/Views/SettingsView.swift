@@ -306,7 +306,6 @@ private struct SettingsSectionCard<Content: View>: View {
     let title: String
     let systemImage: String
     @ViewBuilder let content: Content
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 15) {
@@ -328,19 +327,6 @@ private struct SettingsSectionCard<Content: View>: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(17)
-        .background(
-            FocusTraceTheme.cardFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
-        }
-        .shadow(
-            color: Color.black.opacity(colorScheme == .dark ? 0.13 : 0.055),
-            radius: 16,
-            x: 0,
-            y: 7
-        )
+        .focusTraceSurfaceCard()
     }
 }

@@ -30,6 +30,7 @@ ANALYSIS_SOURCES = {
     "previousRecommendation",
     "normalizedTrend",
     "attentionTrend",
+    "attentionExperiment",
     "switchingLoad",
     "phaseTwo",
     "localRecommendation",
@@ -173,6 +174,45 @@ def validate_analysis_audit(
         ):
             raise ValueError("本地建议来源与聚合报告不匹配")
         return
+    if source == "attentionExperiment":
+        experiment = report.get("attentionExperiment")
+        if (
+            not no_route
+            or not isinstance(experiment, dict)
+            or experiment.get("status") != "active"
+            or not isinstance(experiment.get("title"), str)
+            or not experiment["title"].strip()
+            or not isinstance(experiment.get("hypothesis"), str)
+            or not experiment["hypothesis"].strip()
+            or not isinstance(experiment.get("nextAction"), str)
+            or not experiment["nextAction"].strip()
+            or not isinstance(experiment.get("nextCheck"), str)
+            or not experiment["nextCheck"].strip()
+            or not isinstance(experiment.get("evidence"), list)
+            or not experiment["evidence"]
+        ):
+            raise ValueError("进行中的注意力实验缺少可验证的行动或证据")
+        problem_text = normalized_text(review.get("problem", ""))
+        title = normalized_text(experiment["title"])
+        hypothesis = normalized_text(experiment["hypothesis"])
+        if title not in problem_text and hypothesis not in problem_text:
+            raise ValueError("实验写回偏离了已确认的唯一问题")
+        if (
+            normalized_text(experiment["nextAction"])
+            not in normalized_text(review.get("recommendation", ""))
+        ):
+            raise ValueError("实验写回改变了今天的唯一动作")
+        if any(
+            item not in experiment["evidence"]
+            for item in review.get("evidence", [])
+        ):
+            raise ValueError("实验写回使用了实验之外的证据")
+        if (
+            normalized_text(experiment["nextCheck"])
+            not in normalized_text(review.get("nextCheck", ""))
+        ):
+            raise ValueError("实验写回改变了验收条件")
+        return
     if source == "previousRecommendation":
         previous = report.get("previousRecommendationEvaluation")
         if (
@@ -313,8 +353,8 @@ def validate_analysis_audit(
 
 
 def validate(report: dict[str, Any], review: dict[str, Any]) -> str:
-    if report.get("schemaVersion") not in {2, 3, 4, 5, 6, 7}:
-        raise ValueError("聚合报告 schemaVersion 必须是 2、3、4、5、6 或 7")
+    if report.get("schemaVersion") not in {2, 3, 4, 5, 6, 7, 8}:
+        raise ValueError("聚合报告 schemaVersion 必须是 2 至 8")
     schema_version = review.get("schemaVersion")
     if schema_version not in {2, 3}:
         raise ValueError("Codex 写回 schemaVersion 必须是 2 或 3")

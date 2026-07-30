@@ -3721,6 +3721,48 @@ suite.run("训练反馈按跨天滚动五次而不是单日计数") {
     )
 }
 
+suite.run("没有训练的日期不重复上一日训练结果") {
+    let start = Date(timeIntervalSince1970: 4_500_000)
+    let days = (0..<3).map { index in
+        let date = start.addingTimeInterval(Double(index) * 86_400)
+        return verificationDashboardDay(
+            date: date,
+            focusSessions: index == 0
+                ? [
+                    verificationDashboardSession(
+                        date: date,
+                        successful: true,
+                        difficulty: 2
+                    )
+                ]
+                : []
+        )
+    }
+    let dashboard = AttentionDashboardEngine.make(
+        days: days,
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: start,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+    guard let points = dashboard.metrics.first(
+        where: { $0.kind == .trainingFeedback }
+    )?.trend?.points else {
+        throw VerificationFailure(message: "训练趋势必须存在")
+    }
+    try expect(
+        points.count == 3
+            && points[0].value == 100
+            && points[1].value == nil
+            && points[1].effectiveAvailability == .noOpportunity
+            && points[2].value == nil
+            && points[2].effectiveAvailability == .noOpportunity,
+        "没有完成训练的日期必须标记为无机会，不能复制此前滚动结果"
+    )
+}
+
 suite.run("碎片增加但没有恢复后果时不升级干预") {
     let start = Date(timeIntervalSince1970: 5_000_000)
     let days = (0..<10).map { index in
@@ -3857,6 +3899,173 @@ suite.run("完整十日回顾与趋势看板在固定大样本下不超过性能
     try expect(
         elapsed < FocusTracePerformanceBudget.reviewDashboardMaximumSeconds,
         "完整十日日报与趋势看板应在一秒内完成，实测 \(elapsed) 秒"
+    )
+}
+
+suite.run("注意力实验评估在固定同情境大样本下不超过性能预算") {
+    let calendar = utcCalendar()
+    let start = calendar.date(from: DateComponents(
+        timeZone: calendar.timeZone,
+        year: 2026,
+        month: 7,
+        day: 1,
+        hour: 9
+    ))!
+    let workflowID = UUID()
+    let points = (0..<10).map { day in
+        AttentionTrendPoint(
+            date: calendar.date(byAdding: .day, value: day, to: start)!,
+            value: Double(55 - day),
+            sampleCount: 1,
+            isReliable: true,
+            isPartial: false,
+            availability: .reliable
+        )
+    }
+    let trend = AttentionMetricTrend(
+        kind: .fragmentation,
+        unit: "%",
+        lowerIsBetter: true,
+        direction: .improving,
+        points: points,
+        baselineMedian: 60,
+        recentMedian: 47,
+        typicalLowerBound: 45,
+        typicalUpperBound: 65,
+        reliableDayCount: 10,
+        comparison: "固定性能样本"
+    )
+    let dashboard = AttentionDashboard(
+        recordedMinutes: 600,
+        baselineDays: 10,
+        reliableDimensionCount: 1,
+        metrics: [
+            AttentionDashboardMetric(
+                kind: .fragmentation,
+                state: .improving,
+                title: "碎片控制",
+                value: "47%",
+                comparison: "固定性能样本",
+                evidence: ["仅用于性能回归"],
+                trend: trend
+            )
+        ]
+    )
+    let intervals = (0..<FocusTracePerformanceBudget
+        .attentionExperimentWorkflowIntervalCount).map { index in
+        let day = index % 10
+        let slot = index / 10
+        let began = calendar.date(
+            byAdding: .day,
+            value: day,
+            to: start
+        )!.addingTimeInterval(Double(slot) * 30)
+        return TaskIntervalRecord(
+            taskID: workflowID,
+            startedAt: began,
+            endedAt: began.addingTimeInterval(25),
+            workflowSource: .space
+        )
+    }
+    let sessions = (0..<FocusTracePerformanceBudget
+        .attentionExperimentTrainingCount).map { index in
+        let day = index % 10
+        let slot = index / 10
+        let began = calendar.date(
+            byAdding: .day,
+            value: day,
+            to: start
+        )!.addingTimeInterval(Double(slot) * 30)
+        return FocusSessionRecord(
+            taskID: workflowID,
+            startedAt: began,
+            endedAt: began.addingTimeInterval(15 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .completed,
+            difficulty: 2,
+            confirmedDistractionCount: 0
+        )
+    }
+    let dailyExperiment = AttentionExperimentRecord(
+        metricKind: .fragmentation,
+        variable: .singleOutputBoundary,
+        title: "固定性能实验",
+        hypothesis: "只验证同情境评估成本",
+        methodTitle: "固定性能实验",
+        steps: ["保持条件"],
+        successMeasure: "评估完成",
+        evidence: ["固定生成数据"],
+        action: .startFocus(minutes: 15),
+        baselineValue: 60,
+        targetValue: 50,
+        lowerIsBetter: true,
+        targetReliableSamples: 3,
+        startedAt: start,
+        measurementStartsAt: start,
+        contextWorkflowID: workflowID,
+        contextTimeBand: .morning
+    )
+    let trainingExperiment = AttentionExperimentRecord(
+        metricKind: .trainingFeedback,
+        variable: .focusDuration,
+        title: "固定训练实验",
+        hypothesis: "只验证训练样本评估成本",
+        methodTitle: "固定训练实验",
+        steps: ["保持条件"],
+        successMeasure: "评估完成",
+        evidence: ["固定生成数据"],
+        action: .startFocus(minutes: 15),
+        baselineValue: 60,
+        targetValue: 80,
+        targetSecondaryValue: 3,
+        lowerIsBetter: false,
+        targetReliableSamples: 5,
+        startedAt: start,
+        measurementStartsAt: start,
+        contextWorkflowID: workflowID,
+        contextTimeBand: .morning
+    )
+
+    let measuredAt = Date()
+    let dailyProgress = AttentionExperimentEngine.evaluate(
+        dailyExperiment,
+        dashboard: dashboard,
+        taskIntervals: intervals,
+        focusSessions: sessions,
+        now: calendar.date(byAdding: .day, value: 11, to: start)!,
+        calendar: calendar
+    )
+    let trainingProgress = AttentionExperimentEngine.evaluate(
+        trainingExperiment,
+        dashboard: dashboard,
+        taskIntervals: intervals,
+        focusSessions: sessions,
+        now: calendar.date(byAdding: .day, value: 11, to: start)!,
+        calendar: calendar
+    )
+    let elapsed = Date().timeIntervalSince(measuredAt)
+
+    try expect(
+        dailyProgress.reliableSamples == 3,
+        "实验达到预设可靠样本数后必须冻结窗口，不能继续漂移结论"
+    )
+    try expect(trainingProgress.reliableSamples == 5, "训练实验只需前五个可比样本")
+    try expect(
+        elapsed
+            < FocusTracePerformanceBudget.attentionExperimentMaximumSeconds,
+        "同情境实验评估应在 100 毫秒内完成，实测 \(elapsed) 秒"
+    )
+    let applicationStateSource = try repositoryFileContents(
+        "Sources/FocusTrace/ApplicationState.swift"
+    )
+    try expect(
+        applicationStateSource.contains(
+            "let attentionExperimentProgress: AttentionExperimentProgress?"
+        )
+            && applicationStateSource.contains(
+                "selectedReviewAnalysis.attentionExperimentProgress"
+            ),
+        "实验进度必须随回顾快照按分钟和数据版本缓存，不能在专注时钟每秒重算"
     )
 }
 
@@ -4148,7 +4357,8 @@ suite.run("Codex 一键接入使用官方深链和聚合工作区") {
         "at most 360 characters",
         "Do not add a preface",
         "`transitionAudit.routes`",
-        "`attentionTrend` first",
+        "`attentionExperiment` first",
+        "Never replace an active experiment",
         "includesPartialDay=true",
         "`observationPlan.source`",
         "`openRequirementTitles`",
@@ -4202,11 +4412,11 @@ suite.run("Codex 一键接入使用官方深链和聚合工作区") {
         "Sources/FocusTrace/CodexReviewBridge.swift"
     )
     try expect(
-        reportCommand.contains("(2...7).contains(report.schemaVersion)")
-            && validator.contains("{2, 3, 4, 5, 6, 7}")
-            && codexBridge.contains("(2...7).contains(report.schemaVersion)")
+        reportCommand.contains("(2...8).contains(report.schemaVersion)")
+            && validator.contains("{2, 3, 4, 5, 6, 7, 8}")
+            && codexBridge.contains("(2...8).contains(report.schemaVersion)")
             && codexBridge.contains("review.isGrounded(in: report)"),
-        "当前 v7 聚合报告必须参与纵向建议验证、保留民用日期、通过写回校验并在 App 中展示"
+        "当前 v7/v8 聚合报告必须参与纵向建议与进行中实验验证、保留民用日期、通过写回校验并在 App 中展示"
     )
 }
 
@@ -4557,6 +4767,444 @@ suite.run("数据与保留保持三行对齐且删除只用一个入口") {
     )
 }
 
+suite.run("统一功能层保持单一页面标题和选择性玻璃回退") {
+    let root = try repositoryFileContents(
+        "Sources/FocusTrace/Views/RootView.swift"
+    )
+    let requirements = try repositoryFileContents(
+        "Sources/FocusTrace/Views/RequirementsView.swift"
+    )
+    let theme = try repositoryFileContents(
+        "Sources/FocusTrace/Views/FocusTraceTheme.swift"
+    )
+    let review = try repositoryFileContents(
+        "Sources/FocusTrace/Views/ReviewView.swift"
+    )
+    let switchGate = try repositoryFileContents(
+        "Sources/FocusTraceMacSupport/SpaceSwitchGateController.swift"
+    )
+    try expect(
+        root.contains(".navigationTitle(")
+            && !requirements.contains("Text(\"需求箱\")"),
+        "页面只能使用系统导航标题，需求箱不得在内容区重复标题"
+    )
+    try expect(
+        theme.contains("FocusTraceFunctionalSurfaceModifier")
+            && theme.contains("#available(macOS 26.0, *)")
+            && theme.contains("#if compiler(>=6.2)")
+            && theme.contains("accessibilityReduceTransparency")
+            && theme.contains("FocusTraceSurfaceCardModifier"),
+        "功能层必须选择性使用玻璃，并为旧 SDK、旧系统和降低透明度提供实体回退"
+    )
+    try expect(
+        review.contains(".focusTraceFunctionalSurface(cornerRadius: 12)")
+            && review.contains(".focusTraceSurfaceCard()")
+            && !review.contains("AttentionTrendChart(trend: trend, accent: accent).glassEffect"),
+        "回顾工具层可以使用玻璃，趋势和证据内容必须保持稳定实体表面"
+    )
+    try expect(
+        switchGate.contains("accessibilityReduceTransparency")
+            && switchGate.contains("#if compiler(>=6.2)")
+            && switchGate.contains(
+                "Color(nsColor: .windowBackgroundColor)"
+            ),
+        "切换确认层必须在旧 SDK 编译，并在降低透明度时使用实体背景"
+    )
+}
+
+suite.run("注意力实验固定一个变量并区分机会、缺失和质量阻断") {
+    let calendar = utcCalendar()
+    let startedAt = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 29, hour: 10)
+    )!
+    let points = [
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 30)
+            )!,
+            value: nil,
+            sampleCount: 0,
+            isReliable: false,
+            isPartial: false,
+            availability: .noOpportunity
+        ),
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 31)
+            )!,
+            value: 58,
+            sampleCount: 4,
+            isReliable: false,
+            isPartial: false,
+            availability: .missingInput
+        ),
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 8, day: 1)
+            )!,
+            value: 55,
+            sampleCount: 4,
+            isReliable: false,
+            isPartial: false,
+            availability: .qualityBlocked
+        ),
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 8, day: 2)
+            )!,
+            value: 45,
+            sampleCount: 4,
+            isReliable: true,
+            isPartial: false,
+            availability: .reliable
+        )
+    ]
+    let trend = AttentionMetricTrend(
+        kind: .fragmentation,
+        unit: "%",
+        lowerIsBetter: true,
+        direction: .worsening,
+        points: points,
+        baselineMedian: 40,
+        recentMedian: 60,
+        typicalLowerBound: 35,
+        typicalUpperBound: 45,
+        reliableDayCount: 7,
+        comparison: "近 3 日 60% · 此前典型 40%"
+    )
+    let metric = AttentionDashboardMetric(
+        kind: .fragmentation,
+        state: .needsAttention,
+        title: "碎片化",
+        value: "60%",
+        comparison: trend.comparison,
+        evidence: ["高碎片窗口持续增加"],
+        trend: trend
+    )
+    let recommendation = DailyCoachRecommendation(
+        kind: .startFocusRound,
+        title: "单一产出实验",
+        rationale: "碎片化与连续工作同时恶化",
+        evidence: ["近三日高碎片窗口 60%"],
+        confidence: .medium,
+        action: .startFocus(minutes: 15),
+        method: DailyTrainingMethod(
+            title: "只改变产出边界",
+            steps: ["保持其他变量不变"],
+            successMeasure: "碎片下降至少 10 个百分点"
+        )
+    )
+    let dashboard = AttentionDashboard(
+        version: 3,
+        recordedMinutes: 120,
+        baselineDays: 7,
+        reliableDimensionCount: 1,
+        metrics: [metric],
+        finding: AttentionDashboardFinding(
+            state: .needsAttention,
+            kind: .fragmentation,
+            title: "高碎片工作段持续增加",
+            detail: "已有恢复后果",
+            evidence: ["可靠趋势"]
+        ),
+        recommendation: recommendation
+    )
+    guard let proposal = AttentionExperimentEngine.proposal(
+        recommendation: recommendation,
+        dashboard: dashboard,
+        contextWorkflowID: nil,
+        startedAt: startedAt,
+        calendar: calendar
+    ) else {
+        throw VerificationFailure(message: "可靠主要问题必须能生成实验提案")
+    }
+    let oneSampleExperiment = AttentionExperimentRecord(
+        id: proposal.id,
+        metricKind: proposal.metricKind,
+        variable: proposal.variable,
+        title: proposal.title,
+        hypothesis: proposal.hypothesis,
+        methodTitle: proposal.methodTitle,
+        steps: proposal.steps,
+        successMeasure: proposal.successMeasure,
+        evidence: proposal.evidence,
+        action: proposal.action,
+        baselineValue: proposal.baselineValue,
+        baselineSecondaryValue: proposal.baselineSecondaryValue,
+        targetValue: proposal.targetValue,
+        targetSecondaryValue: proposal.targetSecondaryValue,
+        lowerIsBetter: proposal.lowerIsBetter,
+        targetReliableSamples: 1,
+        startedAt: proposal.startedAt,
+        measurementStartsAt: proposal.measurementStartsAt,
+        contextWorkflowID: nil,
+        contextTimeBand: proposal.contextTimeBand
+    )
+    let experimentSessions = points.map { point in
+        let sessionStart = calendar.date(
+            bySettingHour: 10,
+            minute: 0,
+            second: 0,
+            of: point.date
+        )!
+        return FocusSessionRecord(
+            taskID: UUID(),
+            startedAt: sessionStart,
+            endedAt: sessionStart.addingTimeInterval(15 * 60),
+            targetSeconds: 15 * 60,
+            outcome: .completed,
+            difficulty: 2,
+            confirmedDistractionCount: 0
+        )
+    }
+    let progress = AttentionExperimentEngine.evaluate(
+        oneSampleExperiment,
+        dashboard: dashboard,
+        taskIntervals: [],
+        focusSessions: experimentSessions,
+        calendar: calendar
+    )
+    try expect(
+        proposal.variable == .singleOutputBoundary
+            && proposal.targetValue == 50,
+        "实验必须固定一个变量和一个可量化目标"
+    )
+    try expect(
+        progress.state == .ready
+            && progress.reliableSamples == 1
+            && progress.noOpportunityCount == 1
+            && progress.missingInputCount == 1
+            && progress.qualityBlockedCount == 1
+            && progress.targetMet == true,
+        "实验评估必须分别统计无机会、缺输入、质量阻断和可靠样本"
+    )
+
+    let postTargetPoints = [
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 30)
+            )!,
+            value: 45,
+            sampleCount: 4,
+            isReliable: true,
+            isPartial: false,
+            availability: .reliable
+        ),
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 31)
+            )!,
+            value: nil,
+            sampleCount: 0,
+            isReliable: false,
+            isPartial: false,
+            availability: .noOpportunity
+        )
+    ]
+    let postTargetTrend = AttentionMetricTrend(
+        kind: .fragmentation,
+        unit: "%",
+        lowerIsBetter: true,
+        direction: .worsening,
+        points: postTargetPoints,
+        baselineMedian: 40,
+        recentMedian: 60,
+        typicalLowerBound: 35,
+        typicalUpperBound: 45,
+        reliableDayCount: 7,
+        comparison: "近 3 日 60% · 此前典型 40%"
+    )
+    let postTargetDashboard = AttentionDashboard(
+        version: 3,
+        recordedMinutes: 120,
+        baselineDays: 7,
+        reliableDimensionCount: 1,
+        metrics: [
+            AttentionDashboardMetric(
+                kind: .fragmentation,
+                state: .needsAttention,
+                title: "碎片化",
+                value: "60%",
+                comparison: postTargetTrend.comparison,
+                evidence: ["高碎片窗口持续增加"],
+                trend: postTargetTrend
+            )
+        ]
+    )
+    let firstDayStart = calendar.date(
+        from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 30,
+            hour: 10
+        )
+    )!
+    let postTargetProgress = AttentionExperimentEngine.evaluate(
+        oneSampleExperiment,
+        dashboard: postTargetDashboard,
+        taskIntervals: [],
+        focusSessions: [
+            FocusSessionRecord(
+                taskID: UUID(),
+                startedAt: firstDayStart,
+                endedAt: firstDayStart.addingTimeInterval(15 * 60),
+                targetSeconds: 15 * 60,
+                outcome: .completed,
+                difficulty: 2,
+                confirmedDistractionCount: 0
+            )
+        ],
+        calendar: calendar
+    )
+    try expect(
+        postTargetProgress.reliableSamples == 1
+            && postTargetProgress.noOpportunityCount == 1
+            && postTargetProgress.observedValue == 45,
+        "可靠样本达标后仍须审计证据窗口中的无机会日期，且不得改变已固定的验收样本"
+    )
+}
+
+suite.run("注意力实验固定首个十日窗口且不足时不臆断") {
+    let calendar = utcCalendar()
+    let startedAt = calendar.date(
+        from: DateComponents(year: 2026, month: 7, day: 1, hour: 10)
+    )!
+    let experiment = AttentionExperimentRecord(
+        metricKind: .fragmentation,
+        variable: .singleOutputBoundary,
+        title: "单一产出",
+        hypothesis: "减少碎片",
+        methodTitle: "只改变产出边界",
+        steps: ["完成一轮专注"],
+        successMeasure: "碎片下降",
+        evidence: ["可靠趋势"],
+        action: .startFocus(minutes: 15),
+        baselineValue: 60,
+        targetValue: 50,
+        lowerIsBetter: true,
+        targetReliableSamples: 3,
+        startedAt: startedAt,
+        measurementStartsAt: calendar.startOfDay(
+            for: startedAt.addingTimeInterval(86_400)
+        ),
+        contextWorkflowID: nil,
+        contextTimeBand: .morning
+    )
+    let points = (1...12).map { offset in
+        AttentionTrendPoint(
+            date: calendar.date(
+                byAdding: .day,
+                value: offset,
+                to: calendar.startOfDay(for: startedAt)
+            )!,
+            value: nil,
+            sampleCount: 0,
+            isReliable: false,
+            isPartial: false,
+            availability: .noOpportunity
+        )
+    }
+    let trend = AttentionMetricTrend(
+        kind: .fragmentation,
+        unit: "%",
+        lowerIsBetter: true,
+        direction: .worsening,
+        points: points,
+        baselineMedian: 40,
+        recentMedian: 60,
+        typicalLowerBound: 35,
+        typicalUpperBound: 45,
+        reliableDayCount: 7,
+        comparison: "近 3 日 60%"
+    )
+    let dashboard = AttentionDashboard(
+        version: 3,
+        recordedMinutes: 120,
+        baselineDays: 10,
+        reliableDimensionCount: 1,
+        metrics: [
+            AttentionDashboardMetric(
+                kind: .fragmentation,
+                state: .needsAttention,
+                title: "碎片化",
+                value: "60%",
+                comparison: trend.comparison,
+                evidence: ["可靠趋势"],
+                trend: trend
+            )
+        ]
+    )
+    let progress = AttentionExperimentEngine.evaluate(
+        experiment,
+        dashboard: dashboard,
+        taskIntervals: [],
+        focusSessions: [],
+        calendar: calendar
+    )
+    let completed = AttentionExperimentEngine.completed(
+        experiment,
+        progress: progress,
+        at: points.last!.date
+    )
+    let activityDates = (1...20).map {
+        calendar.date(byAdding: .day, value: $0, to: startedAt)!
+    }
+    let candidateDates = AttentionDashboardEngine.candidateDates(
+        in: FocusTraceLocalSnapshot(
+            activities: activityDates.map { date in
+                ActivityRecord(
+                    app: AppIdentity(
+                        bundleID: "com.example.FocusTraceVerification",
+                        name: "Verification"
+                    ),
+                    startedAt: date,
+                    endedAt: date.addingTimeInterval(60),
+                    taskID: nil,
+                    focusSessionID: nil,
+                    classification: .allowed
+                )
+            },
+            attentionExperiments: [experiment]
+        ),
+        through: activityDates.last!,
+        calendar: calendar
+    )
+    let twentyDayDashboard = AttentionDashboardEngine.make(
+        days: (0..<20).map { index in
+            verificationDashboardDay(
+                date: calendar.date(
+                    byAdding: .day,
+                    value: index,
+                    to: startedAt
+                )!,
+                medianFocusMinutes: 20,
+                highFragmentationWindows: 4
+            )
+        },
+        currentPlan: TrainingPlanRecord(
+            version: 1,
+            effectiveAt: startedAt,
+            focusMinutes: 20,
+            reason: "验收"
+        )
+    )
+    let fragmentationTrend = twentyDayDashboard.metrics.first {
+        $0.kind == .fragmentation
+    }?.trend
+    try expect(
+        trend.points.count == 12
+            && candidateDates.count == 20
+            && twentyDayDashboard.baselineDays == 10
+            && fragmentationTrend?.points.count == 20
+            && (fragmentationTrend?.reliableDayCount ?? 0) <= 10
+            && progress.state == .ready
+            && progress.reliableSamples == 0
+            && progress.targetMet == nil
+            && completed.result == .insufficientEvidence,
+        "实验必须保留并只使用首个十日窗口，样本不足只能形成证据不足结论"
+    )
+}
+
 suite.run("产品纲领和质量门禁是仓库硬约束") {
     let root = URL(
         fileURLWithPath: FileManager.default.currentDirectoryPath,
@@ -4582,15 +5230,19 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
 
     let quality = try contents("Docs/QUALITY_GATES.md")
     for contractID in [
-        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
+        "CAP-01", "UX-03", "UX-04", "UX-05", "UX-06", "UX-07", "UX-08", "UX-09", "UX-10", "UX-11", "ATT-02", "REQ-01", "REQ-04", "FLOW-02",
         "SPACE-02", "DATA-02", "PRIV-01", "REVIEW-07", "REVIEW-09",
+        "REVIEW-11",
         "RELEASE-01", "RELEASE-02", "RELEASE-03",
-        "PERF-01", "PERF-04", "PERF-07", "PERF-09"
+        "PERF-01", "PERF-04", "PERF-07", "PERF-09", "PERF-10"
     ] {
         try expect(quality.contains(contractID), "质量基线缺少：\(contractID)")
     }
 
-    let unitTests = try contents("Tests/FocusTraceCoreTests/FocusTraceCoreTests.swift")
+    let unitTests = try [
+        "Tests/FocusTraceCoreTests/FocusTraceCoreTests.swift",
+        "Tests/FocusTraceCoreTests/AttentionExperimentTests.swift"
+    ].map(contents).joined(separator: "\n")
     for evidence in [
         "activationClosesPreviousAndIgnoresDuplicate",
         "workflowConfirmationUsesUpperCenterWithoutPassiveOverlay",
@@ -4631,11 +5283,27 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
         "attentionDashboardUsesTenWorkdaysAndLinksTheExperimentToTheMainProblem",
         "attentionDashboardExcludesAnUnfinishedDayFromTrendConclusions",
         "attentionDashboardDoesNotEscalateToolCollaborationAsFragmentation",
+        "attentionDashboardTreatsVerifiedReturnAsRecoveryClosureNotFailure",
         "attentionDashboardEvaluatesTrainingAcrossDaysInRollingFiveSessions",
+        "attentionDashboardDoesNotRepeatTrainingResultOnDaysWithoutTraining",
         "attentionDashboardDoesNotEscalateFragmentationWithoutAConsequence",
+        "unifiedFunctionalLayerKeepsOnePageTitleAndSelectiveGlassFallback",
+        "attentionExperimentPersistsOneVariableAndDefersDailyMeasurement",
+        "attentionExperimentAllowsOnlyOneActiveRecord",
+        "attentionExperimentSeparatesOpportunityMissingnessAndQualityBlocking",
+        "attentionExperimentMatchesWorkflowAndTimeBandBeforeComparing",
+        "attentionExperimentRequiresObservedUseOfTheChangedVariable",
+        "attentionExperimentTrainingRequiresFiveComparableDifficultySamples",
+        "attentionExperimentKeepsItsFirstTenDayEvidenceWindow",
+        "attentionDashboardKeepsExperimentWindowBesideMovingTrendWindow",
+        "attentionExperimentEndsTenDayWindowAsInsufficientEvidence",
+        "localSnapshotDecodesWithoutAttentionExperiments",
+        "localSnapshotDecodesPersistedAttentionExperiment",
+        "contextRecoveryUsesNaturalReturnAfterExplicitHandoff",
         "updateFailureFeedbackUsesOnlySafeGitHubMetadata",
         "automationJSONIsStructuredAndAggregateOnly",
         "automationReportV7CarriesTheSameAggregateAttentionTrendAsTheApp",
+        "automationReportV8CarriesOnlyAggregateActiveExperimentProgress",
         "codexReviewDecisionBriefRemainsShortAndCompatible",
         "codexReviewV3RejectsUngroundedWorkflowSemantics",
         "codexReviewKeepsLegacyReadCompatibility",
@@ -4781,7 +5449,10 @@ suite.run("产品纲领和质量门禁是仓库硬约束") {
             && spaceSwitchGate.contains(
                 "FocusTraceConfirmationLayout.frame"
             )
-            && spaceSwitchGate.contains(".background(.ultraThinMaterial)")
+            && spaceSwitchGate.contains(".glassEffect(")
+            && spaceSwitchGate.contains(
+                "content.background(.ultraThinMaterial, in: shape)"
+            )
             && spaceSwitchGate.contains("beginResolvingDestination")
             && spaceSwitchGate.contains("strokeBorder")
             && spaceSwitchGate.contains("separatorColor")

@@ -235,6 +235,16 @@ final class TrainingPlanModel: Codable, Identifiable {
     }
 }
 
+final class AttentionExperimentModel: Codable, Identifiable {
+    var record: AttentionExperimentRecord
+
+    var id: UUID { record.id }
+
+    init(record: AttentionExperimentRecord) {
+        self.record = record
+    }
+}
+
 final class TimelineMarkerModel: Codable, Identifiable {
     var id: UUID
     var date: Date
@@ -458,6 +468,7 @@ final class FocusTraceStore {
         var focusSessions: [FocusSessionModel]
         var interruptions: [InterruptionModel]
         var trainingPlans: [TrainingPlanModel]
+        var attentionExperiments: [AttentionExperimentModel]
         var markers: [TimelineMarkerModel]
         var workflowTransitions: [WorkflowTransitionModel]
         var taskParkings: [TaskParkingModel]
@@ -471,6 +482,7 @@ final class FocusTraceStore {
             focusSessions: [FocusSessionModel],
             interruptions: [InterruptionModel],
             trainingPlans: [TrainingPlanModel],
+            attentionExperiments: [AttentionExperimentModel],
             markers: [TimelineMarkerModel],
             workflowTransitions: [WorkflowTransitionModel],
             taskParkings: [TaskParkingModel],
@@ -483,6 +495,7 @@ final class FocusTraceStore {
             self.focusSessions = focusSessions
             self.interruptions = interruptions
             self.trainingPlans = trainingPlans
+            self.attentionExperiments = attentionExperiments
             self.markers = markers
             self.workflowTransitions = workflowTransitions
             self.taskParkings = taskParkings
@@ -498,6 +511,10 @@ final class FocusTraceStore {
             focusSessions = try container.decodeIfPresent([FocusSessionModel].self, forKey: .focusSessions) ?? []
             interruptions = try container.decodeIfPresent([InterruptionModel].self, forKey: .interruptions) ?? []
             trainingPlans = try container.decodeIfPresent([TrainingPlanModel].self, forKey: .trainingPlans) ?? []
+            attentionExperiments = try container.decodeIfPresent(
+                [AttentionExperimentModel].self,
+                forKey: .attentionExperiments
+            ) ?? []
             markers = try container.decodeIfPresent([TimelineMarkerModel].self, forKey: .markers) ?? []
             workflowTransitions = try container.decodeIfPresent(
                 [WorkflowTransitionModel].self,
@@ -521,6 +538,7 @@ final class FocusTraceStore {
     private(set) var focusSessions: [FocusSessionModel] = []
     private(set) var interruptions: [InterruptionModel] = []
     private(set) var trainingPlans: [TrainingPlanModel] = []
+    private(set) var attentionExperiments: [AttentionExperimentModel] = []
     private(set) var markers: [TimelineMarkerModel] = []
     private(set) var workflowTransitions: [WorkflowTransitionModel] = []
     private(set) var taskParkings: [TaskParkingModel] = []
@@ -552,6 +570,7 @@ final class FocusTraceStore {
             focusSessions = snapshot.focusSessions
             interruptions = snapshot.interruptions
             trainingPlans = snapshot.trainingPlans
+            attentionExperiments = snapshot.attentionExperiments
             markers = snapshot.markers
             workflowTransitions = snapshot.workflowTransitions
             taskParkings = snapshot.taskParkings
@@ -588,6 +607,9 @@ final class FocusTraceStore {
     func insert(_ value: FocusSessionModel) { focusSessions.append(value) }
     func insert(_ value: InterruptionModel) { interruptions.append(value) }
     func insert(_ value: TrainingPlanModel) { trainingPlans.append(value) }
+    func insert(_ value: AttentionExperimentModel) {
+        attentionExperiments.append(value)
+    }
     func insert(_ value: TimelineMarkerModel) { markers.append(value) }
     func insert(_ value: WorkflowTransitionModel) {
         workflowTransitions.append(value)
@@ -602,6 +624,9 @@ final class FocusTraceStore {
     func delete(_ value: FocusSessionModel) { focusSessions.removeAll { $0.id == value.id } }
     func delete(_ value: InterruptionModel) { interruptions.removeAll { $0.id == value.id } }
     func delete(_ value: TrainingPlanModel) { trainingPlans.removeAll { $0.id == value.id } }
+    func delete(_ value: AttentionExperimentModel) {
+        attentionExperiments.removeAll { $0.id == value.id }
+    }
     func delete(_ value: TimelineMarkerModel) { markers.removeAll { $0.id == value.id } }
     func delete(_ value: WorkflowTransitionModel) {
         workflowTransitions.removeAll { $0.id == value.id }
@@ -618,6 +643,7 @@ final class FocusTraceStore {
             focusSessions: focusSessions,
             interruptions: interruptions,
             trainingPlans: trainingPlans,
+            attentionExperiments: attentionExperiments,
             markers: markers,
             workflowTransitions: workflowTransitions,
             taskParkings: taskParkings,

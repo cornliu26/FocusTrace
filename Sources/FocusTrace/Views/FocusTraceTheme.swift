@@ -5,6 +5,8 @@ import FocusTraceMacSupport
 
 enum FocusTraceTheme {
     static let pageMaxWidth: CGFloat = 1040
+    static let surfaceCornerRadius: CGFloat = 14
+    static let controlCornerRadius: CGFloat = 10
     static let mint = Color(red: 0.34, green: 0.88, blue: 0.77)
     static let sky = Color(red: 0.35, green: 0.72, blue: 0.98)
     static let coral = Color(red: 1.0, green: 0.48, blue: 0.39)
@@ -169,7 +171,6 @@ struct FocusTraceDateNavigator: View, Equatable {
     @Binding var selection: Date
     let latestDate: Date
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var showingCalendar = false
     private let calendar = Calendar.current
     private let selectedDayIdentity: Date
@@ -261,14 +262,7 @@ struct FocusTraceDateNavigator: View, Equatable {
             }
             .disabled(!canMoveForward)
         }
-        .background(
-            FocusTraceTheme.elevatedFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
-        }
+        .focusTraceFunctionalSurface()
     }
 
     private var latestDay: Date {
@@ -326,7 +320,6 @@ struct FocusTraceDateNavigator: View, Equatable {
 struct FocusTraceCompactDatePicker: View {
     @Binding var selection: Date
 
-    @Environment(\.colorScheme) private var colorScheme
     @State private var showingCalendar = false
 
     private let label: String
@@ -402,14 +395,7 @@ struct FocusTraceCompactDatePicker: View {
         .accessibilityIdentifier(
             FocusTraceUXContract.requirementDateSelectionPresentation.rawValue
         )
-        .background(
-            FocusTraceTheme.elevatedFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
-        }
+        .focusTraceFunctionalSurface()
         .background {
             FocusTraceInstantPopover(isPresented: $showingCalendar) {
                 FocusTraceCalendarPopover(
@@ -898,18 +884,18 @@ struct FocusTraceGroupBoxStyle: GroupBoxStyle {
         .padding(16)
         .background(
             FocusTraceTheme.cardFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+            in: RoundedRectangle(
+                cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                style: .continuous
+            )
         )
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(
+                cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                style: .continuous
+            )
                 .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
         }
-        .shadow(
-            color: Color.black.opacity(colorScheme == .dark ? 0.13 : 0.055),
-            radius: 16,
-            x: 0,
-            y: 7
-        )
     }
 }
 
@@ -944,29 +930,142 @@ struct FocusTraceDisclosureHitTargetModifier: ViewModifier {
 
 struct FocusTracePrimaryButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceTransparency)
+    private var reduceTransparency
 
+    @ViewBuilder
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let label = configuration.label
             .font(.system(.body, design: .rounded, weight: .semibold))
             .foregroundStyle(FocusTraceTheme.navy)
             .padding(.horizontal, 16)
             .padding(.vertical, 9)
-            .background(
-                FocusTraceTheme.accentGradient,
-                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-            )
-            .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .stroke(Color.white.opacity(0.24), lineWidth: 1)
-            }
-            .shadow(
-                color: FocusTraceTheme.mint.opacity(configuration.isPressed ? 0.08 : 0.2),
-                radius: configuration.isPressed ? 3 : 9,
-                y: configuration.isPressed ? 1 : 4
-            )
             .scaleEffect(configuration.isPressed ? 0.985 : 1)
             .opacity(isEnabled ? 1 : 0.45)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+
+#if compiler(>=6.2)
+        if #available(macOS 26.0, *), !reduceTransparency {
+            label
+                .background(
+                    FocusTraceTheme.mint.opacity(
+                        configuration.isPressed ? 0.18 : 0.10
+                    ),
+                    in: RoundedRectangle(
+                        cornerRadius: FocusTraceTheme.controlCornerRadius,
+                        style: .continuous
+                    )
+                )
+                .glassEffect(
+                    .regular.tint(FocusTraceTheme.mint.opacity(0.52))
+                        .interactive(),
+                    in: RoundedRectangle(
+                        cornerRadius: FocusTraceTheme.controlCornerRadius,
+                        style: .continuous
+                    )
+                )
+        } else {
+            label
+                .background(
+                    FocusTraceTheme.accentGradient,
+                    in: RoundedRectangle(
+                        cornerRadius: FocusTraceTheme.controlCornerRadius,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: FocusTraceTheme.controlCornerRadius,
+                        style: .continuous
+                    )
+                    .stroke(Color.white.opacity(0.24), lineWidth: 1)
+                }
+        }
+#else
+        label
+            .background(
+                FocusTraceTheme.accentGradient,
+                in: RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.controlCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.controlCornerRadius,
+                    style: .continuous
+                )
+                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+            }
+#endif
+    }
+}
+
+struct FocusTraceSurfaceCardModifier: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+
+    func body(content: Content) -> some View {
+        content
+            .background(
+                FocusTraceTheme.cardFill(colorScheme),
+                in: RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.surfaceCornerRadius,
+                    style: .continuous
+                )
+                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
+            }
+    }
+}
+
+struct FocusTraceFunctionalSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceTransparency)
+    private var reduceTransparency
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: cornerRadius,
+            style: .continuous
+        )
+#if compiler(>=6.2)
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content
+                .glassEffect(.regular, in: shape)
+                .overlay {
+                    shape.stroke(
+                        FocusTraceTheme.cardBorder(colorScheme).opacity(0.72),
+                        lineWidth: 1
+                    )
+                }
+        } else {
+            content
+                .background(FocusTraceTheme.elevatedFill(colorScheme), in: shape)
+                .overlay {
+                    shape.stroke(
+                        FocusTraceTheme.cardBorder(colorScheme),
+                        lineWidth: 1
+                    )
+                }
+        }
+#else
+        content
+            .background(FocusTraceTheme.elevatedFill(colorScheme), in: shape)
+            .overlay {
+                shape.stroke(
+                    FocusTraceTheme.cardBorder(colorScheme),
+                    lineWidth: 1
+                )
+            }
+#endif
     }
 }
 
@@ -1010,6 +1109,18 @@ extension View {
 
     func focusTraceVisualSystem() -> some View {
         modifier(FocusTraceVisualSystemModifier())
+    }
+
+    func focusTraceSurfaceCard() -> some View {
+        modifier(FocusTraceSurfaceCardModifier())
+    }
+
+    func focusTraceFunctionalSurface(
+        cornerRadius: CGFloat = FocusTraceTheme.controlCornerRadius
+    ) -> some View {
+        modifier(
+            FocusTraceFunctionalSurfaceModifier(cornerRadius: cornerRadius)
+        )
     }
 
     func focusTraceDisclosureHitTarget(

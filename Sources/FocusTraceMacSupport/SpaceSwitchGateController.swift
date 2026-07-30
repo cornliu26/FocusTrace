@@ -232,7 +232,12 @@ private struct SpaceSwitchGateOverlayView: View {
             width: FocusTraceConfirmationLayout.panelWidth,
             height: FocusTraceConfirmationLayout.panelHeight
         )
-        .background(.ultraThinMaterial)
+        .modifier(
+            SpaceSwitchGateSurfaceModifier(
+                cornerRadius: cornerRadius,
+                tint: accent
+            )
+        )
         .overlay {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(
@@ -282,5 +287,45 @@ private struct SpaceSwitchGateOverlayView: View {
         .disabled(model.isResolvingDestination)
         .opacity(model.isResolvingDestination ? 0.46 : 1)
         .accessibilityIdentifier(identifier)
+    }
+}
+
+private struct SpaceSwitchGateSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let tint: Color
+
+    @Environment(\.accessibilityReduceTransparency)
+    private var reduceTransparency
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(
+            cornerRadius: cornerRadius,
+            style: .continuous
+        )
+#if compiler(>=6.2)
+        if #available(macOS 26.0, *), !reduceTransparency {
+            content.glassEffect(
+                .regular.tint(tint.opacity(0.16)).interactive(),
+                in: shape
+            )
+        } else if reduceTransparency {
+            content.background(
+                Color(nsColor: .windowBackgroundColor),
+                in: shape
+            )
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+#else
+        if reduceTransparency {
+            content.background(
+                Color(nsColor: .windowBackgroundColor),
+                in: shape
+            )
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+#endif
     }
 }

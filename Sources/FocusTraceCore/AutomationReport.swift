@@ -10,6 +10,7 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
     public let focusSessions: [FocusSessionRecord]
     public let interruptions: [InterruptionRecord]
     public let trainingPlans: [TrainingPlanRecord]
+    public let attentionExperiments: [AttentionExperimentRecord]
     public let markers: [TimelineMarkerRecord]
     public let workflowTransitions: [WorkflowTransitionRecord]
     public let taskParkings: [TaskParkingRecord]
@@ -22,6 +23,7 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
         focusSessions: [FocusSessionRecord] = [],
         interruptions: [InterruptionRecord] = [],
         trainingPlans: [TrainingPlanRecord] = [],
+        attentionExperiments: [AttentionExperimentRecord] = [],
         markers: [TimelineMarkerRecord] = [],
         workflowTransitions: [WorkflowTransitionRecord] = [],
         taskParkings: [TaskParkingRecord] = [],
@@ -33,6 +35,7 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
         self.focusSessions = focusSessions
         self.interruptions = interruptions
         self.trainingPlans = trainingPlans
+        self.attentionExperiments = attentionExperiments
         self.markers = markers
         self.workflowTransitions = workflowTransitions
         self.taskParkings = taskParkings
@@ -53,6 +56,10 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
             .map(\.record) ?? []
         trainingPlans = try container.decodeIfPresent([PersistedTrainingPlan].self, forKey: .trainingPlans)?
             .map(\.record) ?? []
+        attentionExperiments = try container.decodeIfPresent(
+            [PersistedAttentionExperiment].self,
+            forKey: .attentionExperiments
+        )?.map(\.record) ?? []
         markers = try container.decodeIfPresent([PersistedTimelineMarker].self, forKey: .markers)?
             .map(\.record) ?? []
         workflowTransitions = try container.decodeIfPresent(
@@ -85,6 +92,7 @@ public struct FocusTraceLocalSnapshot: Decodable, Sendable {
         case focusSessions
         case interruptions
         case trainingPlans
+        case attentionExperiments
         case markers
         case workflowTransitions
         case taskParkings
@@ -182,6 +190,64 @@ public struct AutomationPlanArtifact: Codable, Equatable, Sendable {
     public let reason: String
 }
 
+public struct AutomationAttentionExperimentArtifact: Codable, Equatable, Sendable {
+    public let status: AttentionExperimentStatus
+    public let metricKind: AttentionDashboardMetricKind
+    public let variable: AttentionExperimentVariable
+    public let title: String
+    public let hypothesis: String
+    public let contextScope: String
+    public let reliableSamples: Int
+    public let targetReliableSamples: Int
+    public let noOpportunityCount: Int
+    public let missingInputCount: Int
+    public let qualityBlockedCount: Int
+    public let targetMet: Bool?
+    public let summary: String
+    public let nextAction: String
+    public let nextCheck: String
+    public let evidence: [String]
+
+    public init(
+        experiment: AttentionExperimentRecord,
+        progress: AttentionExperimentProgress
+    ) {
+        status = experiment.status
+        metricKind = experiment.metricKind
+        variable = experiment.variable
+        title = experiment.title
+        hypothesis = experiment.hypothesis
+        contextScope = experiment.contextWorkflowID == nil
+            ? "sameTimeBand"
+            : "sameWorkflowAndTimeBand"
+        reliableSamples = progress.reliableSamples
+        targetReliableSamples = progress.targetReliableSamples
+        noOpportunityCount = progress.noOpportunityCount
+        missingInputCount = progress.missingInputCount
+        qualityBlockedCount = progress.qualityBlockedCount
+        targetMet = progress.targetMet
+        summary = progress.summary
+        nextAction = progress.nextAction
+        nextCheck = progress.state == .ready
+            ? experiment.successMeasure
+            : "获得 \(progress.targetReliableSamples) 个可靠样本后，按“\(experiment.successMeasure)”验收"
+        var facts = [
+            "可靠样本 \(progress.reliableSamples)/\(progress.targetReliableSamples)"
+        ]
+        let excluded = progress.noOpportunityCount
+            + progress.missingInputCount
+            + progress.qualityBlockedCount
+        if excluded > 0 {
+            facts.append(
+                "未入样：无机会 \(progress.noOpportunityCount)、未执行或缺反馈 \(progress.missingInputCount)、质量阻断 \(progress.qualityBlockedCount)"
+            )
+        } else {
+            facts.append(progress.summary)
+        }
+        evidence = Array(facts.prefix(2))
+    }
+}
+
 public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     public let schemaVersion: Int
     public let reportID: String
@@ -201,12 +267,18 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
     public let observationPlan: DailyObservationPlan?
     public let switchingLoad: SwitchingLoadAssessment?
     public let attentionTrend: AttentionDashboard?
+    public let attentionExperiment: AutomationAttentionExperimentArtifact?
 
     public init(
         report: AutomationDailyReport,
-        attentionTrend: AttentionDashboard? = nil
+        attentionTrend: AttentionDashboard? = nil,
+        attentionExperiment: AutomationAttentionExperimentArtifact? = nil
     ) {
-        schemaVersion = attentionTrend == nil ? 6 : 7
+        if attentionExperiment != nil {
+            schemaVersion = 8
+        } else {
+            schemaVersion = attentionTrend == nil ? 6 : 7
+        }
         reportID = "focustrace-\(Int(report.reportDate.timeIntervalSince1970))-\(Int(report.generatedAt.timeIntervalSince1970))"
         reportDate = report.reportDate
         reportCivilDate = report.reportCivilDate
@@ -232,6 +304,7 @@ public struct AutomationReportArtifact: Codable, Equatable, Sendable {
         observationPlan = report.observationPlan
         switchingLoad = report.switchingLoad
         self.attentionTrend = attentionTrend
+        self.attentionExperiment = attentionExperiment
         currentPlan = AutomationPlanArtifact(
             version: report.currentPlan.version,
             focusMinutes: report.currentPlan.focusMinutes,
@@ -282,6 +355,7 @@ public enum CodexReviewAnalysisSource: String, Codable, Equatable, Sendable {
     case previousRecommendation
     case normalizedTrend
     case attentionTrend
+    case attentionExperiment
     case switchingLoad
     case phaseTwo
     case localRecommendation
@@ -526,6 +600,31 @@ public struct CodexReviewArtifact: Codable, Equatable, Sendable {
                 return false
             }
             return recommendation.evidence == finding.evidence
+        case .attentionExperiment:
+            guard noRoute,
+                  let experiment = report.attentionExperiment,
+                  experiment.status == .active,
+                  experiment.reliableSamples
+                    <= experiment.targetReliableSamples,
+                  !experiment.evidence.isEmpty,
+                  (
+                      Self.normalized(displayedProblem).contains(
+                          Self.normalized(experiment.title)
+                      )
+                          || Self.normalized(displayedProblem).contains(
+                              Self.normalized(experiment.hypothesis)
+                          )
+                  ),
+                  Self.normalized(recommendation).contains(
+                      Self.normalized(experiment.nextAction)
+                  ),
+                  evidence.allSatisfy(experiment.evidence.contains),
+                  Self.normalized(nextCheck).contains(
+                      Self.normalized(experiment.nextCheck)
+                  ) else {
+                return false
+            }
+            return true
         case .switchingLoad:
             guard report.dataQuality.isReliableForBehavior,
                   noRoute,
@@ -767,6 +866,7 @@ public enum AutomationReportEngine {
     public static func markdown(
         for report: AutomationDailyReport,
         attentionTrend: AttentionDashboard? = nil,
+        attentionExperiment: AutomationAttentionExperimentArtifact? = nil,
         timeZone: TimeZone = .current
     ) -> String {
         let dateFormatter = DateFormatter()
@@ -835,6 +935,21 @@ public enum AutomationReportEngine {
             for warning in report.coaching.quality.warnings {
                 lines.append("- 数据质量提醒：\(clean(warning))")
             }
+        }
+        if let attentionExperiment {
+            lines.append(contentsOf: [
+                "",
+                "## 进行中的注意力实验",
+                "",
+                "- 当前问题：\(clean(attentionExperiment.title))",
+                "- 假设：\(clean(attentionExperiment.hypothesis))",
+                "- 情境：\(attentionExperiment.contextScope)",
+                "- 可靠样本：\(attentionExperiment.reliableSamples)/\(attentionExperiment.targetReliableSamples)",
+                "- 未入样：无机会 \(attentionExperiment.noOpportunityCount)、未执行或缺反馈 \(attentionExperiment.missingInputCount)、质量阻断 \(attentionExperiment.qualityBlockedCount)",
+                "- 当前判断：\(clean(attentionExperiment.summary))",
+                "- 今天怎么做：\(clean(attentionExperiment.nextAction))",
+                "- 验收：\(clean(attentionExperiment.nextCheck))"
+            ])
         }
         if let attentionTrend {
             let finding = attentionTrend.finding
@@ -1036,7 +1151,8 @@ public enum AutomationReportEngine {
 
     public static func jsonData(
         for report: AutomationDailyReport,
-        attentionTrend: AttentionDashboard? = nil
+        attentionTrend: AttentionDashboard? = nil,
+        attentionExperiment: AutomationAttentionExperimentArtifact? = nil
     ) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
@@ -1044,7 +1160,8 @@ public enum AutomationReportEngine {
         return try encoder.encode(
             AutomationReportArtifact(
                 report: report,
-                attentionTrend: attentionTrend
+                attentionTrend: attentionTrend,
+                attentionExperiment: attentionExperiment
             )
         )
     }
@@ -1329,6 +1446,10 @@ private struct PersistedTrainingPlan: Decodable {
             previousPlanID: previousPlanID
         )
     }
+}
+
+private struct PersistedAttentionExperiment: Decodable {
+    let record: AttentionExperimentRecord
 }
 
 private struct PersistedTimelineMarker: Decodable {

@@ -48,7 +48,8 @@ FocusTrace 不从跳转次数诊断注意力，也不把等待 Agent、到达检
 
 ## 给 Codex / LLM 的聚合协议
 
-`Reports/latest.json` 的报告协议为 `schemaVersion: 7`，并以
+`Reports/latest.json` 的报告协议为 `schemaVersion: 7`；当用户已确认一项
+进行中的注意力实验时升为 `schemaVersion: 8`。报告以
 `reportCivilDate` 显式保留用户选择的 `yyyy-MM-dd` 日期，避免 UTC 编码
 跨日。它不会输出原生逐条跳转，而只输出：
 
@@ -67,6 +68,7 @@ FocusTrace 不从跳转次数诊断注意力，也不把等待 Agent、到达检
 - `observationPlan`：固定采集边界、四类分析配额、当天与近 7 日来源，以及保守的提醒策略建议。
 - `switchingLoad`：不生成脑负荷分数，而是联合个人基线、恢复后果和主观难度输出行为切换负荷状态；`metrics.activeFiveMinuteWindows` 与 `highFragmentationWindows` 共同给出高碎片窗口的样本分母和计数；`traceCoverage` 逐项声明每类 trace 是已使用、无样本还是被质量门禁拦截。
 - `attentionTrend`：最近 10 个工作日的五个独立行为趋势、可靠样本数、一个主要问题和由同一证据生成的单项实验；最近 3 个可靠日与此前最多 7 日比较，进行中的日期只在说明中展示，不绘制数据点，也不参与方向或主要问题。
+- `attentionExperiment`（v8，可选）：用户已确认的唯一单变量实验及其聚合进度，只含实验类型、同情境范围、可靠样本数、未入样原因、当前判断、今天动作与验收条件；日维度实验固定首个 10 个完整工作日为证据窗口，窗口内不足时只输出“证据不足”；不输出工作流 ID 或逐日明细。
 
 原生跳转和两秒内的兼容标记只计一次。报告不包含 UUID、逐事件时间戳、原始应用行、Bundle ID、窗口标题、URL、输入内容、需求来源或返回点文字。
 `timedOut + unstructured` 在报告中只显示为“超时 / 未说明”，不能解释成用户没有计划或发生了分心。
@@ -75,15 +77,16 @@ Codex 文件桥的目录登记是一次性控制动作，不是日报的一部�
 
 `observationPlan.allocations` 是分析精力分配，不是原始事件抽样率。FocusTrace 不会因为某天的复盘结论而少记一类应用事件，或自动扩大到窗口标题、URL、输入内容等敏感数据。
 
-App 与 Codex 共用 `attentionTrend` 的连续工作、碎片化、切换边界、恢复闭环和训练反应五个纵向维度。每个维度独立门禁；只有恢复后果或两个维度收敛时才升级一个主要问题，训练反馈按跨日滚动 5 次计算。五个维度不会合成为总分。
+App 与 Codex 共用 `attentionTrend` 的连续工作、碎片化、切换边界、恢复闭环和训练反应五个纵向维度。每个维度独立门禁；只有恢复后果或两个维度收敛时才升级一个主要问题，训练反馈按跨日滚动 5 次计算。五个维度不会合成为总分。用户开始实验后，App 与 Codex 优先共用 `attentionExperiment`，在完成或停止之前不会由次日趋势替换成另一项建议。
 
 ## LLM 决策顺序
 
-1. 先检查 `attentionTrend`；只要结论不是 `calibrating` 且存在可靠趋势，就沿用它的结论、证据与下一步。`stable` 或 `improving` 时不得从低层当天信号另造问题；
-2. 若没有可靠纵向结论，再检查 `dataQuality.isReliableForBehavior`；
-3. 再检查 `dataSource`、`unresolvedNavigations`、
+1. 先检查 `attentionExperiment`；有进行中实验且存在可用行为镜头时，只沿用其问题、今天动作、证据和验收，不另起实验；
+2. 没有进行中实验时检查 `attentionTrend`；只要结论不是 `calibrating` 且存在可靠趋势，就沿用它的结论、证据与下一步。`stable` 或 `improving` 时不得从低层当天信号另造问题；
+3. 若没有可靠纵向结论，再检查 `dataQuality.isReliableForBehavior`；
+4. 再检查 `dataSource`、`unresolvedNavigations`、
    `explicitReasonCoverage` 和干预效果，决定证据是否足以解释跳转以及确认是否值得继续；
-4. 只选择一条同时具备路线、原因和后果证据的问题；
-5. 一次只改变一个交接动作，并在下一工作日检查同一路线的同一指标。
+5. 只选择一条同时具备路线、原因和后果证据的问题；
+6. 一次只改变一个交接动作，并在下一工作日检查同一路线的同一指标。
 
 数据不足时修复记录质量，不猜测注意力。任何建议都不得自动修改训练计划、允许应用、通知或工作流绑定。

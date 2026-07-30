@@ -31,6 +31,8 @@ struct TimelineView: View {
                     Label(state.baselineProgressText, systemImage: state.baselineComplete ? "checkmark.circle" : "hourglass")
                         .foregroundStyle(.secondary)
                 }
+                .padding(10)
+                .focusTraceFunctionalSurface(cornerRadius: 12)
 
                 TimelineChart(
                     snapshotID: snapshot.id,
@@ -77,10 +79,7 @@ struct TimelineView: View {
             .buttonStyle(FocusTracePrimaryButtonStyle())
         }
         .padding(14)
-        .background(
-            guidanceColor(guidance.action).opacity(0.1),
-            in: RoundedRectangle(cornerRadius: 12)
-        )
+        .focusTraceFunctionalSurface(cornerRadius: 12)
     }
 
     private func guidanceIcon(_ action: FlowNextAction) -> String {
@@ -736,7 +735,6 @@ struct MetricCard: View {
     let title: String
     let value: String
     let detail: String
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -752,14 +750,7 @@ struct MetricCard: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(
-            FocusTraceTheme.elevatedFill(colorScheme),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(FocusTraceTheme.cardBorder(colorScheme), lineWidth: 1)
-        }
+        .focusTraceSurfaceCard()
     }
 }
 
