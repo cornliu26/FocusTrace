@@ -4978,6 +4978,90 @@ suite.run("注意力实验固定一个变量并区分机会、缺失和质量阻
             && progress.targetMet == true,
         "实验评估必须分别统计无机会、缺输入、质量阻断和可靠样本"
     )
+
+    let postTargetPoints = [
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 30)
+            )!,
+            value: 45,
+            sampleCount: 4,
+            isReliable: true,
+            isPartial: false,
+            availability: .reliable
+        ),
+        AttentionTrendPoint(
+            date: calendar.date(
+                from: DateComponents(year: 2026, month: 7, day: 31)
+            )!,
+            value: nil,
+            sampleCount: 0,
+            isReliable: false,
+            isPartial: false,
+            availability: .noOpportunity
+        )
+    ]
+    let postTargetTrend = AttentionMetricTrend(
+        kind: .fragmentation,
+        unit: "%",
+        lowerIsBetter: true,
+        direction: .worsening,
+        points: postTargetPoints,
+        baselineMedian: 40,
+        recentMedian: 60,
+        typicalLowerBound: 35,
+        typicalUpperBound: 45,
+        reliableDayCount: 7,
+        comparison: "近 3 日 60% · 此前典型 40%"
+    )
+    let postTargetDashboard = AttentionDashboard(
+        version: 3,
+        recordedMinutes: 120,
+        baselineDays: 7,
+        reliableDimensionCount: 1,
+        metrics: [
+            AttentionDashboardMetric(
+                kind: .fragmentation,
+                state: .needsAttention,
+                title: "碎片化",
+                value: "60%",
+                comparison: postTargetTrend.comparison,
+                evidence: ["高碎片窗口持续增加"],
+                trend: postTargetTrend
+            )
+        ]
+    )
+    let firstDayStart = calendar.date(
+        from: DateComponents(
+            year: 2026,
+            month: 7,
+            day: 30,
+            hour: 10
+        )
+    )!
+    let postTargetProgress = AttentionExperimentEngine.evaluate(
+        oneSampleExperiment,
+        dashboard: postTargetDashboard,
+        taskIntervals: [],
+        focusSessions: [
+            FocusSessionRecord(
+                taskID: UUID(),
+                startedAt: firstDayStart,
+                endedAt: firstDayStart.addingTimeInterval(15 * 60),
+                targetSeconds: 15 * 60,
+                outcome: .completed,
+                difficulty: 2,
+                confirmedDistractionCount: 0
+            )
+        ],
+        calendar: calendar
+    )
+    try expect(
+        postTargetProgress.reliableSamples == 1
+            && postTargetProgress.noOpportunityCount == 1
+            && postTargetProgress.observedValue == 45,
+        "可靠样本达标后仍须审计证据窗口中的无机会日期，且不得改变已固定的验收样本"
+    )
 }
 
 suite.run("注意力实验固定首个十日窗口且不足时不臆断") {

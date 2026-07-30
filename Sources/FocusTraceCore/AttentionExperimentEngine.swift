@@ -318,7 +318,7 @@ public enum AttentionExperimentEngine {
             .sorted { $0.date < $1.date }
             .prefix(AttentionDashboardEngine.experimentEvidenceWorkdayCount)
 
-        evidenceLoop: for point in evidencePoints {
+        for point in evidencePoints {
             guard hasMatchingContext(
                 experiment,
                 on: point.date,
@@ -343,16 +343,13 @@ public enum AttentionExperimentEngine {
             }
             switch point.effectiveAvailability {
             case .reliable:
-                if let value = point.value {
+                if reliableValues.count < experiment.targetReliableSamples,
+                   let value = point.value {
                     reliableValues.append(value)
                     if let secondaryValue = point.secondaryValue {
                         secondaryValues.append(secondaryValue)
                     }
-                    if reliableValues.count
-                        >= experiment.targetReliableSamples {
-                        break evidenceLoop
-                    }
-                } else {
+                } else if point.value == nil {
                     missingInput += 1
                 }
             case .noOpportunity, .partial:
