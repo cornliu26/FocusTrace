@@ -944,6 +944,7 @@ struct FocusTracePrimaryButtonStyle: ButtonStyle {
             .opacity(isEnabled ? 1 : 0.45)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
 
+#if compiler(>=6.2)
         if #available(macOS 26.0, *), !reduceTransparency {
             label
                 .background(
@@ -980,6 +981,23 @@ struct FocusTracePrimaryButtonStyle: ButtonStyle {
                     .stroke(Color.white.opacity(0.24), lineWidth: 1)
                 }
         }
+#else
+        label
+            .background(
+                FocusTraceTheme.accentGradient,
+                in: RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.controlCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: FocusTraceTheme.controlCornerRadius,
+                    style: .continuous
+                )
+                .stroke(Color.white.opacity(0.24), lineWidth: 1)
+            }
+#endif
     }
 }
 
@@ -1018,6 +1036,7 @@ struct FocusTraceFunctionalSurfaceModifier: ViewModifier {
             cornerRadius: cornerRadius,
             style: .continuous
         )
+#if compiler(>=6.2)
         if #available(macOS 26.0, *), !reduceTransparency {
             content
                 .glassEffect(.regular, in: shape)
@@ -1037,6 +1056,16 @@ struct FocusTraceFunctionalSurfaceModifier: ViewModifier {
                     )
                 }
         }
+#else
+        content
+            .background(FocusTraceTheme.elevatedFill(colorScheme), in: shape)
+            .overlay {
+                shape.stroke(
+                    FocusTraceTheme.cardBorder(colorScheme),
+                    lineWidth: 1
+                )
+            }
+#endif
     }
 }
 

@@ -303,6 +303,7 @@ private struct SpaceSwitchGateSurfaceModifier: ViewModifier {
             cornerRadius: cornerRadius,
             style: .continuous
         )
+#if compiler(>=6.2)
         if #available(macOS 26.0, *), !reduceTransparency {
             content.glassEffect(
                 .regular.tint(tint.opacity(0.16)).interactive(),
@@ -316,5 +317,15 @@ private struct SpaceSwitchGateSurfaceModifier: ViewModifier {
         } else {
             content.background(.ultraThinMaterial, in: shape)
         }
+#else
+        if reduceTransparency {
+            content.background(
+                Color(nsColor: .windowBackgroundColor),
+                in: shape
+            )
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+        }
+#endif
     }
 }

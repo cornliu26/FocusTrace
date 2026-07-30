@@ -4791,9 +4791,10 @@ suite.run("统一功能层保持单一页面标题和选择性玻璃回退") {
     try expect(
         theme.contains("FocusTraceFunctionalSurfaceModifier")
             && theme.contains("#available(macOS 26.0, *)")
+            && theme.contains("#if compiler(>=6.2)")
             && theme.contains("accessibilityReduceTransparency")
             && theme.contains("FocusTraceSurfaceCardModifier"),
-        "功能层必须选择性使用玻璃，并为旧系统和降低透明度提供实体回退"
+        "功能层必须选择性使用玻璃，并为旧 SDK、旧系统和降低透明度提供实体回退"
     )
     try expect(
         review.contains(".focusTraceFunctionalSurface(cornerRadius: 12)")
@@ -4803,10 +4804,11 @@ suite.run("统一功能层保持单一页面标题和选择性玻璃回退") {
     )
     try expect(
         switchGate.contains("accessibilityReduceTransparency")
+            && switchGate.contains("#if compiler(>=6.2)")
             && switchGate.contains(
                 "Color(nsColor: .windowBackgroundColor)"
             ),
-        "切换确认层在降低透明度时必须使用实体背景"
+        "切换确认层必须在旧 SDK 编译，并在降低透明度时使用实体背景"
     )
 }
 
